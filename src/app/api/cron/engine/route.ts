@@ -4,13 +4,15 @@ import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { AUTOMATION_RULES } from '@/lib/automation/rules'
 import { decide } from '@/lib/automation/decide'
 import { localTodayISO } from '@/lib/utils'
+import { loadTenantZones } from '@/lib/tenantTimeServer'
+import { acceptTenantSignals, serverDateWindow } from '@/lib/cron/tenantDay'
 
 export const dynamic = 'force-dynamic'
 // 300, matching every other shipped cron.
 export const maxDuration = 300
 
 // ── The automation engine (Vercel Cron → see vercel.json) ────────────────────
-// THE consumer half. Reads today's rows from `automation_signals`, asks
+// THE consumer half. Reads each TENANT's current rows from `automation_signals`, asks
 // lib/automation/decide whether each rule may act, and writes the verdict to
 // `automation_runs`.
 //
@@ -51,6 +53,8 @@ interface SignalRow {
   signal: string
   subject_type: string
   subject_id: string
+  /** The TENANT's calendar date the producer stamped — see lib/cron/tenantDay. */
+  detected_on: string
 }
 
 // The dispatchers that actually exist. EMPTY, and that is the point: nothing in
@@ -98,7 +102,15 @@ async function handler(req: NextRequest) {
     )
   }
 
-  const today = localTodayISO()
+  // ⭐ THIS RUN's own stamp, and deliberately still the server's date: it is the
+  // engine's run-day, the same global fact `automation_sweeps` records, and it is
+  // half of automation_runs' conflict key (user_id, rule_key, subject_id,
+  // evaluated_on). Re-running the engine within a UTC day stays a no-op upsert.
+  // ⛔ It is NOT the row-selection date — that is per tenant, below. Named
+  // `evaluatedOn` so the two can never be confused back together.
+  const evaluatedOn = localTodayISO()
+  // ⭐ ONE captured instant for every tenant date this run derives.
+  const now = new Date()
 
   // Every exit lands here: one log line and one heartbeat row, unconditionally — the
   // quiet night is exactly the night that needs proof it happened.
@@ -124,12 +136,18 @@ async function handler(req: NextRequest) {
     )
   }
 
-  const signals: SignalRow[] = []
+  // ⭐⭐ THE HANDSHAKE. The producer stamps `detected_on` with the TENANT's date;
+  // matching on the server's date read zero rows for any tenant not on it, silently.
+  // Two steps, because a tenant's zone is not known until its rows are in hand:
+  //   1. a bounded PREFILTER — every zone is within ±14h of UTC, so a tenant date is
+  //      always the server's ±1. Three values keeps the read indexed.
+  //   2. the real per-tenant decision, in acceptTenantSignals, once zones are loaded.
+  const fetched: SignalRow[] = []
   for (let from = 0; ; from += PAGE_ROWS) {
     const { data, error } = await supabase
       .from('automation_signals')
-      .select('id, user_id, signal, subject_type, subject_id')
-      .eq('detected_on', today)
+      .select('id, user_id, signal, subject_type, subject_id, detected_on')
+      .in('detected_on', serverDateWindow(now))
       .order('id')
       .range(from, from + PAGE_ROWS - 1)
     // The note is for an operator, and the scheduler throws the body away — so the
@@ -142,9 +160,16 @@ async function handler(req: NextRequest) {
       })
     }
     const batch = (data as SignalRow[] | null) || []
-    signals.push(...batch)
+    fetched.push(...batch)
     if (batch.length < PAGE_ROWS) break
   }
+
+  // ⭐ Zones for exactly the tenants that appear in the window — one read, filtered,
+  // never one query per business. An absent zone resolves to the shared fallback,
+  // which is the same policy the producer used when it stamped the row, so the two
+  // halves agree about an unset zone as well as a set one.
+  const zones = await loadTenantZones(supabase, [...new Set(fetched.map(s => s.user_id))])
+  const signals = acceptTenantSignals(fetched, zones, now)
   // Owners represented in today's signals — the only owner count this job can honestly
   // claim, since unlike the sweep it never enumerates them.
   const ownerCount = new Set(signals.map(s => s.user_id)).size
@@ -163,10 +188,15 @@ async function handler(req: NextRequest) {
       //  • recentActionsForSubject: this route does not count automation_runs' fired
       //    rows yet, so it says so. Passing 0 (as it used to) claimed a history had been
       //    checked and quietly disabled the per-customer cap.
-      //  • hour: business_settings has no timezone column, so the OWNER's local hour is
-      //    not knowable here — see decide()'s doc on `hour` for why the server's
-      //    plausible-looking value was worse than admitting that. Revisit when a
-      //    timezone column exists; until then there is no honest number to pass.
+      //  • hour: STILL 'unknown', and now deliberately so rather than for want of
+      //    data. This route can NOW reach a tenant's zone — it loads `zones` above to
+      //    date the rows — so the old reason ("business_settings has no timezone
+      //    column") is no longer true and has been removed rather than left to rot.
+      //    ⛔ It is not replaced with a real hour, because `hour: 'unknown'` is one of
+      //    the THREE gates that keep `fired` unreachable (see this file's header).
+      //    Passing a real hour would satisfy gate (1) as a side effect of a date fix.
+      //    Arming the engine is a deliberate product decision with an owner behind
+      //    it, never a consequence of making row selection correct.
       const decided = decide({
         rule,
         hour: 'unknown',
@@ -200,7 +230,7 @@ async function handler(req: NextRequest) {
         signal_id: s.id,
         subject_type: s.subject_type,
         subject_id: s.subject_id,
-        evaluated_on: today,
+        evaluated_on: evaluatedOn,
         decision: verdict.fire ? 'fired' : 'suppressed',
         suppressed_reason: verdict.fire ? null : verdict.reason,
       })

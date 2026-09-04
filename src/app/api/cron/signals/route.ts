@@ -3,7 +3,7 @@ import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { cadenceDays, churnRisk, daysBetween, isSeasonallyDormant, ranOut } from '@/lib/signals'
-import { safeTimeZone, tenantTodayISO } from '@/lib/tenantTime'
+import { ownerDateISO } from '@/lib/cron/tenantDay'
 
 export const dynamic = 'force-dynamic'
 // The only cron with an O(owners) sequential loop — each owner costs two paginated
@@ -28,7 +28,13 @@ export const maxDuration = 300
 // screens ended up disagreeing about who had churned).
 //
 // Idempotent: one row per (user, signal, subject, day) — re-running is a no-op.
-// Nothing consumes these rows yet, by design; see AUTOMATION_ARCHITECTURE.md.
+//
+// ⭐⭐ `cron/engine` IS THE CONSUMER, and the "day" above is each TENANT's day, not
+// the server's. The date this route writes and the dates the engine will accept are
+// both derived from lib/cron/tenantDay, so neither half can drift into its own
+// definition of "today". (This comment used to read "nothing consumes these rows
+// yet" — it was stale, and believing it is how the first version of this fix moved
+// the writer alone and left the reader matching on the server's date.)
 
 type Client = NonNullable<ReturnType<typeof serviceClient>>
 
@@ -204,7 +210,7 @@ async function handler(req: NextRequest) {
       // established fallback (FALLBACK_TIME_ZONE) for a null or unparseable zone,
       // so a business that has never set one is treated exactly as the rest of the
       // product treats it — never as UTC by accident.
-      const today = tenantTodayISO(safeTimeZone(owner.timezone), now)
+      const today = ownerDateISO(owner.timezone, now)
 
       const [jRes, rRes] = await Promise.all([fetchAllJobs(supabase, uid), fetchAllRecurrences(supabase, uid)])
       // A truncated read is a WRONG read, not a smaller one: it would emit ran-out for

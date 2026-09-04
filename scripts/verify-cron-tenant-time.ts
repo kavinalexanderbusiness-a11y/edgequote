@@ -1,133 +1,160 @@
-// ── Verify: the signals sweep dates every tenant in THEIR OWN zone ──────────
+// ── Verify: the signals→engine date handshake ───────────────────────────────
 //   npm run verify:cron-tenant-time
 //
 // WHY THIS SCRIPT EXISTS
-// /api/cron/signals computed ONE date — `localTodayISO()`, the server's clock,
-// which is UTC on Vercel — and applied it to every tenant it swept. Two
-// businesses can be on different calendar days at the same instant, so a single
-// date is wrong for at least one of them whenever the sweep straddles a local
-// midnight. That one value decided `hasUpcoming`, `pastReal`, seasonal dormancy,
-// the ran-out day count, and the `detected_on` every row is filed under.
+// `cron/signals` (11:00 UTC) stamps `automation_signals.detected_on` with each
+// TENANT's calendar date. `cron/engine` (11:30 UTC) reads those rows back. The
+// first version of this fix moved the writer alone and left the reader matching on
+// the SERVER's date — which reads zero rows, silently, for exactly the tenants the
+// fix exists to serve. Both halves of that contract now live in
+// `src/lib/cron/tenantDay.ts`, and this guard drives THAT.
 //
-// ⭐⭐ THESE ARE BEHAVIOUR TESTS, NOT SOURCE SCANS. They call the SAME helpers
-// the route calls — tenantTodayISO / safeTimeZone / isSeasonallyDormant — and
-// assert what the sweep would CONCLUDE. A test that grepped the route for
-// `tenantTodayISO` would pass on a file that imported it and never used it.
+// ⭐⭐ WHAT IS TESTED HERE vs WHAT IS ASSERTED
+//   • §1–§4 are BEHAVIOUR. They call the same functions both routes call, with
+//     fixed instants, and assert what the pair would actually conclude.
+//   • §5 is WIRING, and says so. A Next App Router `route.ts` may export only HTTP
+//     handlers and recognised config, so the routes cannot be imported and driven
+//     directly; what §5 pins is that each route still routes its dates through the
+//     lib §1–§4 proves. It is deliberately narrow — reverting either route to its
+//     old date source fails it.
+//
+// ⛔ Deliberately NOT re-tested here: `safeTimeZone`'s fallback, two zones
+// disagreeing on one instant, and the DST-length helpers. `scripts/verify-tenant-time.ts`
+// already owns all three, and a second copy would drift rather than protect.
 //
 // ⛔ Pure: no network, no database, no clock of its own. Every instant is fixed.
 
-import { safeTimeZone, tenantTodayISO, tenantDateISO, hasDstTransition, tenantDayLengthHours, FALLBACK_TIME_ZONE } from '../src/lib/tenantTime'
-import { isSeasonallyDormant } from '../src/lib/signals'
-import { DEFAULT_SEASONS } from '../src/lib/seasons'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  ownerDateISO, signalDatesFor, serverDateWindow, acceptTenantSignals, PRODUCER_LOOKBACK_MS,
+} from '../src/lib/cron/tenantDay'
 
+const ROOT = join(__dirname, '..')
 let pass = 0, fail = 0
 const H = (t: string) => console.log(`\n═══ ${t} ═══`)
 const eq = (n: string, a: unknown, b: unknown) => {
-  const ok = JSON.stringify(a) === JSON.stringify(b)
-  if (ok) { pass++; console.log(`  ✅ ${n}`) }
+  const good = JSON.stringify(a) === JSON.stringify(b)
+  if (good) { pass++; console.log(`  ✅ ${n}`) }
   else { fail++; console.log(`  ❌ ${n}\n     expected: ${JSON.stringify(b)}\n     actual:   ${JSON.stringify(a)}`) }
 }
-const ok = (n: string, c: boolean, d = '') => eq(n + (c || !d ? '' : ` — ${d}`), c, true)
+const ok = (n: string, c: boolean) => eq(n, c, true)
 
-const WEST = 'America/Edmonton'   // UTC−7 / −6
-const EAST = 'Pacific/Auckland'   // UTC+12 / +13
+// The real schedule (vercel.json): signals `0 11 * * *`, engine `30 11 * * *`.
+const WRITER = new Date('2026-06-15T11:00:00Z')
+const READER = new Date('2026-06-15T11:30:00Z')
+
+const EDM = 'America/Edmonton'     // UTC−6 — the only live tenant today
+const CHATHAM = 'Pacific/Chatham'  // UTC+12:45 in June: local midnight lands at 11:15 UTC
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('1. TWO TENANTS, ONE INSTANT, OPPOSITE DATES — and opposite verdicts')
-// 04:00 UTC on Nov 1 2026. In Edmonton it is still 22:00 on Oct 31; in Auckland
-// it is already 17:00 on Nov 1. The lawn season ends Oct 31, so this single
-// instant sits on OPPOSITE SIDES of the season boundary for the two tenants.
+H('1. ⛔ TENANT MIDNIGHT BETWEEN THE TWO RUNS — the case per-tenant dates alone still lose')
 {
-  const instant = new Date('2026-11-01T04:00:00Z')
-  const west = tenantTodayISO(WEST, instant)
-  const east = tenantTodayISO(EAST, instant)
-  eq('the western tenant is still on Oct 31', west, '2026-10-31')
-  eq('the eastern tenant is already on Nov 1', east, '2026-11-01')
-  ok('⭐ same instant, different calendar dates', west !== east)
+  const written = ownerDateISO(CHATHAM, WRITER)
+  const readerOwnDate = ownerDateISO(CHATHAM, READER)
 
-  // The consequence the sweep actually draws, through the real detector.
-  const westDormant = isSeasonallyDormant('Weekly Mowing', DEFAULT_SEASONS, west)
-  const eastDormant = isSeasonallyDormant('Weekly Mowing', DEFAULT_SEASONS, east)
-  eq('west: still in season, so NOT dormant', westDormant, false)
-  eq('east: season has closed, so dormant', eastDormant, true)
-  ok('⛔ the verdict genuinely differs by tenant', westDormant !== eastDormant)
+  eq('the writer stamps the tenant day it was still on', written, '2026-06-15')
+  eq('30 minutes later the tenant has rolled over', readerOwnDate, '2026-06-16')
+  ok('⛔ so equality on per-tenant dates would MISS the row', written !== readerOwnDate)
 
-  // ⛔ THE DEFECT, MADE VISIBLE. One server date for everyone collapses the two
-  // answers into one — and the answer the western tenant gets is FALSE for them:
-  // they are told their mowing season has ended while it is still October there.
-  const serverDate = tenantDateISO('UTC', instant)
-  eq('a single server date would be Nov 1 for everyone', serverDate, '2026-11-01')
-  const collapsedWest = isSeasonallyDormant('Weekly Mowing', DEFAULT_SEASONS, serverDate)
-  eq('⛔ …which marks the WESTERN tenant dormant a day early', collapsedWest, true)
-  ok('⛔ that is the wrong answer for them', collapsedWest !== westDormant)
+  // …which is why the consumer accepts a bounded SET, not a single date.
+  const accepted = signalDatesFor(CHATHAM, READER)
+  eq('the consumer accepts both sides of that midnight', accepted, ['2026-06-15', '2026-06-16'])
+  ok('⭐ and therefore accepts what the writer actually wrote', accepted.includes(written))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('2. UTC ROLLOVER — the half hour where the server has changed day and the tenant has not')
+H('2. ⛔ NOT WIDENED FOR ANYONE ELSE — an ordinary tenant is still read exactly once')
 {
-  const instant = new Date('2026-06-15T00:30:00Z')
-  const serverDate = tenantDateISO('UTC', instant)
-  const west = tenantTodayISO(WEST, instant)
-  eq('server (UTC) has rolled over', serverDate, '2026-06-15')
-  eq('the western tenant has not', west, '2026-06-14')
+  const accepted = signalDatesFor(EDM, READER)
+  eq('a tenant with no midnight in the lookback gets ONE date', accepted, ['2026-06-15'])
+  eq('…the same date its producer stamped', accepted[0], ownerDateISO(EDM, WRITER))
+  ok('…so nothing from an earlier day becomes eligible again', accepted.length === 1)
 
-  // The exact comparison the route makes for `hasUpcoming`. A visit on Jun 14 is
-  // still today's work for this tenant; under the server date it has silently
-  // become the past, and the customer reads as having nothing booked.
-  const visit = '2026-06-14'
-  eq('under the TENANT date the visit is still upcoming', visit >= west, true)
-  eq('⛔ under the SERVER date it has already become the past', visit >= serverDate, false)
+  // The lookback is a lookback, not a day. If it ever reached 24h every signal
+  // would be eligible on two runs and the evaluation log would silently double.
+  ok('⛔ the lookback stays well under a day', PRODUCER_LOOKBACK_MS < 24 * 60 * 60 * 1000)
+  eq('…and covers the real 30-minute schedule gap with slack', PRODUCER_LOOKBACK_MS >= 30 * 60 * 1000, true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('3. DST — a transition must not lose or invent a day')
+H('3. THE FULL HANDSHAKE — the rows the engine would actually keep')
 {
-  // Edmonton springs forward 2026-03-08 (23h) and falls back 2026-11-01 (25h).
-  ok('spring-forward day is detected as a transition', hasDstTransition(WEST, '2026-03-08'))
-  eq('…and is 23 hours long', tenantDayLengthHours(WEST, '2026-03-08'), 23)
-  ok('fall-back day is detected as a transition', hasDstTransition(WEST, '2026-11-01'))
-  eq('…and is 25 hours long', tenantDayLengthHours(WEST, '2026-11-01'), 25)
-  ok('[negative control] an ordinary day is not a transition', !hasDstTransition(WEST, '2026-06-15'))
-  eq('…and is 24 hours long', tenantDayLengthHours(WEST, '2026-06-15'), 24)
+  // One row per tenant, each stamped by the producer at ITS instant, exactly as
+  // cron/signals would have written them.
+  const rows = [
+    { user_id: 'edm', detected_on: ownerDateISO(EDM, WRITER), signal: 'churn_risk' },
+    { user_id: 'cha', detected_on: ownerDateISO(CHATHAM, WRITER), signal: 'churn_risk' },
+    { user_id: 'unset', detected_on: ownerDateISO(null, WRITER), signal: 'churn_risk' },
+    // A genuinely old row that must NOT be resurrected.
+    { user_id: 'edm', detected_on: '2026-06-12', signal: 'recurring_ran_out' },
+  ]
+  const zones = new Map([['edm', EDM], ['cha', CHATHAM]])   // 'unset' deliberately absent
 
-  // Dates either side of the spring-forward instant stay contiguous: the short
-  // day must still be exactly one calendar day, never skipped.
-  eq('just before the jump it is Mar 8', tenantDateISO(WEST, new Date('2026-03-08T08:59:00Z')), '2026-03-08')
-  eq('just after the jump it is still Mar 8', tenantDateISO(WEST, new Date('2026-03-08T09:01:00Z')), '2026-03-08')
-  eq('the evening before was Mar 7', tenantDateISO(WEST, new Date('2026-03-08T06:00:00Z')), '2026-03-07')
+  const kept = acceptTenantSignals(rows, zones, READER)
+  eq('the ordinary tenant’s row is kept', kept.some(r => r.user_id === 'edm' && r.signal === 'churn_risk'), true)
+  eq('⭐ the midnight-straddling tenant’s row is kept', kept.some(r => r.user_id === 'cha'), true)
+  eq('a tenant with no zone on record is kept via the shared fallback', kept.some(r => r.user_id === 'unset'), true)
+  eq('⛔ the three-day-old row is DROPPED', kept.some(r => r.detected_on === '2026-06-12'), false)
+  eq('…and nothing else was invented', kept.length, 3)
 
-  // The fall-back hour repeats; both passes are still the same calendar day.
-  eq('first pass through 01:30 local is Nov 1', tenantDateISO(WEST, new Date('2026-11-01T07:30:00Z')), '2026-11-01')
-  eq('second pass through 01:30 local is also Nov 1', tenantDateISO(WEST, new Date('2026-11-01T08:30:00Z')), '2026-11-01')
+  // ⛔ THE REGRESSION, made concrete: a consumer that matched only its own
+  // per-tenant date — the "obvious" fix — silently loses the straddler.
+  const naive = rows.filter(r => r.detected_on === ownerDateISO(zones.get(r.user_id) ?? null, READER))
+  eq('⛔ a same-date-only consumer drops the straddling tenant', naive.some(r => r.user_id === 'cha'), false)
+  ok('⛔ …which is the silent data loss this guard exists to prevent', naive.length < kept.length)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('4. FALLBACK POLICY — an unset zone is the shared fallback, never UTC by accident')
+H('4. THE DATABASE PREFILTER — bounded, and never narrower than the truth')
 {
-  eq('a null zone falls back', safeTimeZone(null), FALLBACK_TIME_ZONE)
-  eq('an unparseable zone falls back', safeTimeZone('Mars/Olympus_Mons'), FALLBACK_TIME_ZONE)
-  eq('a real zone is kept', safeTimeZone(EAST), EAST)
-
-  // A tenant who has never set a zone must be dated like the rest of the product
-  // dates them — by the fallback — and at this instant that is NOT the UTC date.
-  const instant = new Date('2026-11-01T04:00:00Z')
-  const unset = tenantTodayISO(safeTimeZone(null), instant)
-  eq('an unset tenant gets the fallback date', unset, tenantTodayISO(FALLBACK_TIME_ZONE, instant))
-  ok('⛔ …which is NOT the UTC date at this instant', unset !== tenantDateISO('UTC', instant))
+  const win = serverDateWindow(READER)
+  eq('three dates, server ±1', win, ['2026-06-14', '2026-06-15', '2026-06-16'])
+  // Every zone on earth is within ±14h of UTC, so no tenant date can fall outside.
+  for (const tz of [EDM, CHATHAM, 'Pacific/Kiritimati', 'Etc/GMT+12', 'Asia/Kolkata', 'UTC']) {
+    ok(`prefilter covers ${tz}`, signalDatesFor(tz, READER).every(d => win.includes(d)))
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('5. [negative control] the tests are not trivially always-different')
+H('5. WIRING — each route still routes its dates through the lib above')
 {
-  // ⚠️ The window where BOTH zones share a date is narrow and had to be computed,
-  // not guessed: Edmonton is UTC−6 and Auckland UTC+12 in June, so they agree only
-  // for UTC 06:00–11:59. The first draft used 12:00Z — at which Auckland has
-  // ALREADY rolled to the next day — and this control caught it.
-  const calm = new Date('2026-06-15T08:00:00Z')
-  eq('west and east agree at a calm instant', tenantTodayISO(WEST, calm), tenantTodayISO(EAST, calm))
-  eq('…and so does the server', tenantDateISO('UTC', calm), tenantTodayISO(WEST, calm))
+  const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
+  const producer = read('src/app/api/cron/signals/route.ts')
+  const consumer = read('src/app/api/cron/engine/route.ts')
+
+  // ⛔ Reverting the WRITER to the server clock fails here.
+  ok('the producer imports the shared derivation', /from '@\/lib\/cron\/tenantDay'/.test(producer))
+  ok('…and dates each owner with it', /ownerDateISO\(owner\.timezone, now\)/.test(producer))
+  // ⚠️ The IMPORT, not the word. The route's own comment explains what it used to
+  // call, so a bare /localTodayISO/ matched its documentation — a guard that fails
+  // on its subject's prose is testing the wrong thing.
+  ok('⛔ …and no longer imports the server clock',
+    !/import \{[^}]*\blocalTodayISO\b[^}]*\} from/.test(producer))
+
+  // ⛔ Reverting the READER to the exact server-date match fails here.
+  ok('the consumer imports the shared selection', /acceptTenantSignals|serverDateWindow/.test(consumer))
+  ok('…and prefilters on the bounded window', /\.in\('detected_on', serverDateWindow\(now\)\)/.test(consumer))
+  ok('…and decides per tenant with the shared rule', /acceptTenantSignals\(fetched, zones, now\)/.test(consumer))
+  ok('⛔ …and no longer matches detected_on against one server date',
+    !/\.eq\('detected_on'/.test(consumer))
+  ok('…and reads detected_on at all, which the old select did not',
+    /select\('id, user_id, signal, subject_type, subject_id, detected_on'\)/.test(consumer))
+
+  // ⛔⛔ THE SEND GATE MUST SURVIVE THIS FIX. The consumer can now reach a tenant's
+  // zone, which makes a real `hour` computable for the first time — and passing one
+  // would satisfy gate (1) of the three that keep `fired` unreachable. A date fix
+  // must never arm the engine as a side effect.
+  ok('⛔ the engine still passes hour: \'unknown\' (send gate 1 intact)',
+    /hour: 'unknown'/.test(consumer))
+  // ⚠️ Again the declaration, not the word — "dispatch" appears throughout this
+  // route's header explaining precisely why it cannot send.
+  ok('⛔ …and DISPATCHERS is still empty (send gate 3 intact)',
+    /const DISPATCHERS: Record<string, unknown> = Object\.create\(null\)/.test(consumer))
+  ok('⛔ …and nothing is ever assigned into it',
+    !/DISPATCHERS\[/.test(consumer) && !/Object\.assign\(DISPATCHERS/.test(consumer))
 }
 
 console.log('')
 if (fail) { console.log(`✗ cron-tenant-time: ${fail} check(s) failed (${pass} held)\n`); process.exit(1) }
-console.log(`✓ cron-tenant-time: every tenant is dated in its own zone (${pass} checks)\n`)
+console.log(`✓ cron-tenant-time: the signals→engine date handshake holds (${pass} checks)\n`)
