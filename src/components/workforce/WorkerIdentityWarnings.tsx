@@ -101,13 +101,13 @@ export function WorkerIdentityWarnings({ technicians, onOpen }: {
                 className="w-full text-left px-3 py-2.5 flex items-start justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-xl">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-ink">
-                    {a.name} <span className="text-ink-faint">·</span> {b.name}
+                    {a.name} <span className="text-ink-faint" aria-hidden>·</span> {b.name}
                   </p>
                   {/* ⭐ The state of EACH record, on the collapsed row. A rehire
                       pair reads completely differently from two live records, and
                       the owner should not have to expand to learn which it is. */}
                   <p className="text-[11px] text-ink-muted mt-0.5">
-                    {standing(a)} <span className="text-ink-faint">·</span> {standing(b)}
+                    {standing(a)} <span className="text-ink-faint" aria-hidden>·</span> {standing(b)}
                   </p>
                   <p className="text-[11px] mt-1 font-semibold uppercase tracking-wide">
                     {CONFIDENCE_LABEL[f.confidence]}
@@ -215,7 +215,7 @@ export function WorkerIdentityWarnings({ technicians, onOpen }: {
                   return (
                     <div key={`${u.aId}:${u.bId}`} className="rounded-xl border border-border bg-bg-tertiary/40 px-3 py-2.5">
                       <p className="text-sm font-medium text-ink">{u.sharedName} <span className="text-ink-faint">×2</span></p>
-                      <p className="text-[11px] text-ink-muted mt-0.5">{standing(a)} <span className="text-ink-faint">·</span> {standing(b)}</p>
+                      <p className="text-[11px] text-ink-muted mt-0.5">{standing(a)} <span className="text-ink-faint" aria-hidden>·</span> {standing(b)}</p>
                       <p className="text-[11px] text-ink-muted mt-1 leading-snug">{missingIdentifierSentence(u.missing)}</p>
                       <div className="flex flex-wrap gap-2 mt-2">
                         <Button type="button" variant="ghost" size="sm" onClick={() => onOpen(a)}>Review {a.name}</Button>
