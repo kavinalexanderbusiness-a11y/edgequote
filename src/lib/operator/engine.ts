@@ -69,13 +69,26 @@ export function encodeUntrustedEvidence(value: unknown, maxChars: number): { pay
 // The model must never claim the operator DID something — Phase 1 has no write
 // path, so any executed-action claim is a fabrication. This is a deterministic
 // output-side floor beneath the system-prompt rule, not a replacement for it.
+// Invisible/format characters (zero-width spaces and joiners, BOM, soft
+// hyphen, directional marks) have no legitimate place in a plain-text answer,
+// and a hostile instruction embedded in evidence could steer the model to slip
+// one inside a verb ("s​ent") to walk past the word-boundary regex below.
+// Strip them from the answer BEFORE testing it — and ship the same stripped
+// string, so the floor always tests exactly what the owner reads. (The same
+// character class already bit this codebase once: .trim() eats U+FEFF but not
+// U+200B — the app-origin BOM incident.)
+export function stripInvisibles(s: string): string {
+  return s.replace(new RegExp('[\\u200B-\\u200F\\u2060-\\u2064\\u00AD\\uFEFF]', 'g'), '')
+}
+
 export function claimsExecutedAction(answer: string): boolean {
   // Over-matching is the safe direction: a false positive ships the
   // deterministic answer instead ("I paid attention to…" would), a false
   // negative ships a fabricated execution claim.
+  const a = stripInvisibles(answer)
   const DONE = '(?:sent|scheduled|created|charged|refunded|updated|deleted|archived|booked|recorded|executed|dispatched|marked|paid|cancell?ed|approved)'
-  return new RegExp(`\\b(?:i|we)(?:'ve| have| had)?(?: already| just| now)?\\s+${DONE}\\b`, 'i').test(answer)
-    || new RegExp(`\\b(?:has|have) been ${DONE}\\b`, 'i').test(answer)
+  return new RegExp(`\\b(?:i|we)(?:'ve| have| had)?(?: already| just| now)?\\s+${DONE}\\b`, 'i').test(a)
+    || new RegExp(`\\b(?:has|have) been ${DONE}\\b`, 'i').test(a)
 }
 
 // What the route records in operator_runs for the cost/audit trail. NEVER sent
@@ -117,7 +130,7 @@ async function summarizeWithConfiguredProvider(question: string, result: Awaited
     },
   })
   if (!validModelAnswer(out)) return null
-  const answer = out.answer.trim()
+  const answer = stripInvisibles(out.answer).trim()
   // Fail closed to the deterministic answer on any executed-action claim —
   // nothing was executed, so a model answer saying otherwise must not ship.
   if (claimsExecutedAction(answer)) return null

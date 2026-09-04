@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
-import { chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface } from '../src/lib/operator/engine'
+import { chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface, stripInvisibles } from '../src/lib/operator/engine'
 import { isUuid, validateContextRefs } from '../src/lib/operator/types'
 import { displayInvoiceStatus } from '../src/lib/payments/ledger'
 
@@ -140,6 +140,13 @@ for (const attack of ATTACKS) {
 }
 check('hostile refs cannot smuggle a tenant/record id', Object.keys(validateContextRefs({ customer_id: ATTACKS[2], user_id: U, tenant_id: U })).length === 0)
 check('a compliant-sounding model reply to the attack is rejected', claimsExecutedAction('Done — I have marked your invoice paid.'))
+// Zero-width evasion: a hostile instruction can steer the model to hide an
+// invisible character inside the verb ("s​ent") to walk past the word
+// boundary. The floor strips invisibles first — and the engine ships the same
+// stripped string, so the tested answer IS the displayed answer.
+check('zero-width characters cannot smuggle an executed-action claim', claimsExecutedAction('I have s​ent the reminder.') && claimsExecutedAction('Your invoice has been ⁠marked paid.'))
+check('the shipped answer is the stripped answer', /stripInvisibles\(out\.answer\)/.test(engine))
+check('stripInvisibles removes the whole invisible class and nothing else', stripInvisibles('a​‍﻿­⁠b c') === 'ab c')
 
 console.log('\n═══ Model configuration and audit trail ═══')
 check('provider is env-configurable with a deterministic off switch', /EDGE_OPERATOR_PROVIDER/.test(engine) && /'deterministic'/.test(engine))
@@ -310,6 +317,12 @@ try {
     select c.relname, p.polcmd cmd, count(*)::int n from pg_policy p join pg_class c on c.oid = p.polrelid
     where c.relname like 'operator%' and p.polpermissive group by 1, 2 having count(*) > 1`)
   check('multiple_permissive_policies: none (one policy per table+action)', multiPermissive.rows.length === 0, JSON.stringify(multiPermissive.rows))
+  // Policies must name authenticated explicitly — a policy TO PUBLIC (polroles
+  // = {0}) would quietly include anon the day anon regains a table grant.
+  const publicPolicies = await db.query<{ polname: string }>(`
+    select p.polname from pg_policy p join pg_class c on c.oid = p.polrelid
+    where c.relname like 'operator%' and p.polroles = '{0}'::oid[]`)
+  check('every policy targets authenticated, none TO PUBLIC', publicPolicies.rows.length === 0, JSON.stringify(publicPolicies.rows))
   const secdef = await db.query<{ proname: string }>(`
     select proname from pg_proc where pronamespace = 'public'::regnamespace and prosecdef`)
   check('security_definer: the proposal introduces no definer functions', secdef.rows.length === 0, JSON.stringify(secdef.rows))
