@@ -22,7 +22,7 @@ import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact
 import { sumQuoteAmounts } from '@/lib/pricingState'
 import { settingsToSeasons } from '@/lib/seasons'
 import { loadTenantTimeZone } from '@/lib/tenantTimeServer'
-import { tenantTodayISO, tenantMoment } from '@/lib/tenantTime'
+import { tenantMoment } from '@/lib/tenantTime'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
 import { computeDayPlan, type DayPlan, type PlanJob } from '@/lib/dashboard/dayPlan'
 import { pageAll } from '@/lib/supabase/pageAll'
@@ -136,12 +136,18 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // One serial read ahead of the batch — `today` is an input to almost every
   // query below, so it cannot come from a row fetched alongside them.
   //
-  // Reads the ZONE directly (loadTenantTimeZone), not the loadTenantToday
-  // wrapper, so `timeZone` stays in scope for the greeting/dateLine below —
-  // same single query, same fallback semantics, `today`'s VALUE is unchanged
-  // (tenantTodayISO(timeZone) is exactly what loadTenantToday did internally).
+  // ONE captured moment for everything on this page that reads the clock:
+  // `today` (every money/KPI bound), the greeting's `hour`, and `dateLine`.
+  // Reading the zone directly (not the loadTenantToday wrapper) keeps the same
+  // single query and fallback; `tenantNow.date` is what loadTenantToday
+  // returned (tenantTodayISO IS tenantMoment(...).date), so `today`'s value
+  // and every query bound built from it are unchanged. Capturing `hour` here
+  // too — rather than re-reading the clock after the batch — means a request
+  // that runs across the tenant's midnight can never render "Good morning"
+  // beside yesterday's date.
   const { timeZone } = await loadTenantTimeZone(sb, userId)
-  const today = tenantTodayISO(timeZone)
+  const tenantNow = tenantMoment(timeZone)
+  const today = tenantNow.date
 
   // Rolling 7 days INCLUDING today, not a calendar week: on a Monday a calendar
   // week would read $0 and look broken.
@@ -386,32 +392,14 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const jobsDoneLastMonth = allJobsForKpi.filter(j =>
     j.status === 'completed' && j.scheduled_date >= lastMonthStartISO && j.scheduled_date <= lastMonthSameDayISO).length
 
-  // Greeting + dateLine share the SAME tenant zone `today`'s money/KPI queries
-  // already use — never the server runtime's clock. `now.getHours()` /
-  // `now.toLocaleDateString()` read Vercel's clock, which is UTC: an owner in
-  // Edmonton at 2:40pm local (UTC-6, 20:40 UTC) got "Good evening" because the
-  // server's day was already past 17:00 while the owner's was mid-afternoon.
-  //
-  // ⭐ dateLine is built from `today` — the SAME early read every money/KPI
-  // bound above is built from — NOT a second, later tenantMoment(...).date
-  // call. `today` is read once, before the Promise.all batch; if dateLine
-  // instead re-asked the clock down here, the two calls straddle the whole
-  // batch's latency, and on the (rare) request that happens to run across the
-  // tenant's midnight, the header could show tomorrow's date while every
-  // money figure on the page is still answering for today — the exact class
-  // of "two clocks disagreeing" bug this file exists to remove, just moved
-  // from UTC-vs-tenant to early-read-vs-late-read. One instant, reused, is
-  // the fix: `today` already IS the tenant-local calendar date; there is
-  // nothing for a second read to add except a chance to disagree with it.
-  //
-  // `hour` is the one genuinely fresh read: the greeting is "what time is it
-  // right now", a wall-clock question with no query bound to stay coherent
-  // with, so tenantMoment(timeZone) is called here, close to render, for
-  // exactly that field.
-  const hour = tenantMoment(timeZone).hour
-  // Same `${iso}T00:00:00` + toLocaleDateString idiom this file already uses
-  // for month-window math (see `now0` above) — construct and format in the
-  // SAME implicit runtime zone, so the round trip can't shift the date.
+  // Greeting + dateLine come from the SAME captured `tenantNow` as `today` —
+  // the tenant's clock, never the server's. (`new Date().getHours()` read
+  // Vercel's UTC clock: an owner in Edmonton at 14:40 local, 20:40 UTC, got
+  // "Good evening".) The `${iso}T00:00:00` + toLocaleDateString idiom is the
+  // one this file already uses for month-window math (`now0` above) — built
+  // and formatted in the same implicit runtime zone, so the round trip cannot
+  // shift the date.
+  const hour = tenantNow.hour
   const dateLine = new Date(`${today}T00:00:00`)
     .toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })
 

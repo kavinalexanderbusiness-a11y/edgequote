@@ -281,26 +281,28 @@ check('SCHEDULE — reads the shared clock, not the device',
   /useTenantTime\(\)/.test(schedule) && !/localTodayISO\(\)/.test(schedule))
 const dashData = code('src/lib/dashboard/data.ts')
 check('DASHBOARD — reads the tenant zone server-side, not the server\'s UTC',
-  // Either the loadTenantToday wrapper, or the equivalent unpacked form (S97
-  // presentation follow-up: reads loadTenantTimeZone directly so `timeZone`
-  // stays in scope for the greeting/dateLine, then derives `today` from it via
-  // tenantTodayISO — the exact same call loadTenantToday makes internally).
+  // Either the loadTenantToday wrapper, or the unpacked form (S97: reads
+  // loadTenantTimeZone directly and derives `today` from one captured
+  // tenantMoment — value-identical, since tenantTodayISO IS tenantMoment().date).
   (/loadTenantToday\(sb, userId\)/.test(dashData)
-    || (/loadTenantTimeZone\(sb, userId\)/.test(dashData) && /tenantTodayISO\(timeZone\)/.test(dashData)))
+    || (/loadTenantTimeZone\(sb, userId\)/.test(dashData)
+      && (/tenantTodayISO\(timeZone\)/.test(dashData) || /const today = tenantNow\.date/.test(dashData))))
   && !/localTodayISO/.test(dashData))
 check('DASHBOARD — greeting/dateLine share that SAME tenant zone, not new Date()',
   /tenantMoment\(timeZone\)/.test(dashData)
   && !/now\.getHours\(\)/.test(dashData)
   && !/now\.toLocaleDateString/.test(dashData))
-// ⭐ COHERENCE. dateLine must be built from `today` (the ONE early read every
-// money/KPI bound also uses), never from a SECOND, later clock read — even a
-// tenant-zone-correct one. Two reads of the same zone can still straddle the
-// batch's latency and disagree with each other right at the tenant's own
-// midnight: the header would show tomorrow while the money band still
-// answers for today. `hour` alone is exempt (the greeting is "what time is
-// it right now", not a calendar-date bound anything else must agree with).
-check('DASHBOARD — dateLine is built from the SAME `today` the queries use, not a second read',
-  /new Date\(`\$\{today\}T00:00:00`\)/.test(dashData) && !/tenantNow/.test(dashData))
+// ⭐ ONE INSTANT. `today` (every money/KPI bound), the greeting's `hour` and
+// `dateLine` must all come from ONE captured clock read. Two reads — even of
+// the same correct zone — straddle the query batch, and a request that runs
+// across the tenant's midnight then renders "Good morning" beside yesterday's
+// date (S110 review). Pinned as a count, not a shape: exactly one tenantMoment
+// call in the file, and all three consumers hang off it.
+check('DASHBOARD — today, hour and dateLine share ONE captured tenantMoment',
+  (dashData.match(/tenantMoment\(/g) || []).length === 1
+  && /const today = tenantNow\.date/.test(dashData)
+  && /const hour = tenantNow\.hour/.test(dashData)
+  && /new Date\(`\$\{today\}T00:00:00`\)/.test(dashData))
 check('DASHBOARD PAGE — same', /loadTenantToday\(/.test(read('src/app/dashboard/page.tsx')))
 // ⭐ And the zone must ride along to the weather engine, or the dashboard's
 // preloaded settings would silently send it back to the fallback.
@@ -333,14 +335,32 @@ check('OLD BUG — the raw UTC hour would have bucketed to "Good evening"',
   greetingFor(reportedMoment.getUTCHours()) === 'Good evening',
   'confirms the OLD code path (server UTC hour) really did produce the reported wrong greeting')
 
-// NOT re-tested here: dateLine's local-date boundary. Since the coherence fix
-// above, dateLine is built from `today` — literally `tenantTodayISO(timeZone)`
-// — and that exact call, at this exact boundary (`lateEvening`/`justAfter`,
-// 23:30 Edmonton → 00:00 Edmonton across the UTC day-roll), is ALREADY proven
-// a few dozen lines up in THIS file ("the BUSINESS says the 28th" / "the
-// business day rolls"). A second assertion here would duplicate that proof
-// rather than add to it — `today` and `dateLine` cannot disagree about the
-// date by construction, not by two tests happening to agree.
+// `today` now comes from tenantMoment(tz).date instead of tenantTodayISO(tz).
+// Those must be the same value at every boundary, or the query bounds moved.
+check('today via tenantMoment(...).date === tenantTodayISO(...) at every boundary instant',
+  [lateEvening, new Date('2026-08-29T05:59:00Z'), justAfter, reportedMoment]
+    .every(i => tenantMoment(EDM, i).date === tenantTodayISO(EDM, i)))
+// Why ONE instant: a split read (date early, hour after the batch) across
+// local midnight — 23:59:45 → 00:00:15 — produces yesterday's date with hour
+// 0: "Good morning, Friday the 28th" on Saturday the 29th. One read cannot.
+const before = new Date('2026-08-29T05:59:45Z')
+const after = new Date(before.getTime() + 30_000)
+const split = { date: tenantMoment(EDM, before).date, hour: tenantMoment(EDM, after).hour }
+check('MUTATION — a split read across midnight is incoherent (28th, hour 0)',
+  split.date === '2026-08-28' && split.hour === 0,
+  'if this stops reproducing, the fixture no longer straddles the boundary')
+check('…while one captured instant is coherent on either side of it',
+  [before, after].every(i => {
+    const m = tenantMoment(EDM, i)
+    return (m.date === '2026-08-28' && m.hour === 23) || (m.date === '2026-08-29' && m.hour === 0)
+  }))
+
+// NOT re-tested here: dateLine's local-date boundary. dateLine is built from
+// `today` (= tenantMoment(timeZone).date, proven value-identical to
+// tenantTodayISO just above), and that boundary — `lateEvening`/`justAfter`,
+// 23:30 → 00:00 Edmonton across the UTC day-roll — is already proven a few
+// dozen lines up in THIS file. `today` and `dateLine` cannot disagree about
+// the date by construction, not by two tests happening to agree.
 
 console.log('\n─── Crons compute a date PER TENANT ───')
 for (const [name, file] of [
