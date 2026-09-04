@@ -46,7 +46,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Operator is rate-limited for this hour. Please try again later.' }, { status: 429 })
     }
 
-    const { response, audit } = await answerOperatorQuestion(supabase, user.id, body.question, body.context)
+    // The module is `core: true`, so this route is live for every tenant the
+    // moment the code deploys — which can precede the Phase-1 table by a whole
+    // landing cycle. In that window the count above cannot run and the upsert
+    // below cannot record, so a paid model call would be both uncounted and
+    // unattributable. Deny the SPEND, not the answer: the deterministic
+    // evidence path needs no model and stays fully available.
+    const auditable = !countError
+    const { response, audit } = await answerOperatorQuestion(
+      supabase, user.id, body.question, body.context, { allowModel: auditable })
 
     // Operator telemetry is business metadata, not a business-record mutation.
     // The id is server-generated when the client omits one so that no caller can

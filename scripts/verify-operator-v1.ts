@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
-import { chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface } from '../src/lib/operator/engine'
+import { answerOperatorQuestion, chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface } from '../src/lib/operator/engine'
 import { listQuoteFollowupsDue, listAcceptedUnscheduledWork } from '../src/lib/operator/tools'
 import { isUuid, stripInvisibles, validateContextRefs } from '../src/lib/operator/types'
 import { displayInvoiceStatus } from '../src/lib/payments/ledger'
@@ -240,6 +240,12 @@ for (const c of built) {
     c.financial_value === null || Number.isFinite(c.financial_value))
 }
 check('card ids are unique across tools', new Set(built.map(c => c.id)).size === built.length)
+// NO AUDIT ⇒ NO SPEND, exercised: with allowModel:false the engine must return
+// a usable answer that cost nothing and is recorded as deterministic.
+const noSpend = await answerOperatorQuestion(stubSB({}), 'u1', 'What should I do first today?', {}, { allowModel: false })
+check('allowModel:false records provider=deterministic and zero token spend (behavioral)',
+  noSpend.audit.provider === 'deterministic' && noSpend.audit.model === null && noSpend.audit.tokens_out === null)
+check('…and still returns a usable read-only answer', noSpend.response.answer.length > 0 && noSpend.response.read_only === true)
 check('an unreachable-contact card is never a "contact the customer" card',
   (await listQuoteFollowupsDue(stubSB({ quotes: [hostileQuote], customers: [{ id: CID, phone: null, email: null, sms_opt_in: false, email_opt_in: false, message_prefs: null }] }), 'u1'))
     .cards.every(c => c.customer_contact_required === false))
@@ -255,6 +261,12 @@ check('run audit records provider/model/token spend, never secrets', /provider: 
 check('audit is recorded server-side only — browser gets the response half', /NextResponse\.json\(response\)/.test(route) && !/NextResponse\.json\(\{[^}]*audit/.test(route))
 check('proposal has the audit columns', /provider text not null default 'deterministic'/.test(migration) && /tokens_out integer/.test(migration))
 check('exactly one application tool runs per question (no model-driven tool loop)', /tools_used: \[tool\]/.test(engine) && !/while\s*\(/.test(engine))
+// NO AUDIT ⇒ NO SPEND. The module is core:true, so the route is live for every
+// tenant as soon as the code deploys — possibly a full landing cycle before the
+// run-history table exists. Without this, that window is unmetered, unlogged,
+// paid model calls. Proven both ways: the route decides, the engine obeys.
+check('the route denies model spend when the run history is unreadable', /const auditable = !countError/.test(route) && /allowModel: auditable/.test(route))
+check('the engine honours allowModel:false with the free deterministic answer', /opts\.allowModel === false \? null :/.test(engine))
 
 console.log('\n═══ Approval foundation is fail-closed ═══')
 const tables = ['operator_runs', 'operator_conversations', 'operator_tool_calls', 'operator_proposed_actions', 'operator_approvals', 'operator_execution_results', 'operator_failures']

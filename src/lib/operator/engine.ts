@@ -134,7 +134,8 @@ async function summarizeWithConfiguredProvider(question: string, result: Awaited
 
 const DETERMINISTIC_AUDIT: OperatorRunAudit = { provider: 'deterministic', model: null, tokens_in: null, tokens_out: null }
 
-export async function answerOperatorQuestion(sb: SB, userId: string, question: string, refs: OperatorContextRefs = {}):
+export async function answerOperatorQuestion(sb: SB, userId: string, question: string, refs: OperatorContextRefs = {},
+  opts: { allowModel?: boolean } = {}):
   Promise<{ response: OperatorAnswer; audit: OperatorRunAudit }> {
   const tool = chooseTool(question, refs)
   const input: Record<string, unknown> = {}
@@ -142,7 +143,12 @@ export async function answerOperatorQuestion(sb: SB, userId: string, question: s
   if (refs.quote_id) input.quote_id = refs.quote_id
   if (refs.invoice_id) input.invoice_id = refs.invoice_id
   const result = await runReadOnlyOperatorTool(sb, userId, tool, input)
-  const model = await summarizeWithConfiguredProvider(question, result)
+  // NO AUDIT ⇒ NO SPEND. The caller sets allowModel:false when the run history
+  // is unreadable (the Phase-1 table not applied yet), because a run that
+  // cannot be recorded also cannot be counted — and an uncountable run is an
+  // unbounded, unattributable model bill. The evidence answer still works: it
+  // falls back to the deterministic summary, which is free and just as true.
+  const model = opts.allowModel === false ? null : await summarizeWithConfiguredProvider(question, result)
   return {
     response: {
       answer: model?.answer ?? deterministicAnswer(tool, result.summary, result.warnings, question),
