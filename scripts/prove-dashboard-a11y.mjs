@@ -18,7 +18,7 @@
 
 import { spawn } from 'node:child_process'
 import { join, resolve } from 'node:path'
-import { readdirSync } from 'node:fs'
+import { readdirSync, writeFileSync } from 'node:fs'
 
 const DIR = resolve(process.argv[2] || '.dashboard-a11y')
 const WIDTHS = [375, 390, 430, 1280]
@@ -78,7 +78,8 @@ async function main() {
     for (const width of WIDTHS) {
       const phone = width < 1000
       console.log(`\n─ ${scenario} @ ${width} ─`)
-      await send('Emulation.setTouchEmulationEnabled', { enabled: phone, maxTouchPoints: phone ? 5 : 0 })
+      // CDP rejects maxTouchPoints:0 ("must be between 1 and 16") — omit it when disabling.
+      await send('Emulation.setTouchEmulationEnabled', phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false })
       await send('Emulation.setEmulatedMedia', { features: [{ name: 'pointer', value: phone ? 'coarse' : 'fine' }, { name: 'hover', value: phone ? 'none' : 'hover' }] })
       await send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 2, mobile: phone })
       await send('Page.navigate', { url })
@@ -119,11 +120,16 @@ async function main() {
         const d = await evaluate(`(() => {
           const dlg = document.querySelector('[role=dialog]')
           const labelled = dlg && document.getElementById(dlg.getAttribute('aria-labelledby') || '')
+          const box = el => { const r = el.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height) }
+          const arrowEls = [...(dlg?.querySelectorAll('button[aria-label^="Move "]') ?? [])]
           return {
             modal: dlg?.getAttribute('aria-modal') === 'true',
             title: (labelled?.textContent || '').trim(),
-            switches: [...(dlg?.querySelectorAll('[role=switch]') ?? [])].map(s => ({ checked: s.getAttribute('aria-checked'), name: s.getAttribute('aria-label') || '' })),
-            arrows: [...(dlg?.querySelectorAll('button[aria-label^="Move "]') ?? [])].length,
+            switches: [...(dlg?.querySelectorAll('[role=switch]') ?? [])].map(s => ({ checked: s.getAttribute('aria-checked'), name: s.getAttribute('aria-label') || '', box: box(s) })),
+            arrows: arrowEls.length,
+            arrowBoxes: arrowEls.map(box),
+            arrowsUnder44: arrowEls.filter(a => { const r = a.getBoundingClientRect(); return r.width < 44 || r.height < 44 }).length,
+            closeBox: (() => { const c = dlg?.querySelector('button[aria-label="Close"]'); return c ? box(c) : null })(),
             unnamedButtons: [...(dlg?.querySelectorAll('button') ?? [])].filter(b => !(b.getAttribute('aria-label') || b.textContent || '').trim()).length,
           }
         })()`)
@@ -131,6 +137,14 @@ async function main() {
         check('six named switches with an explicit checked state', d.switches.length === 6 && d.switches.every(s => s.name && /^(true|false)$/.test(s.checked)), JSON.stringify(d.switches))
         check('twelve named reorder arrows (up + down per row)', d.arrows === 12, String(d.arrows))
         check('no unnamed button inside the dialog', d.unnamedButtons === 0)
+        // The S97-introduced controls specifically — measured, not inferred from a class name.
+        if (phone) check(`every reorder arrow clears 44×44px (measured ${[...new Set(d.arrowBoxes)].join(', ')})`, d.arrowsUnder44 === 0, `${d.arrowsUnder44} of ${d.arrows} arrows under 44px`)
+        console.log(`  ℹ shared primitives (pre-existing, not S97's): switch ${[...new Set(d.switches.map(s => s.box))].join(', ')} · close ${d.closeBox}`)
+      }
+
+      if (process.env.SHOTS_DIR) {
+        const shot = await send('Page.captureScreenshot', { format: 'png' })
+        writeFileSync(join(process.env.SHOTS_DIR, `${scenario}-${width}.png`), Buffer.from(shot.data, 'base64'))
       }
     }
   }
