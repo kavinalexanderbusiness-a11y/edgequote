@@ -80,10 +80,15 @@ async function main() {
       console.log(`\n─ ${scenario} @ ${width} ─`)
       // CDP rejects maxTouchPoints:0 ("must be between 1 and 16") — omit it when disabling.
       await send('Emulation.setTouchEmulationEnabled', phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false })
-      await send('Emulation.setEmulatedMedia', { features: [{ name: 'pointer', value: phone ? 'coarse' : 'fine' }, { name: 'hover', value: phone ? 'none' : 'hover' }] })
+      // prefers-reduced-motion + finishing any running animation before measuring:
+      // the Modal's entrance is a scale animation, and a rect read mid-animation
+      // is fractionally under size (measured 43.9x at 375 once — "44x44" rounded,
+      // yet "under 44" raw). Geometry, not motion, is what this prover measures.
+      await send('Emulation.setEmulatedMedia', { features: [{ name: 'pointer', value: phone ? 'coarse' : 'fine' }, { name: 'hover', value: phone ? 'none' : 'hover' }, { name: 'prefers-reduced-motion', value: 'reduce' }] })
       await send('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 2, mobile: phone })
       await send('Page.navigate', { url })
       for (let i = 0; i < 40; i++) { if (await evaluate('document.readyState === "complete" && !!document.querySelector("main")')) break; await sleep(250) }
+      await evaluate('document.getAnimations().forEach(a => { try { a.finish() } catch {} }); true')
       await sleep(150)
       if (phone) check('the viewport is a phone (pointer: coarse matches)', await evaluate("matchMedia('(pointer: coarse)').matches") === true)
 
