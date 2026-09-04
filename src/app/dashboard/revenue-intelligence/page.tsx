@@ -231,7 +231,8 @@ export default function RevenueIntelligencePage() {
             {ltvForecast.slice(0, 12).map(f => (
               <div key={f.customerId} className="px-5 py-2.5 flex items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <Link href={`/dashboard/customers/${f.customerId}`} className="text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
+                  {/* block: measured (same run) — `truncate` cannot clip an inline anchor, so long names overflowed the viewport. */}
+                  <Link href={`/dashboard/customers/${f.customerId}`} className="block text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
                   <p className="text-[11px] text-ink-faint tabular-nums">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
                 </div>
                 {f.churnRiskImpact > 0 && (
@@ -290,7 +291,8 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
               {o.score}/100
             </span>
           </div>
-          <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
+          {/* break-words: measured at 375/390/430 — an unbroken customer name painted past the card (growth-visual-fixture run 1). */}
+          <p className="text-sm font-bold tracking-tight text-ink mt-1.5 break-words">{o.action} — {o.customerName}</p>
         </div>
         {/* ⭐⭐ THE FIGURE ONLY APPEARS WHEN ITS EVIDENCE EARNED IT.
             An unquantified opportunity is still worth acting on — the action and
