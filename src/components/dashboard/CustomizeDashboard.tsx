@@ -29,9 +29,15 @@ import { Check, ChevronDown, ChevronUp, RotateCcw, SlidersHorizontal, X } from '
 // on an account with no settings row yet, .update() matches zero rows with no
 // error and the "saved" layout would evaporate on the next load.
 
-export function CustomizeDashboard({ initial }: { initial: DashboardLayout }) {
+export function CustomizeDashboard({ initial, defaultOpen = false }: {
+  initial: DashboardLayout
+  /** Fixture-only: render the sheet already open so static markup (no React
+   *  runtime, so no click) can be tabbed through and measured. The app never
+   *  passes it. */
+  defaultOpen?: boolean
+}) {
   const router = useRouter()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const [draft, setDraft] = useState<DashboardLayout>(initial)
   const [busy, setBusy] = useState(false)
 

@@ -34,6 +34,8 @@ search-*.png
 search-cdp-*.txt
 .chrome-search-*/
 .dayactions-harness/
+# Session 97 dashboard keyboard/mobile fixture output (scripts/dashboard-a11y-harness.tsx)
+.dashboard-a11y/
 
 # Session fixture credentials (worker passwords for authenticated E2E proofs).
 # ⛔ Never commit: these are real logins on the production project.
