@@ -459,9 +459,20 @@ async function main() {
       q(`insert into public.quote_services (user_id, quote_id, service_type, quantity, unit_price, sort_order)
          values ($1,$2,'ZZ line',1,$3,0)`, [TENANT, id, price])
 
-    // ── The three concurrent writes the review demonstrated on quote_services ──
+    // ── The concurrent writes, and one that turned out not to be ──────────────
+    // ⚠️⚠️ CORRECTED after independent re-testing on real backends: the INSERT arm
+    // is NOT externally reachable. A real external INSERT into quote_services
+    // takes FOR KEY SHARE on the parent `quotes` row, which conflicts with this
+    // function's FOR UPDATE, and the attempt ends in `deadlock detected` with
+    // nothing written. The same-transaction injection below bypasses that lock,
+    // so it must not be read as evidence that the INSERT path races — it is kept
+    // only as a second exercise of the contract on a moved fingerprint, and it is
+    // labelled as such wherever it prints.
+    //
+    // ⭐ UPDATE, DELETE and the selected-option price DO race, on independent
+    // backends. Those are the cases the contract exists for.
     const CASES: { key: string; label: string; sql: string; prep?: (id: string) => Promise<unknown> }[] = [
-      { key: 'ins', label: 'a service line is INSERTED',
+      { key: 'ins', label: 'a service line is INSERTED (⚠️ contract exercise only — a real external INSERT deadlocks on the parent lock)',
         sql: `  insert into public.quote_services (user_id, quote_id, service_type, quantity, unit_price, sort_order) values (v_q.user_id, p_quote_id, 'ZZ concurrent', 1, 40, 9);` },
       { key: 'upd', label: 'a service line PRICE is edited',
         prep: id => addService(id, 40),

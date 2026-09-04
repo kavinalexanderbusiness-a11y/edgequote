@@ -26,9 +26,21 @@
 -- saw. Scope added concurrently — a service line, a price edit — is retroactively
 -- blessed as accepted, and every downstream gate that asks that question
 -- (scheduling, quote→invoice, the portal deposit charge) then treats it as
--- consented. Executed three ways: a concurrent INSERT, UPDATE and DELETE on
--- quote_services each recorded a DIFFERENT fingerprint than the one confirmed,
--- and each still returned ok:true.
+-- consented.
+--
+-- ⚠️⚠️ CORRECTED, and the correction matters. An earlier draft of this header
+-- said the race was demonstrated three ways — INSERT, UPDATE and DELETE on
+-- quote_services. The reviewer who first reported it retracted the INSERT arm on
+-- independent backends: a real external INSERT takes FOR KEY SHARE on the parent
+-- `quotes` row, which conflicts with this function's FOR UPDATE, and the run
+-- ended in `deadlock detected` with nothing written. The INSERT is blocked by
+-- lock conflict, not by this contract.
+--
+-- ⭐ What DOES race, proven on independent backends: an UPDATE of a service line,
+-- a DELETE of the service lines (the editor's clear-and-reinsert), and a change
+-- to the SELECTED OPTION's price — the last splitting quotes.accepted_price from
+-- quote_acceptances.accepted_amount on one quote. Those are the cases this
+-- contract exists for.
 --
 -- ⚠️ THE CONCURRENT WRITER IS THE ORDINARY SAVE BUTTON. The quote editor replaces
 -- a breakdown by DELETING every child row and re-inserting them, as separate
