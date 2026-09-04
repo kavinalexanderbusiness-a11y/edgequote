@@ -113,7 +113,15 @@ export function WorkerIdentityWarnings({ technicians, onOpen }: {
                     {CONFIDENCE_LABEL[f.confidence]}
                   </p>
                 </div>
-                {expanded ? <ChevronUp className="w-4 h-4 shrink-0 mt-0.5" /> : <ChevronDown className="w-4 h-4 shrink-0 mt-0.5" />}
+                {/* ⭐ aria-hidden, matching every other icon in this file (Users,
+                    Info, ShieldAlert above/below). The button's own
+                    aria-expanded already tells a screen reader whether this is
+                    open or closed — an unlabelled <svg> with no aria-hidden can
+                    be announced as an unnamed graphic on some screen readers,
+                    which is noise the text content doesn't need. */}
+                {expanded
+                  ? <ChevronUp className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
+                  : <ChevronDown className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />}
               </button>
 
               {expanded && (
