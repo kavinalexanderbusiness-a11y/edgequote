@@ -72,7 +72,10 @@ export function CustomizeDashboard({ initial, defaultOpen = false }: {
     router.refresh()
   }
 
-  const arrowBtn = 'w-8 h-8 rounded-md flex items-center justify-center text-ink-faint hover:text-ink hover:bg-surface-raised transition-colors disabled:opacity-30 disabled:hover:text-ink-faint disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
+  // tap-target: w-8 h-8 is 32px — measured in the S97 a11y fixture at 375/390/430,
+  // below the 44px floor a gloved thumb needs. The shell's opt-in class grows
+  // the hit area only under (pointer: coarse); desktop density is untouched.
+  const arrowBtn = 'tap-target w-8 h-8 rounded-md flex items-center justify-center text-ink-faint hover:text-ink hover:bg-surface-raised transition-colors disabled:opacity-30 disabled:hover:text-ink-faint disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
 
   return (
     <>
