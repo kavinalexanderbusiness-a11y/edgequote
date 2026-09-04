@@ -200,7 +200,12 @@ export function RevenueIntelligenceView({ report, feedback, busy, onAct: act, on
             {ltvForecast.slice(0, 12).map(f => (
               <div key={f.customerId} className="px-5 py-2.5 flex items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <Link href={`/dashboard/customers/${f.customerId}`} className="text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
+                  {/* ⭐ block: MEASURED (same run) — `truncate` on an INLINE anchor
+                      cannot clip (overflow does not apply to inline boxes) but its
+                      nowrap still stops wrapping, so any long name, spaced or not,
+                      painted past the viewport (383px and 410px wide at 375px).
+                      As a block it gets the row's width and the ellipsis works. */}
+                  <Link href={`/dashboard/customers/${f.customerId}`} className="block text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
                   <p className="text-[11px] text-ink-faint tabular-nums">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
                 </div>
                 {f.churnRiskImpact > 0 && (
@@ -259,7 +264,12 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
               {o.score}/100
             </span>
           </div>
-          <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
+          {/* ⭐ break-words: MEASURED at 375/390/430 (growth-visual-fixture run 1,
+              d8325a80) — a customer name with no break opportunity (an
+              imported-record style token) painted 400px wide inside a
+              189-244px column and made the whole dashboard column scroll
+              sideways. Same fix the concentration banner already carries. */}
+          <p className="text-sm font-bold tracking-tight text-ink mt-1.5 break-words">{o.action} — {o.customerName}</p>
         </div>
         {/* ⭐⭐ THE FIGURE ONLY APPEARS WHEN ITS EVIDENCE EARNED IT.
             An unquantified opportunity is still worth acting on — the action and
