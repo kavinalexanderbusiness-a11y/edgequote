@@ -102,6 +102,29 @@ console.log('\n── 1. ⭐⭐ UNPRICED ≠ NO-CHARGE ≠ A PRICE ──')
     'the seam is closed: lib/pricingState owns this question')
   check('and the engine feeds it the canonical verdict',
     /jobPriceState\(/.test(CODE.engine) && /jobAmountOrNull\(/.test(CODE.engine), '')
+  // ⭐⭐ THE COLUMNS MUST ACTUALLY BE SELECTED. Without them `isNoCharge()` is
+  // always false, every declared write-off silently reads as "no price
+  // recorded", and nothing fails — the distinction just quietly stops existing.
+  // Mutation testing caught this: deleting them from the query broke nothing.
+  for (const col of ['no_charge_at', 'no_charge_reason', 'no_charge_by']) {
+    check(`the jobs query selects ${col}`,
+      new RegExp(`from\\('jobs'\\)[\\s\\S]{0,400}${col}`).test(CODE.engine),
+      'a column that is never selected cannot be reasoned about')
+  }
+
+  // ⛔ AN INCONSISTENT INPUT MUST NOT BECOME A ZERO IN THE SAMPLE.
+  // `priced` with a null amount should be impossible, but "impossible" is what a
+  // future caller bug looks like from in here — and `Number(null) || 0` is one
+  // keystroke away. Asserted with the malformed record the belt-and-braces
+  // clause exists for, so the clause is reachable rather than decorative.
+  const malformed = assessEvidence({
+    visits: [visit(70), visit(70), visit(70), { priceState: 'priced' as PriceState, amount: null, completed: true }],
+    declaredFreq: 'weekly', visitsPerSeason: vps,
+  })
+  eq('a priced record with no amount is excluded, not counted as $0', malformed.sampleSize, 3)
+  eq('…and reported as unpriced, which is what it actually is',
+    malformed.excluded.find(x => x.reason === 'unpriced')?.count, 1)
+  eq('so the statistic is untouched by it', malformed.perVisit, 70)
 
   const e = assessEvidence({ visits: [visit(70), visit(80), visit(90), visit(null), visit(0)], declaredFreq: 'weekly', visitsPerSeason: vps })
   eq('unpriced and no-charge visits are BOTH excluded from the statistic', e.sampleSize, 3)
