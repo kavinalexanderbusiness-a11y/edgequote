@@ -39,7 +39,7 @@ import { sortedOptions } from '@/lib/quoteOptions'
 import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import {
-  isAcceptedOrBeyond, acceptedPresentation, customerFacingQuoteAmount,
+  isAcceptedOrBeyond, acceptedPresentation, customerFacingQuote,
   acceptedAmountNote, type AcceptanceKind,
 } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
@@ -827,6 +827,49 @@ export function buildDocItems(opts: {
           isRecommended: !!o.is_recommended,
         }))
       : undefined
+    // ── ⭐⭐ MAY WE CALL THIS AN ACCEPTED PRICE AT ALL? ───────────────────────
+    // A red-team found EPS-2026-0152 live: status=accepted, accepted_price=1400,
+    // current total=500, and ZERO quote_acceptances rows — with this screen
+    // telling the customer "This is the price you accepted" over $1,400.
+    //
+    // ⛔ Status is not evidence and neither is accepted_price. The only thing
+    // that can support that sentence is a quote_acceptances row, and
+    // get_portal_data does not carry one — so the kind is `undefined` here and
+    // the rule FAILS CLOSED: no consent claim, and the customer-facing figure is
+    // the quote's CURRENT price.
+    //
+    // ⚠️ That deliberately gives up S121's consent snapshot for the moment,
+    // because S121's protection and this one point opposite ways and only one of
+    // them can be right without evidence in the payload. Showing a stale figure
+    // AS AGREED is the worse failure: it is a false statement about what someone
+    // consented to, where the other is merely a less useful true one. The
+    // payload widening that restores the snapshot for evidenced quotes is
+    // supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql — until it is
+    // applied, the evidenced states are unreachable and every accepted quote
+    // reads current.
+    //
+    // ⭐⭐ THIS BLOCK RUNS FIRST, AND THAT ORDERING IS LOAD-BEARING. It used to
+    // sit ~60 lines below, so `paymentTiming` — computed here — was handed the
+    // RAW quote while only the deposit gate got the stripped one. The customer
+    // saw a $250 deposit card above the sentence "A 50% deposit ($700.00) is
+    // required before we schedule your visit": two figures, same screen, same
+    // quote, same engine. Anything that reads money off this quote belongs
+    // BELOW this point and takes `moneyQuote`.
+    const presentation = acceptedPresentation(qq.status, qq.acceptance_kind as AcceptanceKind | null | undefined)
+    // ⭐ ONE call, BOTH halves — the figure the customer is shown and the quote
+    // every money reader is allowed to see. There is deliberately no way to ask
+    // for one without the other (lib/quoteAcceptance).
+    const facing = customerFacingQuote(presentation, qq)
+    // ⛔ THE quote for every money engine and every money sentence below. Without
+    // proven evidence, `accepted_price` is not a consent snapshot — it is a
+    // number a past state believed — and `depositBasis` prefers it over `total`
+    // whenever it is non-zero, so the only way to keep it out of a figure is to
+    // hand the engine a quote that does not carry one. ⛔ Do not pass `qq` to a
+    // deposit or timing call below; that is exactly the bug this closes.
+    const moneyQuote = facing.moneyQuote
+    const acceptedFigure = facing.isAcceptedAmount ? facing.amount : null
+    const priceMovedSinceAccepted =
+      acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
     // ⭐ THE payment-timing interpretation of this quote — computed ONCE, read by
     // the explain list below, by `paymentTimingLine` on the row, and (through
     // that field) by every component that tells this customer when money is due.
@@ -836,7 +879,7 @@ export function buildDocItems(opts: {
     // dollar figure belonging to an option they may not pick. The moment a choice
     // exists — or acceptance snapshots accepted_price — the figure is real and
     // the same call prints it.
-    const timing = paymentTiming(qq, { basisSettled: !(options && !qq.selected_option_id) })
+    const timing = paymentTiming(moneyQuote, { basisSettled: !(options && !qq.selected_option_id) })
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -869,32 +912,9 @@ export function buildDocItems(opts: {
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
-    // The consented figure, and whether the document has moved away from it.
-    // Both derived here, once, so the amount and the note can never disagree.
-    // ── ⭐⭐ MAY WE CALL THIS AN ACCEPTED PRICE AT ALL? ───────────────────────
-    // A red-team found EPS-2026-0152 live: status=accepted, accepted_price=1400,
-    // current total=500, and ZERO quote_acceptances rows — with this screen
-    // telling the customer "This is the price you accepted" over $1,400.
-    //
-    // ⛔ Status is not evidence and neither is accepted_price. The only thing
-    // that can support that sentence is a quote_acceptances row, and
-    // get_portal_data does not carry one — so `hasAcceptanceEvidence` is
-    // `undefined` here and the rule FAILS CLOSED: no consent claim, and the
-    // customer-facing figure is the quote's CURRENT price.
-    //
-    // ⚠️ That deliberately gives up S121's consent snapshot for the moment,
-    // because S121's protection and this one point opposite ways and only one of
-    // them can be right without evidence in the payload. Showing a stale figure
-    // AS AGREED is the worse failure: it is a false statement about what someone
-    // consented to, where the other is merely a less useful true one. The
-    // payload widening that restores the snapshot for evidenced quotes is
-    // supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql — until it is
-    // applied, `evidenced` is unreachable and every accepted quote reads current.
-    const presentation = acceptedPresentation(qq.status, qq.acceptance_kind as AcceptanceKind | null | undefined)
-    const facing = customerFacingQuoteAmount(presentation, qq.accepted_price, Number(qq.total) || 0)
-    const acceptedFigure = facing.isAcceptedAmount ? facing.amount : null
-    const priceMovedSinceAccepted =
-      acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
+    // ⭐ `presentation` / `facing` / `moneyQuote` are derived ABOVE, before the
+    // first money reader — see the block by that name. They used to be derived
+    // here, and everything above them read the raw quote.
     const expired = display === 'expired'
     // ── The scheduling-deposit gate ──────────────────────────────────────────
     // THE engine's answer (lib/payments/depositGate — the same call the charge
@@ -903,14 +923,9 @@ export function buildDocItems(opts: {
     // quote gates nothing. A quote with no rule carries no gate at all — it
     // renders exactly as it did before this feature existed.
     const gateActive = qq.status === 'accepted' || qq.status === 'scheduled'
-    // ⛔ The deposit basis follows the SAME rule as the headline figure. Without
-    // evidence, `accepted_price` is not a consent snapshot — it is a number a
-    // past state believed — and a 50% ask derived from it would present $700
-    // against a $500 quote. `depositBasis` prefers accepted_price whenever it is
-    // non-zero, so the only way to keep it out is to hand the gate a quote that
-    // does not carry one.
-    const gateQuote = facing.isAcceptedAmount ? qq : { ...qq, accepted_price: null }
-    const gate = gateActive ? schedulingGate(gateQuote, depositRowsByQuote.get(qq.id)) : null
+    // ⛔ The deposit basis follows the SAME rule as the headline figure and the
+    // timing sentence — literally the same object, so the three cannot disagree.
+    const gate = gateActive ? schedulingGate(moneyQuote, depositRowsByQuote.get(qq.id)) : null
     const schedulingDeposit = gate && gate.required > 0 ? {
       required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
       percent: gate.percent, satisfied: gate.status === 'satisfied',
@@ -965,7 +980,12 @@ export function buildDocItems(opts: {
       ].filter(Boolean).join(' · ') || undefined,
       balance: 0,
       payAmount: 0, payIsDeposit: false,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
+      // ⛔ The PDF gets `moneyQuote`, not `qq`. The customer's own downloadable
+      // copy runs the SAME paymentTiming reader (QuotePDF → pdfTimingLine) off
+      // the SAME accepted_price, so handing it the raw quote would print the
+      // $700 sentence onto the document they keep, under the $250 card they were
+      // just shown. `accepted_price` feeds nothing else in that renderer.
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
       schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
       paymentTimingLine: quoteTimingLine(timing),

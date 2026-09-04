@@ -370,8 +370,12 @@ check('PORTAL — an accepted quote shows the consented figure WHEN it is eviden
 check('PORTAL — …and never a stale snapshot when it is not',
   customerFacingQuoteAmount('unevidenced', 1400, 500).amount === 500
   && customerFacingQuoteAmount('unevidenced', 1400, 500).isAcceptedAmount === false)
+// ⚠️ RE-POINTED (S122 red-team repair), never relaxed: the model now takes the
+// figure AND the sanitized quote from ONE call — customerFacingQuote(presentation,
+// qq) — because taking only the figure is exactly how the timing sentence came to
+// price off a snapshot the deposit card had already refused.
 check('PORTAL — the model routes that decision through the rule, not status',
-  /customerFacingQuoteAmount\(presentation, qq\.accepted_price/.test(portalModel)
+  /customerFacingQuote\(presentation, qq\)/.test(portalModel)
   && /amount: facing\.amount/.test(portalModel))
 check('PORTAL — …and says so plainly when the document has moved since',
   /priceMovedSinceAccepted/.test(portalModel) && /updated quote to look over/.test(portalModel))
