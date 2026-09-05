@@ -630,9 +630,8 @@ export default function InvoicesPage() {
                 {f.label}{f.value === 'draft' && drafts.length > 0 ? ` (${drafts.length})` : ''}
               </FilterPill>
             ))}
-            {/* Only for businesses that actually take deposits — a dead pill on every
-                other book is clutter, and this list is already nine pills wide. */}
-            {depositWaitingCount > 0 && (
+            {/* Keep an active deposit filter visible when its last payment arrives. */}
+            {(depositWaitingCount > 0 || filter === 'deposit') && (
               <FilterPill active={filter === 'deposit'} onClick={() => setFilter(filter === 'deposit' ? '' : 'deposit')}>
                 Deposit due ({depositWaitingCount})
               </FilterPill>
@@ -705,8 +704,15 @@ export default function InvoicesPage() {
               <button type="button" onClick={() => setQuery('')} className="font-semibold text-accent-text hover:underline">Clear search</button>
               {filter ? <> or <button type="button" onClick={() => setFilter('')} className="font-semibold text-accent-text hover:underline">search all invoices</button></> : null}
             </>
-          ) : filter === 'deposit' ? 'No deposits are waiting on payment.'
-            : filter ? `No ${filter} invoices.` : 'No invoices to show.'}
+          ) : (
+            <>
+              {filter === 'deposit' ? 'No deposits are waiting on payment.'
+                : filter ? `No ${filter} invoices.` : 'No invoices to show.'}
+              {filter && (
+                <> <button type="button" onClick={() => setFilter('')} className="font-semibold text-accent-text hover:underline">View all invoices</button></>
+              )}
+            </>
+          )}
         </InlineEmpty>
       ) : (
         /* ── ONE panel, not 66 cards ─────────────────────────────────────────
