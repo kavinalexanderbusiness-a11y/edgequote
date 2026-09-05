@@ -9,10 +9,9 @@ import {
   OppKind, OPP_META, Confidence, FeedbackRow, priorityScoreLabel, priorityScoreTooltip,
 } from '@/lib/revenueIntelligence'
 import { INSUFFICIENT_LABEL, evidenceSummary, insufficientReason } from '@/lib/growthEvidence'
-import { concentrationNote } from '@/lib/growthConcentration'
+import { concentrationFact } from '@/lib/growthConcentration'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
-import { Banner } from '@/components/ui/Banner'
 import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -102,6 +101,17 @@ export default function RevenueIntelligencePage() {
   // exactly that ("Value marked won"), never "Revenue" or "Collected".
   const wonValue = fbList.filter(f => f.status === 'won').reduce((s, f) => s + Number(f.result_value || 0), 0)
 
+  // The headline's one caveat line: how many recommendations the figure speaks
+  // for, how many were left out, and — only when one customer dominates — the
+  // share, from the SAME denominator (lib/growthConcentration; one-time upsells
+  // are the next tile). A null fact simply drops out of the line.
+  const recurringCaveat = [
+    summary.unquantified > 0
+      ? `/yr from ${summary.quantified} · ${summary.unquantified} without enough data`
+      : `/yr from ${summary.quantified} recommendation${summary.quantified === 1 ? '' : 's'}`,
+    concentrationFact(summary.concentration),
+  ].filter(Boolean).join(' · ')
+
   const KINDS: (OppKind | 'all')[] = ['all', 'renewal', 'upsell', 'cross_sell', 'membership', 'referral', 'reactivation']
   const kindCount = (k: OppKind | 'all') => k === 'all' ? live.length : live.filter(o => o.kind === k).length
 
@@ -123,9 +133,7 @@ export default function RevenueIntelligencePage() {
             no disclosure. See StatTile's subWrap doc for why this is opt-in
             rather than the shared component's new default. */}
         <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)}
-          sub={summary.unquantified > 0
-            ? `/yr from ${summary.quantified} · ${summary.unquantified} without enough data`
-            : `/yr from ${summary.quantified} recommendation${summary.quantified === 1 ? '' : 's'}`}
+          sub={recurringCaveat}
           subWrap
           accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
@@ -142,30 +150,6 @@ export default function RevenueIntelligencePage() {
           )
         })()}
       </div>
-
-      {/* ⭐⭐ CONCENTRATION DISCLOSURE — a DIFFERENT fact from the tiles above.
-          Those say how much money and how much of it is quantified; this says
-          how much of THAT depends on one customer. Renders NOTHING unless the
-          share crosses the documented threshold (lib/growthConcentration) —
-          silence is the honest answer for an ordinary, well-spread book. Aggregated
-          by customerId, never by name, so a shared display name cannot merge or
-          split a customer's contribution into a false or hidden finding. */}
-      {summary.concentration?.material && (() => {
-        const note = concentrationNote(summary.concentration, formatCurrency)
-        // ⭐ Explicit `break-words`: Banner's own content div is already
-        // `flex-1 min-w-0` with no truncate/nowrap, so this sentence wraps by
-        // default — but the sentence embeds a customer's own display name,
-        // which is free text an owner typed and could in principle be one long
-        // unbroken token (no spaces) at any width. `break-words` guarantees it
-        // still wraps rather than overflowing the banner's fixed padding at
-        // 375/390/430, without touching Banner's default behaviour for its many
-        // other callers across the app.
-        return note ? (
-          <Banner tone="warn" icon={AlertTriangle} className="animate-rise">
-            <p className="break-words">{note}</p>
-          </Banner>
-        ) : null
-      })()}
 
       {/* Top action — the advisor's single best play, actionable in one tap */}
       {summary.topAction && (

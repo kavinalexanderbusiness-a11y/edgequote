@@ -192,39 +192,23 @@ export function assessConcentration(entries: readonly ConcentrationEntry[]): Con
 }
 
 /**
- * The owner-facing sentence, or null when there is nothing to say — either no
- * data, or the concentration did not cross the material bar. ⛔ The caller must
- * not render a fallback in the null case; null IS the answer "nothing worth
- * flagging here".
+ * ⭐ ONE short fact for the caveat line under the recurring headline, or null
+ * when there is nothing to say — no data, or below the material bar. ⛔ The
+ * caller renders nothing in the null case; silence is the answer for an
+ * ordinary, well-spread book. Same denominator as the headline it sits beside.
+ * No name: the cards below carry the names; this line carries the shape.
  *
- * `formatMoney` is injected rather than imported, so this module stays
- * framework-agnostic and testable outside Next (the same discipline
- * growthEvidence's `evidenceSummary` uses — pure functions take a formatter,
- * they do not reach for one).
+ *   "83% from one customer" · "50% each from 2 customers" · "all from one customer"
+ *
+ * Rounding said honestly: whole percents (the tiles' precision), but a share
+ * that ROUNDS to 100 while others exist reads "over 99%" rather than a false
+ * number. A tie at the top is a tie — "each", never one customer alone.
  */
-export function concentrationNote(
-  r: ConcentrationResult,
-  formatMoney: (n: number) => string,
-): string | null {
-  if (!r.hasData || !r.material || !r.topCustomerId || !r.topCustomerName) return null
-  // ⭐ Rounding said honestly. Whole percents match the tiles' precision, but
-  // "100% … across 3 customers" is a contradiction, so a share that ROUNDS to
-  // 100 while others exist reads "over 99%" instead of a number that is false.
+export function concentrationFact(r: ConcentrationResult | null): string | null {
+  if (!r || !r.hasData || !r.material) return null
+  if (r.contributorCount === 1) return 'all from one customer'
   const rounded = Math.round(r.topShare * 100)
   const pct = rounded >= 100 ? 'over 99%' : `${rounded}%`
-  // ⭐ "The only contributor" and "the largest of several" are both true
-  // statements about a 100%-concentrated book with contributorCount === 1, but
-  // they read very differently — the first is a statement of fact about a thin
-  // book, the second implies competitors for the top spot that don't exist yet.
-  // "Recurring projection" names the tile this sentence sits under; one-time
-  // figures live on a different tile and are not in this denominator.
-  if (r.contributorCount === 1) {
-    return `${r.topCustomerName} is currently the ONLY customer behind the recurring projection (${formatMoney(r.topAmount)}). If that changes, the whole figure moves with it.`
-  }
-  // A tie at the top is a tie: nobody is "alone" there.
-  if (r.topTiedCount > 1) {
-    const others = r.topTiedCount - 1
-    return `${r.topCustomerName} and ${others} other${others === 1 ? '' : 's'} each account for ${pct} of the recurring projection — ${formatMoney(r.topAmount)} each, of ${formatMoney(r.totalConsidered)} across ${r.contributorCount} customers.`
-  }
-  return `${r.topCustomerName} alone accounts for ${pct} of the recurring projection — ${formatMoney(r.topAmount)} of ${formatMoney(r.totalConsidered)} across ${r.contributorCount} customers.`
+  if (r.topTiedCount > 1) return `${pct} each from ${r.topTiedCount} customers`
+  return `${pct} from one customer`
 }

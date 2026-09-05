@@ -25,7 +25,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
-  assessConcentration, concentrationNote, CONCENTRATION_MATERIAL_SHARE,
+  assessConcentration, concentrationFact, CONCENTRATION_MATERIAL_SHARE,
   type ConcentrationEntry,
 } from '../src/lib/growthConcentration'
 // ⭐ `skewNote` is a STATIC import: growthEvidence.ts's own import chain
@@ -142,7 +142,7 @@ console.log('\n── 2. ⭐⭐ UNKNOWN / ZERO / NEGATIVE / NON-FINITE — exclu
   eq('totalConsidered is exactly 0, not NaN', allDirty.totalConsidered, 0)
   eq('topShare is exactly 0, not NaN or undefined', allDirty.topShare, 0)
   eq('material is false', allDirty.material, false)
-  eq('the note is null, never "NaN% of $0"', concentrationNote(allDirty, money), null)
+  eq('the fact is null, never "NaN% from one customer"', concentrationFact(allDirty), null)
 }
 
 console.log('\n── 3. Missing identity — excluded, never attributed to "unknown" ──')
@@ -213,9 +213,8 @@ console.log('\n── 6. Single contributor — real, honest, differently worded
   eq('contributorCount is 1', r.contributorCount, 1)
   eq('topShare is exactly 1 (not >1, not clamped away from 1)', r.topShare, 1)
   check('material at 100% share', r.material, '')
-  const note = concentrationNote(r, money)
-  check('the note uses the "only customer" phrasing, not a percentage-of-N phrasing',
-    !!note && /ONLY customer/.test(note) && !/%/.test(note), String(note))
+  const fact = concentrationFact(r)
+  eq('the fact says "all from one customer" — a statement of fact about a thin book, no percentage', fact, 'all from one customer')
 }
 
 console.log('\n── 7. Below threshold — a well-spread book says nothing ──')
@@ -225,7 +224,7 @@ console.log('\n── 7. Below threshold — a well-spread book says nothing ─
   const r = assessConcentration(entries)
   eq('an even six-way split is ~16.7% each', Math.round(r.topShare * 1000) / 10, 16.7)
   check('not material', !r.material, '')
-  eq('the note is null — silence is the honest answer for an ordinary book', concentrationNote(r, money), null)
+  eq('the fact is null — silence is the honest answer for an ordinary book', concentrationFact(r), null)
 }
 
 console.log('\n── 8. ⭐ THE THRESHOLD BOUNDARY — documented, and asserted at the edge ──')
@@ -248,7 +247,8 @@ console.log('\n── 9. No data at all ──')
   eq('topCustomerId is null', empty.topCustomerId, null)
   eq('topCustomerName is null', empty.topCustomerName, null)
   eq('material is false', empty.material, false)
-  eq('no note', concentrationNote(empty, money), null)
+  eq('no fact', concentrationFact(empty), null)
+  eq('and a null result (the summary\'s shape for "nothing quantified") is null too', concentrationFact(null), null)
 }
 
 console.log('\n── 10. ⭐⭐ NO COUPLING TO THE EVIDENCE-DECISION SURFACE ──')
@@ -378,11 +378,14 @@ console.log('\n── 12. Source-level: the existing accumulation loop is untouc
   check('concentration is computed from the SAME ranked list — its recurring half, the headline\'s own set — not a second pass',
     /assessConcentration\(\s*ranked\.filter\(o => !o\.oneTime\)\.map/.test(CODE.engine), '')
 
-  // ⛔ The banner must render nothing unless material — asserted on the page.
-  check('the page gates rendering on summary.concentration?.material',
-    /summary\.concentration\?\.material/.test(CODE.page), '')
-  check('the page uses concentrationNote rather than re-deriving the sentence itself',
-    /concentrationNote\(/.test(CODE.page), '')
+  // ⭐ ONE inline fact, on the headline's own caveat line, from the shared
+  // function — no banner, no second card, no sentence re-derived on the page.
+  check('the headline caveat line is built from the unquantified count AND concentrationFact, in that order',
+    /const recurringCaveat = \[[\s\S]{0,400}?without enough data[\s\S]{0,300}?concentrationFact\(summary\.concentration\)/.test(CODE.page), '')
+  check('…and the Recurring opportunity tile renders that line, wrapping',
+    /label="Recurring opportunity"[\s\S]{0,200}?sub=\{recurringCaveat\}[\s\S]{0,60}?subWrap/.test(CODE.page), '')
+  check('…and nowhere else — no Banner, no note, no second rendering',
+    (CODE.page.match(/concentrationFact\(/g) || []).length === 1 && !/<Banner\b/.test(CODE.page) && !/concentrationNote/.test(CODE.page), '')
 }
 
 console.log('\n── 13. ⭐⭐ THE DENOMINATOR IS THE HEADLINE — recurring only; ties and rounding said honestly ──')
@@ -398,18 +401,18 @@ console.log('\n── 13. ⭐⭐ THE DENOMINATOR IS THE HEADLINE — recurring o
   // (b) Ties: two customers at exactly the top amount — nobody is "alone".
   const tie = assessConcentration([entry('A', 500, 'Alpha'), entry('B', 500, 'Beta')])
   eq('a two-way tie is reported as a tie', tie.topTiedCount, 2)
-  const tieNote = concentrationNote(tie, money) || ''
-  check('…and the sentence says "each", never "alone"', /each account for 50%/.test(tieNote) && !/alone/.test(tieNote), tieNote)
-  check('…naming the first and counting the rest', /Alpha and 1 other each/.test(tieNote), tieNote)
+  eq('…and the fact says "each", never one customer', concentrationFact(tie), '50% each from 2 customers')
   eq('one dollar breaks the tie', assessConcentration([entry('A', 501), entry('B', 499)]).topTiedCount, 1)
   eq('a clear leader is not a tie even with equals further down', assessConcentration([entry('A', 600), entry('B', 200), entry('C', 200)]).topTiedCount, 1)
+  eq('…and reads as one customer', concentrationFact(assessConcentration([entry('A', 600), entry('B', 200), entry('C', 200)])), '60% from one customer')
 
   // (c) Rounding: a share that rounds to 100% while others exist is "over 99%".
-  const nearlyAll = concentrationNote(assessConcentration([entry('A', 995, 'Alpha'), entry('B', 5)]), money) || ''
-  check('99.5% across two customers does not print "100%"', /over 99% of/.test(nearlyAll) && !/100%/.test(nearlyAll), nearlyAll)
-  const ninetyNine = concentrationNote(assessConcentration([entry('A', 990), entry('B', 10)]), money) || ''
-  check('99.0% prints 99%', /99% of/.test(ninetyNine), ninetyNine)
-  check('the sentence names the RECURRING projection — the tile it sits under', /of the recurring projection/.test(ninetyNine), ninetyNine)
+  eq('99.5% across two customers does not print "100%"', concentrationFact(assessConcentration([entry('A', 995), entry('B', 5)])), 'over 99% from one customer')
+  eq('99.0% prints 99%', concentrationFact(assessConcentration([entry('A', 990), entry('B', 10)])), '99% from one customer')
+  // (c′) Concise by construction: no name, no dollar figure, one clause.
+  const longest = [tie, assessConcentration([entry('A', 995), entry('B', 5)]), assessConcentration([entry('A', 1)])]
+    .map(r => concentrationFact(r) || '').reduce((a, b) => (b.length > a.length ? b : a), '')
+  check('the fact is one short clause — no dollar amounts, no names, under 32 characters', longest.length <= 32 && !/\$|Alpha|Beta/.test(longest), longest)
 
   // (d) Through the REAL engine, with a one-time upsell present: the denominator
   // equals the recurring headline exactly, and is NOT recurring + one-time.
