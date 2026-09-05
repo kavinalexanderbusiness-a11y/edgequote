@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import type { Customer, Property, Quote, Job, Invoice } from '@/types'
 
 // Warmed payload for a customer's detail page — enough for an instant first paint
@@ -26,6 +26,7 @@ const inflight = new Set<string>()
 export async function prefetchCustomer(id: string): Promise<void> {
   if (!id || inflight.has(id) || readCache<CustomerPrefetch>(custCacheKey(id), CACHE_TTL.short)) return
   inflight.add(id)
+  const lease = cacheLease()
   try {
     const supabase = createClient()
     const [c, p, q, j, i] = await Promise.all([
@@ -42,7 +43,7 @@ export async function prefetchCustomer(id: string): Promise<void> {
         quotes: (q.data as Quote[]) || [],
         jobs: (j.data as Job[]) || [],
         invoices: (i.data as Invoice[]) || [],
-      })
+      }, { lease })
     }
   } catch { /* best-effort — the page will load normally */ } finally {
     inflight.delete(id)

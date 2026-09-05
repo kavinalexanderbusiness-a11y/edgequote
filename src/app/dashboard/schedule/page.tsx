@@ -49,7 +49,7 @@ import { stopForToday, resumeWork, deleteWorkSession, type StopForTodayInput } f
 import { formatWorked } from '@/lib/workDuration'
 import { loadDayFitContext, type DayFitContext } from '@/lib/dayFitLoad'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 // THE words for the work (lib/vocabulary): a `jobs` row is one VISIT, and this
 // page is where every job's visits live — the subtitle has to say both.
 import { scheduleSubtitle } from '@/lib/vocabulary'
@@ -704,6 +704,7 @@ export default function SchedulePage() {
   }, [supabase])
 
   const fetchJobs = useCallback(async () => {
+    const lease = cacheLease()
     // Local session read, not getUser(): getUser() is a network round-trip, so with
     // no signal the whole loader used to throw here and the day never painted at
     // all — before any cached rows could be shown.
@@ -799,7 +800,7 @@ export default function SchedulePage() {
         recurrences: ((rRes.data as JobRecurrence[]) || []).filter(r => recIds.has(r.id)),
         dayStatuses: (dRes.data as DayStatusRow[]) || [],
         settings: (sRes.data as FieldSettings | null) ?? null,
-      }, { persist: true })
+      }, { persist: true, lease })
     }
 
     // Base coordinate for route optimization (geocode the address once if needed).

@@ -10,35 +10,71 @@
 // day. Same key namespace and shape either way; only the backing store differs.
 //
 // ── OWNED BY ONE ACCOUNT ──────────────────────────────────────────────────────
-// Every entry is stamped with the account that wrote it, and a read answers only
+// Every entry is stamped with the account that FETCHED it, and a read answers only
 // for that same account. Before this, keys were bare (`eq:revintel`) and nothing
 // cleared them at sign-out: in the same tab, account A's signed-out
 // sessionStorage was account B's first paint of Revenue Intelligence, the BI
 // report, the customer/quote/invoice lists and business memory (2–5 min TTL) —
 // and the persisted field bundle (A's jobs, quotes, change orders, settings;
 // 36 h TTL) survived an app kill into B's cold start, offline included. Nothing
-// remote: this is one device, two accounts. The stamp closes it without
-// renaming a key: the owner is whoever the dashboard layout verified server-side
-// (components/layout/CacheOwner sets it during render, before any page's
-// useState initializer reads), a mismatch or a legacy unstamped entry reads as
-// "no cache" and is dropped, and the same account keeps its own entries — its
-// offline bundle included. Nothing is written until an owner is known. Explicit
-// sign-out clears this namespace only (`eq:` keys), never other storage.
+// remote: this is one device, two accounts.
+//
+// THE LEASE. A write cannot ask "who is signed in now?" — a slow report fetch
+// started by A can land after A signed out and B signed in (login is a client
+// navigation; this module survives it), and a stamp taken at write time would
+// certify A's numbers as B's. Review reproduced exactly that against the first
+// version of this file. So the owner is captured where the FETCH STARTS
+// (`cacheLease()`), carried to the write, and the write lands only if that lease
+// is still the current one: same owner AND same generation. Any owner change —
+// adopt, sign-out, the sign-out clear — advances the generation, so nothing
+// fetched under an earlier account, or an earlier session of the same account,
+// can ever be stamped as the current one. A write with no lease writes nothing.
+//
+// The owner is whoever the dashboard layout verified server-side
+// (components/layout/CacheOwner adopts it during render, before any page's
+// useState initializer reads, and again in its effect so React StrictMode's
+// dev-only cleanup cannot leave it unset). A mismatch or a legacy unstamped entry
+// reads as "no cache" and is dropped; the same account keeps its own entries —
+// its offline bundle included. Explicit sign-out clears this module's entries
+// only, recognised by envelope shape, never other storage. On the server the
+// owner is never set: this is a per-tab fact, not a per-process one.
 
 interface Cached<T> { t: number; data: T; o?: string }
 
 interface CacheOpts { persist?: boolean }
 
+/** Who a fetch was started for. Take it with cacheLease() BEFORE the first
+ *  await of a load, pass it to writeCache when the data lands. */
+export interface CacheLease { readonly owner: string; readonly gen: number }
+
+interface WriteOpts extends CacheOpts {
+  /** REQUIRED for the write to happen: the lease taken when the fetch began. A
+   *  missing or stale lease writes nothing (fail closed). Optional in the type
+   *  only so that callers not yet threaded compile — they cache nothing. */
+  lease?: CacheLease | null
+}
+
 const PREFIX = 'eq:'
 
 // THE signed-in account, as verified by the dashboard layout. null = unknown
-// (outside the dashboard, or before the layout rendered): reads say "no cache"
-// and writes are skipped, so an entry can never be attributed to the wrong account.
+// (outside the dashboard, on the server, or before the layout rendered): reads
+// say "no cache" and writes are skipped.
 let owner: string | null = null
+// Advances on every owner change; a lease from an earlier generation is stale.
+let gen = 0
 
-/** Set by components/layout/CacheOwner from the server-verified user id; null on unmount. */
-export function setCacheOwner(id: string | null): void { owner = id }
+/** Set by components/layout/CacheOwner; null on unmount. */
+export function setCacheOwner(id: string | null): void {
+  if (id === owner) return
+  owner = id
+  gen++
+}
 export function getCacheOwner(): string | null { return owner }
+
+/** The owner as of now, or null when none is known. Take it at fetch start. */
+export function cacheLease(): CacheLease | null {
+  return owner ? { owner, gen } : null
+}
 
 // The last account this DEVICE rendered the dashboard for. Kept outside the
 // `eq:` namespace (so a sign-out clear does not erase it) and compared on every
@@ -53,8 +89,12 @@ export function getCacheOwner(): string | null { return owner }
 const MARKER = 'eq-owner'
 
 /** Adopt `id` as the owner, clearing the namespace first if this device last
- *  served a different account (or none on record). */
+ *  served a different account (or none on record). Idempotent for the current
+ *  owner. A no-op on the server: CacheOwner is a client component and renders
+ *  there too, and a process-wide owner would be a cross-tenant fact. */
 export function adoptCacheOwner(id: string): void {
+  if (typeof window === 'undefined') return
+  if (id === owner) return
   let last: string | null = null
   try { last = localStorage.getItem(MARKER) } catch { /* no storage: nothing to compare, nothing cached either */ }
   if (last !== id) {
@@ -62,6 +102,7 @@ export function adoptCacheOwner(id: string): void {
     try { localStorage.setItem(MARKER, id) } catch { /* ignore */ }
   }
   owner = id
+  gen++
 }
 
 // localStorage survives an app kill; sessionStorage is the tab-scoped default.
@@ -90,9 +131,12 @@ export function readCache<T>(key: string, maxAgeMs: number, opts?: CacheOpts): T
   } catch { return null }
 }
 
-export function writeCache<T>(key: string, data: T, opts?: CacheOpts): void {
-  if (!owner) return
-  try { store(opts).setItem(PREFIX + key, JSON.stringify({ t: Date.now(), data, o: owner } satisfies Cached<T>)) } catch { /* quota / private mode */ }
+/** Store `data` for the account the lease names — only if that lease is still
+ *  current (same owner, same generation). Stamped with the LEASE's owner. */
+export function writeCache<T>(key: string, data: T, opts?: WriteOpts): void {
+  const lease = opts?.lease
+  if (!lease || !owner || lease.owner !== owner || lease.gen !== gen) return
+  try { store(opts).setItem(PREFIX + key, JSON.stringify({ t: Date.now(), data, o: lease.owner } satisfies Cached<T>)) } catch { /* quota / private mode */ }
 }
 
 export function clearCache(key: string, opts?: CacheOpts): void {
@@ -117,8 +161,11 @@ function isEnvelope(raw: string | null): boolean {
 /** Remove every entry THIS MODULE wrote from both stores — envelope-shaped
  *  `eq:` keys — and nothing else. Called on explicit sign-out (and when this
  *  device adopts a different account) so a shared device is not left holding
- *  the departing account's reports and field bundle. */
+ *  the departing account's reports and field bundle. Also advances the
+ *  generation: a fetch still in flight for the departing account must not
+ *  refill what was just cleared. */
 export function clearOwnedCaches(): void {
+  gen++
   for (const persist of [false, true]) {
     try {
       const s = store({ persist })

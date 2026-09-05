@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { ButtonLink } from '@/components/ui/Button'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Quote } from '@/types'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { QuoteList } from '@/components/quotes/QuoteList'
@@ -36,6 +36,7 @@ export default function QuotesPage() {
   const supabase = useMemo(() => createClient(), [])
 
   async function fetchQuotes() {
+    const lease = cacheLease()
     // Local session read — no auth round-trip before the list query (RLS-scoped).
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
@@ -73,7 +74,7 @@ export default function QuotesPage() {
     // Cache only the first screenful — enough for an instant revisit paint, without
     // JSON-serializing thousands of rows into sessionStorage on every fetch. The full
     // list arrives a beat later from the query above; realtime keeps it live.
-    writeCache('quotes-list', (data || []).slice(0, 100))
+    writeCache('quotes-list', (data || []).slice(0, 100), { lease })
     setLoading(false)
   }
 

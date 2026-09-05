@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import type { BusinessSettings, ServiceTemplate, TravelFeeTier } from '@/types'
 
 // ── Shared business-data store ───────────────────────────────────────────────
@@ -53,9 +53,10 @@ async function fetchBusinessData(): Promise<Snapshot | null> {
 // One shared, deduped load. force=true bypasses the in-flight share (used by refresh()).
 function load(force = false): Promise<Snapshot | null> {
   if (inFlight && !force) return inFlight
+  const lease = cacheLease()
   const p = fetchBusinessData()
     .then(snap => {
-      if (snap) { store = snap; loadedAt = Date.now(); lastError = null; writeCache(CACHE_KEY, snap) }
+      if (snap) { store = snap; loadedAt = Date.now(); lastError = null; writeCache(CACHE_KEY, snap, { lease }) }
       else { lastError = 'Not signed in' }
       emit()
       return snap
