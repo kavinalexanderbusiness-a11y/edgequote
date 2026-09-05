@@ -23,6 +23,7 @@ import { ApiKeysManager } from '@/components/integrations/ApiKeysManager'
 import { WebhooksManager } from '@/components/integrations/WebhooksManager'
 import { InboundHooksManager } from '@/components/integrations/InboundHooksManager'
 import { ConnectionsManager } from '@/components/grow/marketing/ConnectionsManager'
+import { ConnectionStatus } from '@/components/integrations/ConnectionStatus'
 
 // ── Tab order is the argument this page was getting wrong ────────────────────
 // It used to open on an Overview of API keys, webhook endpoints and delivery
@@ -112,7 +113,7 @@ export default function IntegrationsPage() {
     <div className="max-w-4xl mx-auto space-y-6">
       <PageHeader
         title="Integrations"
-        description="Connect the other apps you use. The rest of this page is for developers — most businesses never need it."
+        description="Check email, text and payment availability, then manage the other apps you use. The developer tabs are optional."
         action={
           <Link href="/dashboard/integrations/docs">
             <Button variant="secondary"><BookOpen className="w-4 h-4" /> API docs</Button>
@@ -192,6 +193,7 @@ export default function IntegrationsPage() {
             <InboundHooksManager userId={userId} />
           </div>
           <div className={cn('space-y-4 animate-rise stagger-2', tab !== 'apps' && 'hidden')}>
+            <ConnectionStatus key={userId} />
             {/* The accounts come first. The Zapier/Make note used to sit above them,
                 so the owner-facing tab still opened with "API key" and "webhook URL"
                 — the same wall, one tab further in. It is a footnote now. */}

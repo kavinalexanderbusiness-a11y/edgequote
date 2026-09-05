@@ -242,7 +242,7 @@ export default async function DashboardPage() {
           hydration pop-in never moves the hero the morning opens on, while a
           half-configured business still sees it immediately. */}
       {bands[0]}
-      <div className="animate-rise stagger-2"><SetupProgress started={d.started} /></div>
+      <div className="animate-rise stagger-2"><SetupProgress activity={d.setupActivity} /></div>
       {bands.slice(1)}
     </PageContainer>
   )

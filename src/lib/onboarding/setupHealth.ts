@@ -42,7 +42,7 @@ export interface SetupSnapshot {
   reviewUrl: string | null
   activeTemplateCount: number
   unpricedActiveTemplateCount: number
-  /** A read failed; completion is unknowable. The card renders nothing. */
+  /** A read failed; completion is unknowable. Offer retry, never guessed progress. */
   readError?: string
 }
 
@@ -64,6 +64,25 @@ export interface SetupHealth {
 }
 
 const set = (v: string | null | undefined) => (v || '').trim() !== ''
+
+/** Facts from the dashboard's existing all-or-throw reads, not extra queries. */
+export interface SetupActivity {
+  hasCustomers: boolean
+  hasQuotes: boolean
+}
+
+/** A short path into real work. These are suggestions, never prerequisites. */
+export function deriveSetupMilestones(s: SetupSnapshot, activity: SetupActivity): SetupHealth | null {
+  if (s.readError) return null
+  const items: SetupItem[] = [
+    { key: 'business_info', label: 'Add your business details', why: 'Use your business name, phone and reply email on customer documents.', href: '/dashboard/settings#business', done: set(s.companyName) && set(s.phone) && set(s.emailPrimary) },
+    { key: 'services', label: 'Choose your services', why: 'Review the services you can add to quotes and jobs.', href: '/dashboard/settings/templates', done: s.activeTemplateCount > 0 },
+    { key: 'customers', label: 'Add your first customer', why: 'Add someone you work with, or import your customer list.', href: '/dashboard/customers', done: activity.hasCustomers },
+    { key: 'quote', label: 'Create your first quote', why: 'Save a draft to see your services come together. You can send it later.', href: '/dashboard/quotes/new', done: activity.hasQuotes },
+  ]
+  const done = items.filter(item => item.done).length
+  return { items, done, total: items.length, complete: done === items.length }
+}
 
 /** PURE. Derive the checklist from a snapshot. */
 export function deriveSetupHealth(s: SetupSnapshot): SetupHealth {
@@ -157,9 +176,8 @@ export function deriveSetupHealth(s: SetupSnapshot): SetupHealth {
   return { items, done, total: items.length, complete: done === items.length }
 }
 
-/** Read the snapshot. On ANY read failure returns readError — the card renders
- *  nothing rather than a checklist of guesses (the seeding lesson: an uncertain
- *  read must never present as fact). */
+/** On any read failure return readError so the card can offer recovery without
+ *  presenting an uncertain read as a fact. */
 export async function loadSetupSnapshot(supabase: SupabaseClient, userId: string): Promise<SetupSnapshot> {
   const [bizRes, tplRes, unpricedRes] = await Promise.all([
     supabase.from('business_settings')

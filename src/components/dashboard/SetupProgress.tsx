@@ -3,122 +3,120 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { deriveSetupHealth, loadSetupSnapshot, type SetupHealth } from '@/lib/onboarding/setupHealth'
-import { cn } from '@/lib/utils'
+import { deriveSetupHealth, deriveSetupMilestones, loadSetupSnapshot, type SetupActivity, type SetupSnapshot } from '@/lib/onboarding/setupHealth'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { CheckCircle2, Circle, ChevronRight, Rocket, X } from 'lucide-react'
 
-// ── Setup Progress — the dashboard's "finish setting up" card ────────────────
-// Renders ONLY while something is incomplete: a finished checklist is a vanity
-// stat, and this dashboard doesn't keep those. Every row deep-links to the
-// exact settings surface that fixes it, and says what's silently degrading in
-// the meantime — the point is never "7/10", it's "your portal isn't offering
-// e-transfer and you didn't know".
-//
-// Dismissal is per-device (localStorage) and keyed to the SET of incomplete
-// items: dismissing today's list stays dismissed, but if something NEW becomes
-// incomplete the card comes back. No table, nothing to migrate, and a stale
-// dismissal can never hide a fresh problem.
-
-// Scoped per USER (found in review): two accounts in one browser must not share
-// a dismissal — a fresh account's card would be hidden by the other's dismiss.
+// Dismiss only the optional reminders once the four starting milestones are
+// complete. A stored dismissal must never hide a new business's path into work.
 const dismissKey = (uid: string) => `eq-setup-dismissed:${uid}`
 
-// `started` — has this business a customer, quote, job or invoice yet? Passed
-// down from the server loader (derived, never stored). Defaults TRUE so any
-// caller that doesn’t know keeps today’s behaviour exactly.
-//
-// NONE of the nine items is required to create, price or save a first quote:
-// they are logo, terms, home base, e-transfer, online booking, review link and
-// contact details — every one of them a "before this particular feature stops
-// silently degrading", not a "before you can work". On a brand-new account the
-// card therefore rendered SEVEN chores directly under the money band, taller
-// than the hero on desktop and filling the whole second screen on a phone,
-// while the one thing worth doing sat in a corner button. Configuration looked
-// like the product.
-//
-// So it waits. The moment the business has anything real, the card appears
-// exactly as it always has, with the same items, dismissal and copy — this is
-// a change of WHEN, not of WHAT. Existing businesses are unaffected by
-// construction: they all have data, so `started` is true on their first paint.
-export function SetupProgress({ started = true }: { started?: boolean }) {
+export function SetupProgress({ activity }: { activity: SetupActivity }) {
   const supabase = useMemo(() => createClient(), [])
-  const [health, setHealth] = useState<SetupHealth | null>(null)
+  const [snapshot, setSnapshot] = useState<SetupSnapshot | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const [uid, setUid] = useState<string | null>(null)
   const [dismissedSig, setDismissedSig] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
+    setSnapshot(null)
+    setFailed(false)
     ;(async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      const user = session?.user
-      if (!user || !alive) return
-      setUid(user.id)
-      try { setDismissedSig(window.localStorage.getItem(dismissKey(user.id))) } catch { /* ignore */ }
-      const snap = await loadSetupSnapshot(supabase, user.id)
-      if (!alive) return
-      // A failed read renders nothing — never a checklist of guesses.
-      if (snap.readError) return
-      setHealth(deriveSetupHealth(snap))
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession()
+        const user = session?.user
+        if (error || !user) throw new Error('Setup session unavailable')
+        if (!alive) return
+        setUid(user.id)
+        setDismissedSig(null)
+        try { setDismissedSig(window.localStorage.getItem(dismissKey(user.id))) } catch { /* optional persistence */ }
+        const snap = await loadSetupSnapshot(supabase, user.id)
+        if (snap.readError) throw new Error('Setup status unavailable')
+        if (alive) setSnapshot(snap)
+      } catch {
+        if (alive) setFailed(true)
+      }
     })()
     return () => { alive = false }
-  }, [supabase])
+  }, [supabase, attempt])
 
-  if (!started) return null
-  if (!health || health.complete) return null
+  if (!snapshot) return (
+    <div className="rounded-card border border-border bg-bg-secondary p-5" aria-live="polite">
+      <p className="font-semibold text-ink">Your setup</p>
+      <p className="mt-1 text-sm text-ink-muted">{failed ? 'Couldn’t check your setup. Try again to see your progress.' : 'Checking your setup…'}</p>
+      {failed && <Button variant="secondary" size="sm" className="mt-3" onClick={() => setAttempt(value => value + 1)}>Retry</Button>}
+    </div>
+  )
 
-  const missing = health.items.filter(i => !i.done)
-  const sig = missing.map(i => i.key).sort().join(',')
-  if (dismissedSig === sig) return null
+  const health = deriveSetupHealth(snapshot)
+  const milestones = deriveSetupMilestones(snapshot, activity)
+  if (!milestones) return null
+  const missing = health.items.filter(item => !item.done)
+  const sig = missing.map(item => item.key).sort().join(',')
+  if (milestones.complete && (health.complete || dismissedSig === sig)) return null
+  const next = milestones.items.find(item => !item.done)
 
   function dismiss() {
-    if (uid) { try { window.localStorage.setItem(dismissKey(uid), sig) } catch { /* ignore */ } }
+    if (uid) { try { window.localStorage.setItem(dismissKey(uid), sig) } catch { /* optional persistence */ } }
     setDismissedSig(sig)
   }
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+    <section className="rounded-card border border-border bg-bg-secondary overflow-hidden" aria-label="Your setup">
       <div className="px-5 py-4 flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-          <Rocket className="w-4 h-4 text-accent-text" />
+          <Rocket className="w-4 h-4 text-accent-text" aria-hidden="true" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-base font-bold tracking-tight text-ink">Finish setting up</p>
-            <div className="flex items-center gap-3 shrink-0">
-              <span className="text-xs text-ink-muted tabular-nums">{health.done} of {health.total}</span>
-              <button type="button" onClick={dismiss} aria-label="Dismiss setup checklist"
-                className="text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+            <h2 className="text-base font-bold tracking-tight text-ink">{milestones.complete ? 'Make it yours' : 'Get your business ready'}</h2>
+            {milestones.complete && <Button variant="ghost" size="sm" onClick={dismiss} aria-label="Dismiss optional setup reminders"><X className="w-4 h-4" /></Button>}
           </div>
-          {/* Progress: one quiet bar, no percentages shouting. */}
-          <div className="mt-2 h-1.5 rounded-full bg-bg-tertiary overflow-hidden" role="progressbar"
-            aria-valuenow={health.done} aria-valuemin={0} aria-valuemax={health.total}>
-            <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${Math.round((health.done / health.total) * 100)}%` }} />
-          </div>
+          <p className="mt-1 text-sm text-ink-muted">{milestones.complete ? 'Your first steps are complete. These extras are here when you need them.' : 'Start here, pick up where you left off, or jump straight into a quote.'}</p>
+          {!milestones.complete && <p className="mt-2 text-xs text-ink-muted">{milestones.done} of {milestones.total} steps complete</p>}
         </div>
       </div>
-      <div className="border-t border-border divide-y divide-border">
-        {missing.map(item => (
-          <Link key={item.key} href={item.href}
-            className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
-            <Circle className="w-4 h-4 text-ink-faint shrink-0" />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-ink">{item.label}</p>
-              <p className="text-xs text-ink-muted truncate">{item.why}</p>
-            </div>
-            <ChevronRight className="w-4 h-4 text-ink-faint group-hover:text-accent-text transition-colors shrink-0" />
-          </Link>
-        ))}
-      </div>
-      {/* The done rows stay out of the way — a single quiet line, not a trophy list. */}
-      {health.done > 0 && (
-        <div className="px-5 py-2.5 border-t border-border flex items-center gap-1.5">
-          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-          <p className={cn('text-xs text-ink-faint')}>{health.done} done — this card disappears when everything is.</p>
+
+      {!milestones.complete && <>
+        <ol className="border-t border-border divide-y divide-border">
+          {milestones.items.map(item => (
+            <li key={item.key}>
+              <Link href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
+                {item.done ? <CheckCircle2 className="w-4 h-4 text-accent-text shrink-0" aria-hidden="true" /> : <Circle className="w-4 h-4 text-ink-faint shrink-0" aria-hidden="true" />}
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-ink">{item.label}{item.done && <span className="sr-only"> — Complete</span>}</p>
+                  <p className="text-xs text-ink-muted">{item.why}</p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-ink-faint shrink-0" aria-hidden="true" />
+              </Link>
+            </li>
+          ))}
+        </ol>
+        <div className="px-5 py-4 flex flex-wrap gap-2 border-t border-border">
+          {next && <ButtonLink href={next.href} size="sm">{next.label}</ButtonLink>}
+          {!activity.hasCustomers && <ButtonLink href="/dashboard/customers/import" variant="secondary" size="sm">Import customers</ButtonLink>}
         </div>
-      )}
-    </div>
+      </>}
+
+      <details className="border-t border-border">
+        <summary className="px-5 py-4 cursor-pointer text-sm font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
+          More setup options <span className="text-ink-muted font-normal">· {health.done} of {health.total} complete</span>
+        </summary>
+        <div className="border-t border-border divide-y divide-border">
+          {health.items.map(item => (
+            <Link key={item.key} href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset">
+              {item.done ? <CheckCircle2 className="w-4 h-4 text-accent-text shrink-0" aria-hidden="true" /> : <Circle className="w-4 h-4 text-ink-faint shrink-0" aria-hidden="true" />}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-ink">{item.label}{item.done && <span className="sr-only"> — Complete</span>}</p>
+                <p className="text-xs text-ink-muted">{item.why}</p>
+              </div>
+              <ChevronRight className="w-4 h-4 text-ink-faint shrink-0" aria-hidden="true" />
+            </Link>
+          ))}
+        </div>
+      </details>
+    </section>
   )
 }
