@@ -65,8 +65,12 @@ function ActionCard({ card }: { card: OperatorActionCard }) {
             <p key={i} className="mt-2 text-xs leading-5 text-amber-400">{w}</p>
           ))}
           <div className="mt-3 flex flex-wrap gap-2">
+            {/* MEASURED at 375/390/430: these rendered 16px tall — a real link
+                you cannot reliably hit with a thumb. The house idiom for an
+                inline text target (HistoryPanel) is a 44px floor on phones only,
+                so the desktop row stays dense. */}
             {card.record_references.filter(r => r.href).slice(0, 3).map(r => (
-              <Link key={`${r.type}:${r.id}`} href={r.href!} className="rounded text-xs font-semibold text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Open {r.type.replace('_', ' ')}</Link>
+              <Link key={`${r.type}:${r.id}`} href={r.href!} className="inline-flex items-center rounded text-xs font-semibold text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 min-h-[44px] sm:min-h-0">Open {r.type.replace('_', ' ')}</Link>
             ))}
             {card.requires_approval && <span className="text-xs text-ink-faint">Human confirmation required</span>}
           </div>
@@ -126,7 +130,12 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
             </Button>
           </div>
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {examples.map(x => <FilterPill key={x} active={false} onClick={() => ask(x)} disabled={loading}>{x}</FilterPill>)}
+            {/* MEASURED at 375/390/430: the pills rendered 30px tall, under the
+                app's 44px phone touch target. Raised HERE, not in FilterPill —
+                that primitive is shared across invoices, customers, quotes and
+                messages, and this surface's measurement is no reason to change
+                the height everywhere else. */}
+            {examples.map(x => <FilterPill key={x} active={false} onClick={() => ask(x)} disabled={loading} className="min-h-[44px] sm:min-h-0">{x}</FilterPill>)}
           </div>
           {/* The answer region announces itself: an ask-and-wait surface that
               stays silent to a screen reader has not answered. */}
