@@ -185,7 +185,8 @@
     "verify:customer-card-recovery": "tsx scripts/verify-customer-card-recovery.ts",
     "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts",
     "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts",
-    "verify:theme": "tsx scripts/verify-theme.ts"
+    "verify:theme": "tsx scripts/verify-theme.ts",
+    "verify:stripe-receipt-recovery": "tsx scripts/verify-stripe-receipt-recovery.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
