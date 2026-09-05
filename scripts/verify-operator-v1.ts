@@ -14,6 +14,7 @@
 //      Includes the tenant-deletion cascade across the RESTRICT FK graph.
 
 import { readFileSync } from 'node:fs'
+import { transformSync } from 'esbuild'
 import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 import { answerOperatorQuestion, chooseTool, claimsExecutedAction, encodeUntrustedEvidence, operatorToolSurface } from '../src/lib/operator/engine'
@@ -463,8 +464,107 @@ check('proposed actions can only be inserted in proposed state', /status = 'prop
 check('no public SECURITY DEFINER function is introduced', !/security definer/i.test(migration))
 check('table access is revoked from PUBLIC and authenticated, not just anon', /revoke all on public\.operator_conversations[\s\S]*from public, anon, authenticated/.test(migration))
 
+
+// Wrapped in a function for the same CJS reason as hostileCardChecks above:
+// a top-level await here is a hard parse error.
+async function requestLifecycleChecks() {
+console.log('\n═══ Client request lifecycle (the REAL ask() handler, executed) ═══')
+  // The three questions a request handler has to answer: can an older answer
+  // replace a newer one, can the spinner stick, can a failure be hidden behind
+  // a different message. Executed against the handler as committed — the
+  // function is lifted out of the component verbatim and run, so this cannot
+  // pass by testing a re-typed copy of it.
+  const UI = readFileSync(join(process.cwd(), 'src/components/operator/OperatorClient.tsx'), 'utf8')
+  const start = UI.indexOf('async function ask(')
+  let depth = 0, i = UI.indexOf('{', start), end = -1
+  for (; i < UI.length; i++) {
+    if (UI[i] === '{') depth++
+    else if (UI[i] === '}') { depth--; if (depth === 0) { end = i + 1; break } }
+  }
+  const askSrc = start >= 0 && end > 0 ? UI.slice(start, end) : ''
+  check('the ask() handler can still be located and lifted for execution',
+    askSrc.length > 0 && /fetch\('\/api\/operator'/.test(askSrc))
+
+  const askJs = transformSync(askSrc, { loader: 'ts', format: 'esm' }).code
+  const makeAsk = new Function('deps', `
+    const { question, loading, setQuestion, setLoading, setError, setAsked, setAnswer, fetch } = deps;
+    ${askJs}
+    return ask;
+  `) as (deps: Record<string, unknown>) => (q?: string) => Promise<void>
+
+  type S = { question: string; asked: string | null; answer: { answer: string } | null; loading: boolean; error: string | null }
+  const mount = () => {
+    const st: S = { question: '', asked: null, answer: null, loading: false, error: null }
+    const set = (k: keyof S) => (v: unknown) => { (st as Record<string, unknown>)[k] = v }
+    // React commits state between discrete events, so each gesture gets a
+    // closure built from the latest state — same as the browser.
+    const gesture = (f: unknown) => makeAsk({
+      question: st.question, loading: st.loading,
+      setQuestion: set('question'), setLoading: set('loading'), setError: set('error'),
+      setAsked: set('asked'), setAnswer: set('answer'), fetch: f,
+    })
+    return { st, gesture }
+  }
+  const defer = () => { let r: (v: unknown) => void = () => {}; const pr = new Promise(a => { r = a }); return { pr, resolve: r } }
+  const ok = (t: string) => ({ ok: true, json: async () => ({ answer: t, tools_used: [], cards: [], generated_at: '2026-09-04T12:00:00Z' }) })
+  const tick = () => new Promise(r => setImmediate(r))
+
+  // 1 — rapid requests cannot overlap, so no older answer can land last
+  {
+    const c = mount()
+    let calls = 0
+    const d = defer()
+    const f = () => { calls++; return d.pr }
+    const p = c.gesture(f)('first')
+    await tick()
+    await c.gesture(f)('second')
+    check('a second ask during an in-flight ask issues no second request', calls === 1)
+    d.resolve(ok('A1')); await p; await tick()
+    check('…so the answer that lands is the one that was asked', c.st.answer?.answer === 'A1')
+    check('…and the spinner clears', c.st.loading === false)
+  }
+
+  // 2 — the caption and the answer are ONE exchange, never mixed
+  {
+    const c = mount()
+    const d1 = defer(), d2 = defer()
+    let n = 0
+    const f = () => (++n === 1 ? d1.pr : d2.pr)
+    const p1 = c.gesture(f)('What needs my attention?')
+    d1.resolve(ok('Two invoices are overdue.')); await p1; await tick()
+    const p2 = c.gesture(f)('Any unpaid invoices?')
+    await tick()
+    check('mid-flight, the answer card still names the question that produced it',
+      c.st.asked === 'What needs my attention?' && c.st.answer?.answer === 'Two invoices are overdue.',
+      'a new caption over an old answer misattributes its evidence line to a question it never read')
+    d2.resolve(ok('No unpaid invoices.')); await p2; await tick()
+    check('…and caption and answer move together when the new answer lands',
+      c.st.asked === 'Any unpaid invoices?' && c.st.answer?.answer === 'No unpaid invoices.')
+  }
+
+  // 3 — a failure is shown as a failure, not as a parser complaint
+  {
+    const c1 = mount()
+    await c1.gesture(async () => ({ ok: false, json: async () => ({ error: 'Operator is not configured.' }) }))('q')
+    check('a JSON error body still surfaces the server’s own message', c1.st.error === 'Operator is not configured.')
+
+    const c2 = mount()
+    await c2.gesture(async () => ({ ok: false, json: async () => { throw new SyntaxError('Unexpected token \'<\'') } }))('q')
+    check('a non-JSON error response (an HTML 502) reads as an honest failure',
+      c2.st.error === 'Operator could not verify that request.',
+      `owner would see: ${JSON.stringify(c2.st.error)}`)
+    check('…and its spinner clears', c2.st.loading === false)
+
+    const c3 = mount()
+    await c3.gesture(async () => ({ ok: true, json: async () => { throw new SyntaxError('truncated') } }))('q')
+    check('an unreadable 200 body fails honestly instead of answering nothing',
+      c3.st.error === 'Operator could not verify that request.' && c3.st.answer === null)
+  }
+}
+
 async function main() {
 await hostileCardChecks()
+await requestLifecycleChecks()
 console.log('\n═══ Two-tenant RLS, grants and deletion on disposable Postgres ═══')
 const db = new PGlite()
 try {

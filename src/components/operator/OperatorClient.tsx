@@ -95,12 +95,20 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
     // after the first from run history. The id guards double-submits of ONE ask,
     // not the whole mount.
     const requestId = `operator:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`
-    setQuestion(text); setLoading(true); setError(null); setAsked(text)
+    // `asked` is deliberately NOT set here. It captions the answer card, and
+    // until the new answer lands that card still holds the PREVIOUS one — so
+    // setting it now prints the new question over the old answer, and over the
+    // old answer’s evidence line, for the whole wait. The two commit together.
+    setQuestion(text); setLoading(true); setError(null)
     try {
       const res = await fetch('/api/operator', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: text, request_id: requestId }) })
-      const body = await res.json()
+      // A failing edge or proxy answers with HTML, and an empty body parses as
+      // nothing. Letting json() throw would replace the real failure with a
+      // parser complaint, which is what the owner would then be shown.
+      const body = await res.json().catch(() => null)
       if (!res.ok) throw new Error(body?.error || 'Operator could not verify that request.')
-      setAnswer(body as OperatorAnswer)
+      if (!body) throw new Error('Operator could not verify that request.')
+      setAnswer(body as OperatorAnswer); setAsked(text)
     } catch (e) { setError(e instanceof Error ? e.message : 'Operator could not verify that request.') }
     finally { setLoading(false) }
   }
