@@ -323,7 +323,10 @@ async function main() {
     const clientPath = req.resolve('./src/lib/supabase/client')
     let fakeUser: string | null = null
     let fetches = 0
-    let gate: (() => void) | null = null   // when set, the next session read waits for it
+    // While `hold` is set every session read waits; release() resumes them all, in order.
+    let hold = false
+    const waiters: (() => void)[] = []
+    const release = () => { hold = false; waiters.splice(0).forEach(r => r()) }
     const rows: Record<string, Record<string, unknown>> = {
       [A]: { company_name: 'A Co', owner_name: 'Alice', phone: '111' },
       [B]: { company_name: 'B Co', owner_name: 'Bob', phone: '222' },
@@ -333,7 +336,7 @@ async function main() {
       return b
     }
     const fakeClient = {
-      auth: { getSession: async () => { fetches++; if (gate) await new Promise<void>(r => { gate = r }); return { data: { session: fakeUser ? { user: { id: fakeUser } } : null } } } },
+      auth: { getSession: async () => { fetches++; if (hold) await new Promise<void>(r => { waiters.push(r) }); return { data: { session: fakeUser ? { user: { id: fakeUser } } : null } } } },
       from: (table: string) => builder(table === 'business_settings' && fakeUser ? rows[fakeUser] : null),
     }
     req.cache[clientPath] = { id: clientPath, filename: clientPath, loaded: true, exports: { createClient: () => fakeClient } } as unknown as NodeJS.Module
@@ -364,16 +367,15 @@ async function main() {
     // A late completion: A's fetch is in flight when B adopts.
     ;({ s, l } = freshStores())
     drive.set(null); drive.adopt(A); fakeUser = A
-    gate = () => {} // arm: the next session read blocks
+    hold = true // every session read now waits: A's fetch is in flight when B adopts
     const pendingA = bd.loadBusinessData()
     await tick()
-    const releaseA = gate as (() => void) | null
     drive.adopt(B); fakeUser = B
     check('§3 with A\'s fetch in flight, B reads null', bd.peekBusinessData() === null)
     const fetchesBeforeB = fetches
     const pendingB = bd.loadBusinessData()
     check('§3 B does not reuse A\'s in-flight fetch: a new one starts', fetches === fetchesBeforeB + 1)
-    gate = null; releaseA?.()
+    release() // A resumes first (FIFO), then B — A's completion lands while B is the owner
     await pendingA; await tick()
     check('§3 A\'s late completion applies nothing: memory is not A\'s and nothing is stamped', (bd.peekBusinessData()?.settings as { company_name?: string } | null)?.company_name !== 'A Co' && !(s.getItem('eq:business-data') || '').includes(`"o":"${A}"`))
     await pendingB; await tick()
@@ -420,7 +422,15 @@ async function main() {
   setOwner(null)
 }
 
+// A promise that never settles drains the event loop and Node exits 0 with no
+// summary — which once made this guard read as green while it had stopped
+// halfway. Ending without the summary is a failure.
+let finished = false
+process.on('exit', code => {
+  if (!finished) { console.log(`\n✗ verify:client-cache-isolation — ended before its summary (a promise never settled); ${pass} passed, ${fail} failed so far`); process.exitCode = code || 1 }
+})
 main().then(() => {
+  finished = true
   console.log(`\n${fail ? '✗' : '✅'} verify:client-cache-isolation — the client cache answers to one account: ${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)
-}).catch(e => { console.error(e); process.exit(1) })
+}).catch(e => { finished = true; console.error(e); process.exit(1) })
