@@ -14,11 +14,16 @@ import { execSync } from 'node:child_process'
 
 const MUTATIONS = [
   // ── 1. FIXTURE DATA INCLUDED ───────────────────────────────────────────────
+  // ⚠️ RETARGETED (Session 114). Two mutations here used to break Growth's own
+  // `FIXTURE_MARKERS` list. That list is gone — Growth delegates to
+  // lib/fixtureData — so those patterns would now match nothing and report as
+  // no-ops, which reads as "survived" and looks like a guard hole. They aim at
+  // the canonical rule instead, testing the SAME two failure modes.
   {
     file: 'src/lib/growthEvidence.ts',
-    name: 'fixture included (the fixture flag stops flagging)',
-    from: '    if (FIXTURE_MARKERS.some(rx => rx.test(s))) return true',
-    to: '    if (false && FIXTURE_MARKERS.some(rx => rx.test(s))) return true',
+    name: 'fixture included (Growth stops asking the canonical rule)',
+    from: '  return isAnyFixtureName(...texts)',
+    to: '  return false',
   },
   {
     file: 'src/lib/growthEvidence.ts',
@@ -28,33 +33,92 @@ const MUTATIONS = [
   },
   // ⛔ The mirror-image failure: over-broad exclusion is as much a trust breach
   // as contamination. A real business called "Test Valley Landscaping" must keep
-  // its revenue.
+  // its revenue — and, since the convergence, so must "Light Fixture
+  // Installation" and "S61 Roofing Ltd".
   {
-    file: 'src/lib/growthEvidence.ts',
-    name: 'the fixture rule goes over-broad and eats a real customer',
-    from: '  /\\b(test|demo|sample|dummy)\\s*(data|record|customer|account|job|service)\\b/i,',
-    to: '  /(test|demo|sample|dummy)/i,',
+    file: 'src/lib/fixtureData.ts',
+    name: 'the conjunction collapses to a single keyword (eats a real electrician)',
+    from: '  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) && n.includes(r.and))) return true',
+    to: '  if (SELF_IDENTIFYING.some(r => n.includes(r.needs) || n.includes(r.and))) return true',
+  },
+  // ⚠️ RE-TARGETED (Session 114 follow-up audit). The three mutations that used
+  // to live here targeted the ORIGINAL `{ shape, alsoSays }` HARNESS_SHAPES
+  // structure. The audit found that structure over-broad in exactly the way one
+  // of these mutations warns about ("eats a real roofer") — the `alsoSays`
+  // check used `n.includes('fixture')`, a WHOLE-STRING search, so a zz-prefixed
+  // name that merely mentioned "fixture" LATER in the name (not beside the
+  // zz-token) was already excluded even before any mutation ran. That is a
+  // defect the guard's own MUST_SURVIVE list did not catch, because nothing in
+  // it exercised "fixture" positioned away from the zz-token specifically.
+  //
+  // The fix bakes "fixture" into the regex at the position a machine actually
+  // puts it and deletes the unfounded bare `s\d{1,3}[-_]fixture` shape entirely
+  // (no harness anywhere emits that string — see lib/fixtureData's comment).
+  // These two mutations now test the NEW rule's own two failure directions:
+  // losing the anchor, and losing the fixture requirement.
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'the harness shape stops requiring "fixture" to sit beside the zz-token (the exact over-broad defect the audit found, reintroduced)',
+    from: '  /^zz[\\s\\-_](?:s\\d{1,4}[\\s\\-_])?fixture\\b/i,',
+    to: '  /^zz[\\s\\-_]/i,',
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'the zz shape stops being anchored at the start (Deck ZZ Fixture Mural becomes a fixture)',
+    from: '  /^zz[\\s\\-_](?:s\\d{1,4}[\\s\\-_])?fixture\\b/i,',
+    to: '  /zz[\\s\\-_](?:s\\d{1,4}[\\s\\-_])?fixture\\b/i,',
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'the whole HARNESS_SHAPES check evaporates (a real emitted quote fixture, "ZZ S111 Fixture A", escapes Tier 1)',
+    from: '  if (HARNESS_SHAPES.some(r => r.test(n))) return true',
+    to: '  if (false) return true',
+  },
+  {
+    file: 'src/lib/fixtureData.ts',
+    name: 'reserved-domain matching widens to any address containing "example"',
+    from: "const RESERVED_EMAIL_DOMAINS = /@(example\\.(com|org|net)|.*\\.(invalid|test|localhost))$/i",
+    to: "const RESERVED_EMAIL_DOMAINS = /example/i",
   },
 
   // ── 2. UNKNOWN PRICE INCLUDED ──────────────────────────────────────────────
   {
     file: 'src/lib/growthEvidence.ts',
     name: 'unknown price included (unpriced work counted as evidence)',
-    from: "  if (!(Number(derivedValue) > 0)) return 'unpriced'",
-    to: "  if (false) return 'unpriced'",
-  },
-  // ── 3. ZERO TREATED AS A REAL PRICE ────────────────────────────────────────
-  {
-    file: 'src/lib/growthEvidence.ts',
-    name: 'zero included as a real price',
-    from: "  if (rawPrice != null && Number.isFinite(raw) && raw === 0) return 'zero_price'",
-    to: "  if (false) return 'zero_price'",
+    from: "  if (s === 'unpriced') return 'unpriced'",
+    to: '  if (false) return null',
   },
   {
     file: 'src/lib/growthEvidence.ts',
-    name: 'unpriced and $0 are collapsed into one indistinguishable reason',
-    from: "    if (p !== 'ok') { drop(p); continue }",
-    to: "    if (p !== 'ok') { drop('unpriced'); continue }",
+    name: 'a null amount is coerced into the sample as zero',
+    from: "    if (v.amount == null || !(v.amount > 0)) { drop('unpriced'); continue }\n    values.push(v.amount)",
+    to: '    values.push(Number(v.amount) || 0)',
+  },
+  // ── 3. A DECLARED NO-CHARGE TREATED AS A REAL PRICE ────────────────────────
+  {
+    file: 'src/lib/growthEvidence.ts',
+    name: 'no-charge counted as a real price (free work sets the statistic)',
+    from: "  if (s === 'no_charge') return 'no_charge'",
+    to: '  if (false) return null',
+  },
+  {
+    file: 'src/lib/growthEvidence.ts',
+    name: 'unpriced and no-charge collapse into one indistinguishable reason',
+    from: '    const excludeAs = exclusionForPriceState(v.priceState)\n    if (excludeAs) { drop(excludeAs); continue }',
+    to: "    const excludeAs = exclusionForPriceState(v.priceState)\n    if (excludeAs) { drop('unpriced'); continue }",
+  },
+  // ⛔ THE SEAM ITSELF: growthEvidence must not start deciding price state again.
+  {
+    file: 'src/lib/revenueIntelligence.ts',
+    name: 'the engine stops feeding the canonical verdict and infers one',
+    from: '          priceState: jobPriceState(j, quote, freq),\n          amount: jobAmountOrNull(j, quote, freq),',
+    to: "          priceState: (Number(j.price) > 0 ? 'priced' : 'unpriced'),\n          amount: Number(j.price) || null,",
+  },
+  {
+    file: 'src/lib/revenueIntelligence.ts',
+    name: 'the no_charge columns stop being selected, so a write-off reads as sloppy bookkeeping',
+    from: 'no_charge_at, no_charge_reason, no_charge_by, ',
+    to: '',
   },
 
   // ── 4. ONE-OFF WORK ANNUALIZED ─────────────────────────────────────────────
@@ -193,7 +257,14 @@ for (const m of MUTATIONS) {
   writeFileSync(m.file, original.replace(anchor, m.to.replace(/\$/g, '$$$$')))
   let red = false
   try {
+    // ⭐ BOTH guards, since Session 114 (the convergence). The fixture rule now
+    // lives in lib/fixtureData and Growth delegates to it, so a break in that one
+    // rule is a break in two features: Growth's exclusions AND the hygiene tiers.
+    // Running only Growth's guard would let a mutation that hides a real
+    // electrician's service pass, as long as Growth's own cases happened to miss
+    // it. Either going red is a catch — that is what a shared engine means.
     execSync('npm run verify:growth-quality', { stdio: 'pipe' })
+    execSync('npm run verify:production-hygiene', { stdio: 'pipe' })
   } catch {
     red = true
   } finally {

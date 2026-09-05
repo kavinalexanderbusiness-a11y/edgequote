@@ -44,6 +44,7 @@ import {
   blocksPublication, catalogueSuspicions, duplicateNameSet, fixtureCount,
   isAnyFixtureName, isFixtureName, recommendedAction, withoutFixtures,
 } from '../src/lib/fixtureData'
+import { looksLikeFixture } from '../src/lib/growthEvidence'
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -102,6 +103,41 @@ const MUST_SURVIVE = [
   // a real electrician's and a real plumber's core service.
   'Light Fixture Installation', 'Fixture Repair', 'Plumbing Fixture Replacement',
   'Fixture Swap', 'Delete Me Later', 'Please Delete Me',
+  // ⭐⭐ Session 114 — the names Growth's rival classifier used to hide. Its
+  // `/^s\d{2,3}\s/` rule read a session-numbered ARTEFACT into any business whose
+  // name simply starts that way, and "Demo Farms" is the canonical example of a
+  // real customer whose name is a suspect WORD. Both are Tier 2 at most.
+  'S61 Roofing Ltd', 'S22 Plumbing', 'S7 Electrical Co', 'Demo Farms', 'Demo Day Cleanup',
+  // The intersection of the two protected shapes — a session-shaped token AND the
+  // word fixture, but written the way a PERSON writes a name (spaced, not joined).
+  'S61 Light Fixture Co',
+  // ⭐ ANCHORING, for the zz+fixture shape. Mutation testing caught that nothing
+  // here proved it: an unanchored version of that rule hid this name and every
+  // check still passed.
+  'Deck ZZ Fixture Mural', 'Restore ZZ Light Fixture',
+  // ⭐ And the reserved-DOMAIN rule is about a domain, not the letters "example".
+  // Widening it to a substring hid these, unnoticed, until a mutation said so.
+  'Exampleton Property Care', 'jo@exampleton.ca', 'sales@examplestone.com',
+  // ⛔⛔ Session 114 FOLLOW-UP AUDIT of the approved convergence. The zz-shape
+  // rule checked `n.includes('fixture')` — anywhere in the WHOLE string, not
+  // beside the zz-token — so any zz-branded business that merely mentions
+  // "fixture" later in its name was wrongly excluded. Picking a name starting
+  // with a letter early in the alphabet (so it lists first in a directory) is a
+  // real small-business practice, and any of these could be a real lighting,
+  // electrical or plumbing-fixture retailer. All four MUST survive; before the
+  // fix, all four were classified as machine fixtures.
+  'ZZ Lighting Fixture Supply', 'ZZ Electric Fixture & Supply Co',
+  'ZZ Home Fixture Emporium', 'ZZ Modern Fixtures & Design',
+  // ⛔⛔ The companion finding: the bare `s\d{1,3}[-_]fixture` shape was
+  // justified by a comment claiming scripts/s61-field-cdp.mjs writes
+  // "S61-FIXTURE". MEASURED: it does not. Every row that script names is
+  // "ZZ-S61-FIXTURE" (see the zz- prefix test above) — no harness anywhere
+  // writes a bare "S##-FIXTURE". The shape existed only to satisfy a
+  // self-authored guard string with no real backing, and it was over-broad
+  // enough to exclude a plausible mall-unit or store-numbered retailer. Removed
+  // from lib/fixtureData; these must survive with no replacement rule needed.
+  'S7-Fixture Gallery', 'S24-Fixture Supply', 'S3_Fixture Wholesale',
+  'S61-Fixture Installations Inc',
 ]
 for (const name of MUST_SURVIVE) {
   check(`“${name}” is NOT classified as fixture data`, !isFixtureName(name),
@@ -128,6 +164,55 @@ check('⭐ the prefixes are ANCHORED at the start, never substring-matched',
   !isFixtureName('Deck ZZ-Top Mural') && !isFixtureName('Please verify-check the meter')
   && isFixtureName('ZZ-anything'),
   'a substring rule hides real rows whose name merely contains a marker')
+
+// ── 2b. ONE classifier, repo-wide ────────────────────────────────────────────
+// ⭐⭐ Session 114. Main carried TWO fixture rules — this one and Growth's own
+// `FIXTURE_MARKERS` — and they were not equivalent in EITHER direction. Growth
+// classified on single words (hiding "Light Fixture Installation" and "S61
+// Roofing Ltd") while having no `VERIFY-` rule at all (counting guard fixtures
+// as real money). Divergence in production measured ZERO on the day, which is
+// precisely why it was worth converging before a lighting or roofing tenant
+// signed up rather than after.
+console.log('\n═══ There is exactly ONE fixture classifier ═══')
+{
+  const growthRaw = read('src/lib/growthEvidence.ts')
+  // ⚠️ Strip comments FIRST. The convergence note in that file explains what
+  // `FIXTURE_MARKERS` was and why it went — so a raw grep reports the
+  // documentation of the fix as the fix being undone. (This repo has now been
+  // bitten by a self-matching comment three times; the stripper is asserted
+  // alive below so it can never quietly match nothing.)
+  check('the comment stripper is alive before it is trusted', stripperAlive(growthRaw))
+  const growthSrc = strip(growthRaw)
+  check('⛔ Growth no longer keeps a rival marker list',
+    !/FIXTURE_MARKERS/.test(growthSrc),
+    'a second fixture rule is back in growthEvidence — converge it on lib/fixtureData')
+  check('…it delegates to the canonical rule instead',
+    /isAnyFixtureName\(\.\.\.texts\)/.test(growthSrc) && /from '@\/lib\/fixtureData'/.test(growthSrc),
+    'looksLikeFixture must BE the canonical rule, not a copy of it')
+
+  // ⭐ Behavioural equivalence over the corpus, not a promise in a comment. Every
+  // name this file already reasons about is run through BOTH doors; they must
+  // agree on every one, because they are now the same function.
+  const corpus = [
+    ...MUST_SURVIVE,
+    'ZZ-S70 Fixture', 'VERIFY-ADDONS-3391', 'ZZ-S61-FIXTURE CREW', 'ZZ S111 Fixture A',
+    'S61 FIELD FIXTURE — DELETE ME (A)', 'Automated guard fixture — safe to delete',
+    'bob@example.com', 'someone@realroofing.ca', '', '   ',
+  ]
+  const disagreements = corpus.filter(n => isFixtureName(n) !== looksLikeFixture(n))
+  check('⭐ the two doors agree on every name in the corpus',
+    disagreements.length === 0, `disagree on: ${disagreements.join(' · ')}`)
+
+  // ⛔ The four the convergence was ordered to protect, asserted at THIS door too.
+  for (const n of ['Light Fixture Installation', 'S61 Roofing Ltd', 'Demo Farms', 'ZZ Top Tribute Band Venue Clean']) {
+    check(`“${n}” survives Growth's door as well`, !looksLikeFixture(n),
+      'Growth would drop this business\'s own revenue out of its report')
+  }
+  // …and the real machine fixtures still classify at both.
+  for (const n of ['ZZ-S61-FIXTURE CREW', 'ZZ S111 Fixture A', 'S61 FIELD FIXTURE — DELETE ME (A)', 'VERIFY-ADDONS-3391']) {
+    check(`“${n}” is a fixture at both doors`, isFixtureName(n) && looksLikeFixture(n))
+  }
+}
 
 // ── 3. Tier 1 never contains a natural word ──────────────────────────────────
 console.log('\n═══ The two tiers cannot be collapsed into one ═══')
