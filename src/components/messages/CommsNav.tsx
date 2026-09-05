@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useUnread } from '@/hooks/useUnread'
 import { Inbox, History, CalendarClock, LayoutTemplate, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -24,11 +25,13 @@ const ITEMS: RailItem[] = [
 
 export function CommsNav() {
   const pathname = usePathname()
-  // Light per-navigation refresh (no extra realtime channel — the Sidebar already
-  // holds one): unread on Inbox, pending count on Scheduled, so the rail answers
-  // "anything waiting?" from any tab. Muted conversations don't count, matching
-  // the sidebar badge.
-  const [unread, setUnread] = useState(0)
+  // The Inbox pill shows THE app-wide unread number (hooks/useUnread — the same
+  // store the sidebar and bottom-nav badges read, live, muted excluded). This
+  // rail used to run its own copy of that query on every navigation, with no
+  // stream, so it could disagree with the badge beside it until the next route
+  // change. The Scheduled pill's pending count stays here: one consumer, a
+  // different table, refreshed per navigation.
+  const unread = useUnread()
   const [pending, setPending] = useState(0)
   useEffect(() => {
     let active = true
@@ -37,12 +40,8 @@ export function CommsNav() {
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid || !active) return
-      const [u, p] = await Promise.all([
-        supabase.from('conversations').select('unread').eq('user_id', uid).gt('unread', 0).eq('muted', false),
-        supabase.from('scheduled_messages').select('id', { count: 'exact', head: true }).eq('user_id', uid).eq('status', 'pending'),
-      ])
+      const p = await supabase.from('scheduled_messages').select('id', { count: 'exact', head: true }).eq('user_id', uid).eq('status', 'pending')
       if (!active) return
-      setUnread(((u.data as { unread: number }[] | null) || []).reduce((s, c) => s + (c.unread || 0), 0))
       setPending(p.count || 0)
     })()
     return () => { active = false }
