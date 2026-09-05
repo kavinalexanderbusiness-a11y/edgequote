@@ -13,7 +13,7 @@ import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Modal } from '@/components/ui/Modal'
-import { normalizeTags, listRead } from '@/lib/customers'
+import { normalizeTags, listRead, readCachedCustomers, CUSTOMER_CACHE_ROWS, type PartialList } from '@/lib/customers'
 import { applyConsent } from '@/lib/consent'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
@@ -36,6 +36,10 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true)
   // A read that FAILED is a different fact from a book with no customers in it.
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Rows painted from the cache are the FIRST SCREENFUL, not the book. Held from
+  // the cache read until a live read replaces them — so the qualifier is on screen
+  // while the background load is still PENDING, not only once it has failed.
+  const [partial, setPartial] = useState<PartialList | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -80,18 +84,22 @@ export default function CustomersPage() {
     }
     setLoadError(null)
     setCustomers(active.rows)
+    setPartial(null) // these ARE the whole active book
     setArchived(arch.rows)
     // Cache only the first screenful for an instant revisit paint — never serialize
-    // thousands of customer rows into sessionStorage. The full list follows immediately.
-    writeCache('customers-list', active.rows.slice(0, 100))
+    // thousands of customer rows into sessionStorage. The TOTAL rides along because
+    // the slice alone cannot tell a book of 100 from the first 100 of 240, and a
+    // refresh that fails leaves that prefix on screen (lib/customers names the three
+    // surfaces that used to present it as the whole book).
+    writeCache('customers-list', { rows: active.rows.slice(0, CUSTOMER_CACHE_ROWS), total: active.rows.length })
     setLoading(false)
   }
 
   // Instant revisit: paint the cached active list immediately (no skeleton), then
   // revalidate in the background — realtime keeps it live. Reuses the shared clientCache.
   useEffect(() => {
-    const cached = readCache<Customer[]>('customers-list', CACHE_TTL.short)
-    if (cached) { setCustomers(cached); setLoading(false) }
+    const cached = readCachedCustomers<Customer>(readCache<unknown>('customers-list', CACHE_TTL.short))
+    if (cached) { setCustomers(cached.rows); setPartial(cached.partial); setLoading(false) }
     fetchCustomers()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -270,7 +278,11 @@ export default function CustomersPage() {
     <PageContainer>
       <PageHeader
         title="Customers"
-        description={loadError ? 'Customer list could not be refreshed.' : `${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
+        description={loadError ? 'Customer list could not be refreshed.'
+          : partial ? (partial.total
+              ? `First ${partial.shown} of ${partial.total.toLocaleString()} — still loading`
+              : `First ${partial.shown} from your last visit — still loading`)
+          : `${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
             <ButtonLink href="/dashboard/customers/import" variant="secondary">
@@ -325,7 +337,13 @@ export default function CustomersPage() {
           <CardBody>
             <p role="alert" className="text-sm text-ink">{loadError}</p>
             {customers.length > 0 && (
-              <p className="text-sm text-ink-muted mt-1">Showing the last loaded customers.</p>
+              <p className="text-sm text-ink-muted mt-1">
+                {partial
+                  ? (partial.total
+                      ? `Showing the first ${partial.shown} of ${partial.total.toLocaleString()} customers from your last visit.`
+                      : `Showing the first ${partial.shown} customers from your last visit.`)
+                  : 'Showing the last loaded customers.'}
+              </p>
             )}
             <Button className="mt-3" variant="secondary" onClick={() => { void fetchCustomers() }}>
               Try again
@@ -340,6 +358,7 @@ export default function CustomersPage() {
       ) : loadError && customers.length === 0 ? null : (
         <CustomerList
           customers={customers}
+          incomplete={partial}
           onEdit={openEdit}
           onDelete={handleDelete}
           onRefresh={fetchCustomers}

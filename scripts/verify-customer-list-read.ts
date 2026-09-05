@@ -21,7 +21,7 @@
 // results. No credential, no network, no real record, no rendering.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { listRead, type ListRead } from '../src/lib/customers'
+import { listRead, readCachedCustomers, type ListRead } from '../src/lib/customers'
 
 const ROOT = join(__dirname, '..')
 let pass = 0, fail = 0
@@ -142,12 +142,109 @@ function section5() {
     !/could not load|couldn.t load/i.test(list))
 }
 
+function section6() {
+  H('6 · a CACHED PREFIX is not the book')
+  // S111 v5 review, finding 1. The session cache holds the first 100 active
+  // customers. A revisit paints them with loading=false, and three surfaces then
+  // presented that prefix as the whole book:
+  //
+  //   header   "100 customers in your database"      for a book of 240
+  //   footer   "100 customers"                       (RENDER_CAP is also 100, so
+  //                                                   the "showing N of M" branch
+  //                                                   never fires at exactly 100)
+  //   search   "No customers match “Nguyen”"         about a real customer who is
+  //                                                   simply row 140
+  //
+  // The third is the one that changes what the owner DOES. It is reachable with a
+  // book over 100, a revisit inside the 2-minute TTL, and a refresh that fails —
+  // and it is on screen from the cached paint onward, including while the
+  // background refresh is still pending.
+
+  // ── the derivation, EXECUTED (not a regex over the page) ─────────────────
+  const p = <T,>(raw: unknown) => readCachedCustomers<T>(raw)
+
+  check('the current shape reports the prefix AND the real total', (() => {
+    const got = p<Row>({ rows: rows(100), total: 240 })
+    return got?.rows.length === 100 && got.partial?.shown === 100 && got.partial?.total === 240
+  })())
+
+  check('⭐ a book of EXACTLY 100 is complete, not partial', (() => {
+    const got = p<Row>({ rows: rows(100), total: 100 })
+    return got?.rows.length === 100 && got.partial === null
+  })(), 'the row count alone cannot tell these apart — that is why the total is cached')
+
+  check('a small book is complete', p<Row>({ rows: rows(7), total: 7 })?.partial === null)
+
+  check('[anti-vacuity] the same 100 rows read differently by total alone', (() => {
+    const a = p<Row>({ rows: rows(100), total: 240 })
+    const b = p<Row>({ rows: rows(100), total: 100 })
+    return a?.rows.length === b?.rows.length && !!a?.partial !== !!b?.partial
+  })())
+
+  check('a LEGACY bare-array entry still yields its rows', p<Row>(rows(40))?.rows.length === 40)
+  check('…a short legacy entry is complete', p<Row>(rows(40))?.partial === null)
+  check('⭐ …a FULL legacy entry is reported partial with an unknown total', (() => {
+    const got = p<Row>(rows(100))
+    return got?.partial?.shown === 100 && got.partial.total === null
+  })(), 'over-qualifying is honest; a false "complete" is not')
+
+  check('no entry is no answer', p<Row>(null) === null && p<Row>(undefined) === null)
+  check('a shape this module did not write is refused, not coerced', (() => (
+    p<Row>('x') === null && p<Row>(42) === null && p<Row>({}) === null &&
+    p<Row>({ rows: rows(3) }) === null && p<Row>({ rows: 'no', total: 3 }) === null &&
+    p<Row>({ rows: rows(3), total: Number.NaN }) === null
+  ))(), 'a half-written entry must read as "no cache", never as a complete book')
+
+  // ── the surfaces, pinned in source ───────────────────────────────────────
+  const page = read('src/app/dashboard/customers/page.tsx')
+  const list = read('src/components/customers/CustomerList.tsx')
+
+  check('the page carries the partial status as state',
+    /const \[partial, setPartial\] = useState<PartialList \| null>\(null\)/.test(page))
+  check('⛔ …set from the CACHE read, so it is true while the refresh is still pending',
+    /setCustomers\(cached\.rows\); setPartial\(cached\.partial\)/.test(page),
+    'qualifying only on the error path would leave the pending window lying')
+  check('…and cleared only by a successful read', /setPartial\(null\)/.test(page) && (() => {
+    const ok = page.indexOf('setLoadError(null)')
+    const clear = page.indexOf('setPartial(null)')
+    return ok > -1 && clear > ok
+  })())
+  check('the cache write carries the total beside the slice',
+    /writeCache\('customers-list', \{ rows: active\.rows\.slice\(0, CUSTOMER_CACHE_ROWS\), total: active\.rows\.length \}\)/.test(page))
+  check('⛔ the cache still holds a SCREENFUL — the fix is not "cache the whole book"',
+    /slice\(0, CUSTOMER_CACHE_ROWS\)/.test(page) && !/writeCache\('customers-list', active\.rows\)/.test(page))
+  check('⛔ the header states no bare count while the rows are a prefix',
+    /: partial \? \(partial\.total/.test(page) && /First \$\{partial\.shown\} of/.test(page))
+  check('the error card names the prefix rather than "the last loaded customers"',
+    /Showing the first \$\{partial\.shown\} of \$\{partial\.total\.toLocaleString\(\)\} customers from your last visit\./.test(page))
+  check('the status reaches the list', /incomplete=\{partial\}/.test(page))
+
+  check('⛔ the search empty state no longer claims the whole book has no match',
+    /No \{incomplete \? 'match' : 'customers match'\}/.test(list) &&
+    /in the first \{incomplete\.shown\} loaded/.test(list),
+    'a false negative about a real customer is the finding this section exists for')
+  check('…and it says how many are still missing', /customers haven’t loaded yet\./.test(list))
+  check('…and offers loading the rest, beside Clear', /Load the rest/.test(list) && /void onRefresh\(\)/.test(list))
+  check('⛔ the footer count is qualified while incomplete',
+    /: incomplete\n/.test(list) && /of the first \{incomplete\.shown\} loaded/.test(list) &&
+    /\{incomplete\.shown\} of \{incomplete\.total\.toLocaleString\(\)\} customers loaded/.test(list))
+  check('the complete-book copy is untouched for a complete book',
+    /\{filtered\.length\.toLocaleString\(\)\} customer\{filtered\.length !== 1 \? 's' : ''\}/.test(list) &&
+    /No customers yet/.test(list))
+  check('⭐ search, the consent filter and Try again are still the list\'s own state',
+    /const \[search, setSearch\] = useState\(''\)/.test(list) &&
+    /const \[consentFilter, setConsentFilter\] = useState<ConsentFilter>\(''\)/.test(list) &&
+    /Try again/.test(page),
+    'the repair must not cost the owner their filters — §4 is what that protects')
+}
+
 async function main() {
   section1()
   await section2()
   section3()
   section4()
   section5()
+  section6()
   console.log(fail === 0
     ? `\n✓ customer-list-read: ${pass} checks passed\n`
     : `\n✗ customer-list-read: ${fail} failed, ${pass} passed\n`)

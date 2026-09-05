@@ -51,9 +51,17 @@ interface CustomerListProps {
   onRefresh: () => void | Promise<void>
   /** Opens the page's Add-Customer form — powers the empty state's action. */
   onAdd?: () => void
+  /**
+   * Set when `customers` is a CACHED PREFIX rather than the whole book — the
+   * page's session cache holds the first 100 rows. Two sentences here are
+   * otherwise false about customers that simply have not loaded: the footer
+   * count, and "No customers match" for a name that is row 140. `total: null`
+   * means incomplete with the size unknown (a legacy cache entry).
+   */
+  incomplete?: { shown: number; total: number | null } | null
 }
 
-export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: CustomerListProps) {
+export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, incomplete }: CustomerListProps) {
   const router = useRouter()
   const searchRef = useRef<HTMLInputElement>(null)
   // '/' focuses search, 'n' opens the Add-Customer form — the shared list idiom.
@@ -272,12 +280,31 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
         ) : (
           <Card>
             <div className="px-6 py-8 text-center space-y-3">
+              {/* ⛔ SCOPED TO WHAT WAS SEARCHED. On a cached prefix this read "No
+                  customers match “Nguyen”" about a customer who is simply row 140 — a
+                  false negative about a real person, and the owner's next move (assume
+                  they are not in the book) is the wrong one. */}
               <p className="text-sm text-ink-muted">
-                No customers match {search.trim() ? <>“<span className="text-ink">{search.trim()}</span>”</> : 'these filters'}.
+                No {incomplete ? 'match' : 'customers match'} {search.trim() ? <>“<span className="text-ink">{search.trim()}</span>”</> : 'these filters'}
+                {incomplete ? <> in the first {incomplete.shown} loaded.</> : '.'}
               </p>
-              <Button size="sm" variant="secondary" onClick={() => { setSearch(''); setConsentFilter('') }}>
-                Clear search &amp; filters
-              </Button>
+              {incomplete && (
+                <p className="text-sm text-ink-muted">
+                  {incomplete.total
+                    ? `Your other ${(incomplete.total - incomplete.shown).toLocaleString()} customers haven’t loaded yet.`
+                    : 'The rest of your book hasn’t loaded yet.'}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button size="sm" variant="secondary" onClick={() => { setSearch(''); setConsentFilter('') }}>
+                  Clear search &amp; filters
+                </Button>
+                {incomplete && (
+                  <Button size="sm" variant="secondary" onClick={() => { void onRefresh() }}>
+                    Load the rest
+                  </Button>
+                )}
+              </div>
             </div>
           </Card>
         )
@@ -395,6 +422,14 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
       <p className="text-xs text-ink-faint text-right">
         {filtered.length > RENDER_CAP
           ? <>Showing {RENDER_CAP} of {filtered.length.toLocaleString()} — search to find anyone</>
+          : incomplete
+            /* A cached prefix: filtered rows are matches WITHIN it, and the
+               unfiltered count IS the prefix. Neither is the book's total. */
+            ? (filtered.length !== customers.length
+                ? <>{filtered.length.toLocaleString()} of the first {incomplete.shown} loaded</>
+                : incomplete.total
+                  ? <>{incomplete.shown} of {incomplete.total.toLocaleString()} customers loaded</>
+                  : <>First {incomplete.shown} customers loaded</>)
           : <>{filtered.length.toLocaleString()} customer{filtered.length !== 1 ? 's' : ''}</>}
       </p>
 

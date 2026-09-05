@@ -460,3 +460,46 @@ export function listRead<T>(
   if (res.data == null) return { ok: false, message: fallback }
   return { ok: true, rows: res.data }
 }
+
+// ── The session cache holds a SCREENFUL, not the book ────────────────────────
+//
+// The customers page caches the first 100 active rows so a revisit paints
+// instantly. That is deliberate — thousands of rows do not belong in
+// sessionStorage — but it makes the rows on screen a PREFIX of the book, and
+// three surfaces used to present that prefix as the whole thing: the header
+// count, the list footer ("100 customers"), and worst, the search empty state
+// ("No customers match “Nguyen”") about a customer who is simply row 140.
+//
+// ⭐ So the cache records how many there really were, and the page carries that
+// as `partial` until a live read replaces the rows. `total: null` means
+// "incomplete, size unknown" — a legacy entry written before this shape.
+export const CUSTOMER_CACHE_ROWS = 100
+
+/** The cached payload: the first screenful, plus the size of the book it came from. */
+export interface CachedCustomers<T> { rows: T[]; total: number }
+
+/** Rows on screen that are known NOT to be the whole book. */
+export interface PartialList { shown: number; total: number | null }
+
+/**
+ * Read a `customers-list` cache entry written by either shape.
+ *
+ * Legacy entries are a bare array with no total, so a full 100 cannot be told
+ * from a book of exactly 100 — those are reported partial, because
+ * over-qualifying is honest and a false "complete" is not. The current shape
+ * knows, and a book of exactly 100 is NOT partial.
+ */
+export function readCachedCustomers<T>(raw: unknown): { rows: T[]; partial: PartialList | null } | null {
+  if (Array.isArray(raw)) {
+    const rows = raw as T[]
+    return { rows, partial: rows.length >= CUSTOMER_CACHE_ROWS ? { shown: rows.length, total: null } : null }
+  }
+  if (raw && typeof raw === 'object') {
+    const v = raw as Partial<CachedCustomers<T>>
+    if (Array.isArray(v.rows) && typeof v.total === 'number' && Number.isFinite(v.total)) {
+      const rows = v.rows
+      return { rows, partial: v.total > rows.length ? { shown: rows.length, total: v.total } : null }
+    }
+  }
+  return null // no entry, or a shape this module did not write
+}
