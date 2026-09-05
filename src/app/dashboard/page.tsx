@@ -223,7 +223,10 @@ export default async function DashboardPage() {
         action={
           <div className="flex items-center gap-2">
             <CustomizeDashboard initial={layout} />
-            <ButtonLink href="/dashboard/quotes/new">
+            {/* Desktop only. Below lg the bottom nav's + sheet already opens on "Quote" →
+                this same route (lib/quickAdd, first row); a second New-quote door under the
+                greeting was the top-of-screen one. Customize stays: it has no other door. */}
+            <ButtonLink href="/dashboard/quotes/new" className="hidden lg:inline-flex">
               <Plus className="w-4 h-4" /> New quote
             </ButtonLink>
           </div>
