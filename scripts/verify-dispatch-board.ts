@@ -405,6 +405,19 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
 
   const A = '2026-06-01', B = '2026-06-02'
 
+  // ⭐ Discovered, not assumed. A day check that must survive an await has to read
+  // a ref; a plan that outlives its day has to carry a field naming that day. Both
+  // are the page’s to name, so the cases read the names out of the source and
+  // inject under them — otherwise this instrument measures its own vocabulary.
+  const refM = /const (\w+) = useRef[^\n]*\n\s*\1\.current = \{ date/.exec(PAGE)
+  const REF = refM?.[1] ?? ''
+  check('the page keeps a day-scope ref, readable after an await', !!REF,
+    'no `const <name> = useRef(…)` refreshed with `{ date, … }` every render')
+  const planM = /setBalancePlan\(\{ \.\.\.[\s\S]{0,160}?(\w+): date \}\)/.exec(PAGE)
+  const PLAN_DAY = planM?.[1] ?? ''
+  check('…and stamps a Balance plan with the day it was computed for', !!PLAN_DAY,
+    'no `setBalancePlan({ …, <field>: date })` — an open plan cannot say which day it is for')
+
   // (1) ⛔ THE WINDOW: A loaded, the owner picks B, B is still in flight. No error
   // has happened yet, so an error-derived flag is false — while the state on screen
   // is still A’s. Print here stamps B on A’s visits.
@@ -464,6 +477,11 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
     check('Balance refuses at the function too — the palette calls it past the button',
       !planned, `openBalance planned a rebalance of ${A}’s lanes while the owner is on ${B}`) }
 
+  // The write-door cases below need those two names to inject under. Without them
+  // they cannot be evaluated at all, so they are skipped rather than faked — the
+  // two checks above already say what is missing.
+  if (!REF || !PLAN_DAY) return
+
   // ── Doors that WRITE, past the board and across an await ──────────────────
   // `runBody` evaluates a real function body over stubs, and reports a missing
   // name as a failure instead of crashing the section — so a fix that reads the
@@ -481,6 +499,8 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
       assigneeOfLane: () => ({}), setBalancePlan: () => {}, fetchAll: () => {},
       jobs: [{ id: 'J1' }], opts: undefined, laneId: 'L1',
       useRef: (v: unknown) => ({ current: v }),   // an extracted flag line may declare a day ref
+      format: () => 'Mon, Jun 1', parseISO: (v: unknown) => v,   // named in a refusal message
+      setJobs: () => {}, orderWrite: { current: Promise.resolve() },
       ...extra,
     }
     let missing: string | null = null
@@ -491,9 +511,12 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
   }
 
   const laneRoute = { seq: [{ id: 'J1', duration_minutes: 60 }], startHHmm: '08:00', totalKm: 2, etas: { finishMin: 2, finish: '6pm' } }
+  const scopeVal = (day: { date: string; loadedDate: string | null }) =>
+    ({ date: day.date, loaded: day.loadedDate, loadedDate: day.loadedDate })
   const routeDeps = (day: { date: string; loadedDate: string | null }, onOptimize?: () => void) => ({
     date: day.date, loadedDate: day.loadedDate,
-    dayRef: { current: { ...day } },
+    dayNotLoaded: day.loadedDate !== day.date,
+    [REF]: { current: scopeVal(day) },
     laneRoutesRef: { current: { L1: laneRoute } },
     settings: { base: { lat: 1, lng: 1 } },
     optimizeRoute: async () => { onOptimize?.(); return { ordered: [{ jobId: 'J1' }], usedGoogle: false, totalKm: 1 } },
@@ -513,7 +536,7 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
   // day moves too. ⛔ Its dep array is [settings.base, supabase, applyLaneOrder], so a
   // closure read of `date` is stale; the re-check has to come from a ref.
   { const d = routeDeps({ date: A, loadedDate: A })
-    const dayRef = d.dayRef as { current: { date: string; loadedDate: string | null } }
+    const dayRef = (d as Record<string, unknown>)[REF] as { current: { date: string } }
     const r = await runBody('bestOrderLane', { ...d, optimizeRoute: async () => {
       dayRef.current.date = B                     // the owner moves on mid-optimize
       return { ordered: [{ jobId: 'J1' }], usedGoogle: false, totalKm: 1 } } })
@@ -532,18 +555,49 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
   // cannot save this — once the new day loads, that flag is false while the open plan
   // is still the old day’s. The PLAN has to carry the day it was computed for.
   { const r = await runBody('applyBalance', {
-      date: B, loadedDate: B, dayRef: { current: { date: B, loadedDate: B } },
-      balancePlan: { moves: [{ jobId: 'J1', toLaneId: 'L2' }], plannedFor: A } })
+      date: B, loadedDate: B, dayNotLoaded: false, [REF]: { current: scopeVal({ date: B, loadedDate: B }) },
+      balancePlan: { moves: [{ jobId: 'J1', toLaneId: 'L2' }], [PLAN_DAY]: A } })
     check('applyBalance refuses a plan computed for another day',
       !r.calls.includes('assignJob'),
       r.missing ? `the plan-scope check used a name the case does not supply: ${r.missing}`
                 : `it wrote ${A}\u2019s balance moves while the owner is on ${B}`) }
 
   { const r = await runBody('applyBalance', {
-      date: A, loadedDate: A, dayRef: { current: { date: A, loadedDate: A } },
-      balancePlan: { moves: [{ jobId: 'J1', toLaneId: 'L2' }], plannedFor: A } })
+      date: A, loadedDate: A, dayNotLoaded: false, [REF]: { current: scopeVal({ date: A, loadedDate: A }) },
+      balancePlan: { moves: [{ jobId: 'J1', toLaneId: 'L2' }], [PLAN_DAY]: A } })
     check('…while a plan for the day on screen still applies', r.calls.includes('assignJob'),
       'the scope check must not disable Balance itself') }
+
+  // (9) The route_order write FUNNEL. Every path that reorders a lane — drag,
+  // nudge, move-with-slot, the optimizer arriving after its awaits — ends here,
+  // so a check at this one point covers callers that have none of their own.
+  // ⚠️ This body carries TS (`pos.get(j.id)!`), so it needs the same transform
+  // the race harness uses; a raw new Function() would throw on the `!`.
+  const { transformSync } = await import('esbuild')
+  const funnel = async (scope: { date: string; loaded: string | null }) => {
+    const wrote: string[] = []
+    const deps: Record<string, unknown> = {
+      [REF]: { current: scope },
+      notify: Object.assign(() => {}, { error: () => wrote.push('refused') }),
+      setJobs: (fn: (c: { id: string; route_order: number }[]) => unknown) => {
+        fn([{ id: 'J1', route_order: 9 }]) },
+      orderWrite: { current: Promise.resolve() },
+      supabase: { from: () => ({ update: () => ({ eq: (_c: string, id: string) => {
+        wrote.push(`write:${id}`); return Promise.resolve({ error: null }) } }) }) },
+      fetchAll: () => {},
+    }
+    const src = transformSync(`const __f = async (laneJobIds) => {${bodyOf('applyLaneOrder')}}`, { loader: 'ts' }).code
+    const fn = new Function(...Object.keys(deps), `${src}\nreturn __f`)(...Object.values(deps)) as (ids: string[]) => Promise<void>
+    await fn(['J1'])
+    await new Promise(r => setTimeout(r, 0))
+    return wrote
+  }
+  { const w = await funnel({ date: B, loaded: A })
+    check('the route-order write funnel refuses when the day on hand is not the selected one',
+      !w.some(x => x.startsWith('write:')), `it wrote ${JSON.stringify(w)}`) }
+  { const w = await funnel({ date: A, loaded: A })
+    check('…and still writes on the day that is loaded', w.some(x => x.startsWith('write:')),
+      'the funnel must not disable ordinary reordering') }
 }
 
 // ── The harness may not pass by failing to finish ───────────────────────────
