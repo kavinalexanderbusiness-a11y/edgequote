@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { format, parseISO, addDays } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { createRequestGate } from '@/lib/requestGate'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { useFlipList } from '@/hooks/useFlipList'
 import { Job, Crew, Technician, DispatchNote, TechnicianStatus, TECHNICIAN_STATUS_LABELS, JOB_STATUS_LABELS, JobStatus } from '@/types'
@@ -207,10 +208,20 @@ export default function DispatchPage() {
   // two quick moves can't interleave their day-wide sequence writes.
   const orderWrite = useRef<Promise<unknown>>(Promise.resolve())
 
+  // ⛔ THE DAY PICKER IS A SCOPE. Three of the reads below are filtered by the
+  // selected date (visits, day_statuses, dispatch notes), and every commit was
+  // unconditional —
+  // so a slow response for the day you just LEFT lands after the fast one for the
+  // day you are ON and overwrites the board. useCallback([date]) starts a fresh
+  // request; it does not silence the old one. Same seam as the payments list.
+  const gate = useRef(createRequestGate())
+
   const fetchAll = useCallback(async () => {
+    const token = gate.current.begin()
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
+      if (!gate.current.isCurrent(token)) return
       if (!user) { setLoadError('Session expired — sign in again.'); setLoading(false); return }
       setUid(user.id)
       const [jRes, cRes, tRes, eRes, dRes, sRes, nRes] = await Promise.all([
@@ -232,6 +243,9 @@ export default function DispatchPage() {
       // that couldn't answer must say so and keep the last known-good on screen —
       // never substitute a confident default. (`maybeSingle` gives data:null with
       // error:null for "no row", so this only trips on a REAL failure.)
+      // Guarded before the ERROR branch too: a superseded day that failed must not
+      // banner over the day now on screen, nor clear its loading state.
+      if (!gate.current.isCurrent(token)) return
       const readErr = jRes.error ?? eRes.error ?? dRes.error ?? sRes.error
       if (readErr) { setLoadError('Could not load the day: ' + readErr.message); return }
       setLoadError(null)
@@ -249,9 +263,12 @@ export default function DispatchPage() {
       })
       setNotes(nRes)
     } catch (e) {
+      if (!gate.current.isCurrent(token)) return
       setLoadError(e instanceof Error ? e.message : 'Could not load the day.')
     } finally {
-      setLoading(false)
+      // Only the newest request may clear the spinner: an old one settling while
+      // the current day is still loading would show an empty board as 'done'.
+      if (gate.current.isCurrent(token)) setLoading(false)
     }
   }, [supabase, date])
 
