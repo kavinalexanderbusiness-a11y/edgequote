@@ -463,7 +463,7 @@ export function planImport({ parsed, mapping, existing }: PlanInput): PlannedRow
     if (!values.name) {
       out.push({
         line, values, warnings, status: 'invalid',
-        reason: 'No name in this row — EdgeQuote needs a name to create a customer.',
+        reason: 'No name in this row — EdgeHQ needs a name to create a customer.',
         matchId: null, matchName: null, matchedBy: null, duplicateOfLine: null, include: false,
       })
       return
@@ -491,7 +491,7 @@ export function planImport({ parsed, mapping, existing }: PlanInput): PlannedRow
         line, values, warnings, status: 'existing',
         reason: isRow
           ? `Same ${match.reason} as row ${dupLine} in this file — importing once.`
-          : `Already in EdgeQuote as "${match.customer.name}" (same ${match.reason}) — leaving that record untouched.`,
+          : `Already in EdgeHQ as "${match.customer.name}" (same ${match.reason}) — leaving that record untouched.`,
         matchId: isRow ? null : match.customer.id,
         matchName: match.customer.name,
         matchedBy: match.reason,
@@ -510,7 +510,7 @@ export function planImport({ parsed, mapping, existing }: PlanInput): PlannedRow
         line, values, warnings, status: 'review',
         reason: isRow
           ? `Same name as row ${Number(match.customer.id.slice(4))} in this file, and nothing else to tell them apart.`
-          : `"${match.customer.name}" is already in EdgeQuote with the same name, but no phone, email or address confirms it is the same person.`,
+          : `"${match.customer.name}" is already in EdgeHQ with the same name, but no phone, email or address confirms it is the same person.`,
         matchId: isRow ? null : match.customer.id,
         matchName: match.customer.name,
         matchedBy: match.reason,

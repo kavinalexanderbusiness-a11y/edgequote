@@ -99,7 +99,7 @@ export function PipelineBuckets({ s }: { s: SalesSnapshot }) {
         </ul>
 
         <p className="text-[11px] text-ink-faint leading-relaxed">
-          These are counts of real quotes, not a forecast. EdgeQuote does not predict which open
+          These are counts of real quotes, not a forecast. EdgeHQ does not predict which open
           quotes will close — it shows what each one is actually waiting on.
         </p>
       </CardBody>

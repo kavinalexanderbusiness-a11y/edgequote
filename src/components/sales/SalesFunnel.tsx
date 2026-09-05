@@ -65,7 +65,7 @@ export function SalesFunnel({ funnel }: { funnel: Funnel }) {
           {funnel.hasUnstampedSends && (
             <p className="text-[11px] text-ink-faint leading-relaxed">
               Some quotes have no send date recorded, so the “Quote sent” rung counts fewer than were
-              actually delivered. EdgeQuote shows what was recorded rather than filling the gap in.
+              actually delivered. EdgeHQ shows what was recorded rather than filling the gap in.
             </p>
           )}
         </div>

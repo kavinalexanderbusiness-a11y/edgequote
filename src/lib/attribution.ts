@@ -63,7 +63,7 @@ export interface SourceCategoryMeta {
 export const SOURCE_CATEGORIES: SourceCategoryMeta[] = [
   { key: 'referral',    label: 'Referral',            hint: 'Sent by someone who already knows you.' },
   { key: 'repeat',      label: 'Repeat customer',     hint: 'Came back on their own.' },
-  { key: 'google',      label: 'Google',              hint: 'Search or the maps listing. EdgeQuote cannot tell paid from organic, and does not guess.' },
+  { key: 'google',      label: 'Google',              hint: 'Search or the maps listing. EdgeHQ cannot tell paid from organic, and does not guess.' },
   { key: 'facebook',    label: 'Facebook',            hint: 'Facebook, including Meta ads.' },
   { key: 'instagram',   label: 'Instagram',           hint: 'Instagram, including Meta ads.' },
   { key: 'nextdoor',    label: 'Nextdoor',            hint: 'The Nextdoor neighbourhood app.' },

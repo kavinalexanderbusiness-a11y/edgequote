@@ -401,7 +401,7 @@ export function MeasurePanel({ supabase, userId, propertyId, center, onChanged }
           </Button>
         </div>
         <p className="text-[11px] text-ink-faint">
-          Recorded as your figure, not an EdgeQuote estimate — it replaces any traced shape for {def.noun}.
+          Recorded as your figure, not an EdgeHQ estimate — it replaces any traced shape for {def.noun}.
         </p>
       </div>
 

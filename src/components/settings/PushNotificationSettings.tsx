@@ -107,7 +107,7 @@ export function PushNotificationSettings() {
             <BellRing className="w-4 h-4 text-accent-text" /> Push Notifications
           </h2>
           <p className="text-xs text-ink-faint mt-0.5">
-            Get alerts on this device — even when EdgeQuote is closed. Delivered through your existing notifications, so nothing is doubled up.
+            Get alerts on this device — even when EdgeHQ is closed. Delivered through your existing notifications, so nothing is doubled up.
           </p>
         </div>
       </CardHeader>
@@ -149,7 +149,7 @@ export function PushNotificationSettings() {
           <div className="flex items-start gap-2.5 rounded-xl border border-accent/25 bg-accent/[0.06] p-3.5">
             <Smartphone className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
             <p className="text-xs text-ink-muted leading-relaxed">
-              <span className="font-semibold text-ink">On iPhone &amp; iPad,</span> first install EdgeQuote: tap the
+              <span className="font-semibold text-ink">On iPhone &amp; iPad,</span> first install EdgeHQ: tap the
               Share button, choose <span className="font-medium text-ink">Add to Home Screen</span>, then open it from
               your Home Screen and enable notifications here.
             </p>

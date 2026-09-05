@@ -75,7 +75,7 @@ export function assessConfidence(args: {
   if (source === 'manual') {
     return {
       level: 'high',
-      reason: 'Entered by you. EdgeQuote is not estimating this — it is your number.',
+      reason: 'Entered by you. EdgeHQ is not estimating this — it is your number.',
       needsReview: false,
     }
   }
@@ -86,7 +86,7 @@ export function assessConfidence(args: {
     // answer here reaches a customer's quote, and "low" would imply we tried.
     return {
       level: 'low',
-      reason: `EdgeQuote cannot estimate ${d.noun} from imagery — this needs tracing or entering.`,
+      reason: `EdgeHQ cannot estimate ${d.noun} from imagery — this needs tracing or entering.`,
       needsReview: true,
     }
   }
@@ -140,12 +140,12 @@ export function canAutoMeasure(kind: MeasurementKind): AutoAllowed | AutoRefusal
   const d = kindDef(kind)
   if (d.canAuto) return { ok: true }
   if (d.capture === 'line') {
-    return { ok: false, reason: `A ${d.noun} run is a length — imagery can't tell EdgeQuote where it starts and stops. Trace it on the map.` }
+    return { ok: false, reason: `A ${d.noun} run is a length — imagery can't tell EdgeHQ where it starts and stops. Trace it on the map.` }
   }
   if (d.capture === 'point') {
-    return { ok: false, reason: `EdgeQuote can't count ${d.noun} from imagery reliably. Drop a pin on each one.` }
+    return { ok: false, reason: `EdgeHQ can't count ${d.noun} from imagery reliably. Drop a pin on each one.` }
   }
-  return { ok: false, reason: `EdgeQuote has no honest way to estimate ${d.noun} from imagery. Trace it, or enter the number if you already know it.` }
+  return { ok: false, reason: `EdgeHQ has no honest way to estimate ${d.noun} from imagery. Trace it, or enter the number if you already know it.` }
 }
 
 const ORDER: Record<Confidence, number> = { low: 0, medium: 1, high: 2 }

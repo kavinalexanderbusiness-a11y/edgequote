@@ -1,7 +1,7 @@
 import { ResetPasswordForm } from '@/components/auth/ResetPasswordForm'
 
 export const metadata = {
-  title: 'Choose a new password — EdgeQuote',
+  title: 'Choose a new password — EdgeHQ',
   // A reset URL carries a live credential in its query string. Search engines
   // and previews have no business holding one even for the hour it lasts.
   robots: { index: false, follow: false },

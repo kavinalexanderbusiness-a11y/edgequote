@@ -131,7 +131,7 @@ export function MoneyBand({ today, todayCount, week, weekPrev, owed, owedCount, 
             className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Card className={cn('p-3 sm:p-4 h-full card-lift', t.surface)}>
               <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint truncate">
+                <p className="text-xs font-medium text-ink-muted truncate">
                   <span className="sm:hidden">{t.short}</span>
                   <span className="hidden sm:inline">{t.label}</span>
                 </p>

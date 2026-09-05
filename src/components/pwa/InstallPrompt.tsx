@@ -81,7 +81,7 @@ export function InstallPrompt() {
           <Download className="w-5 h-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-ink">Install EdgeQuote</p>
+          <p className="text-sm font-semibold text-ink">Install EdgeHQ</p>
           {iosHint ? (
             <p className="text-xs text-ink-muted mt-0.5 leading-relaxed">
               Tap <Share className="inline w-3.5 h-3.5 -mt-0.5" /> <span className="font-medium text-ink">Share</span>, then

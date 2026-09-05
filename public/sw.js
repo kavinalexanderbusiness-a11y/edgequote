@@ -184,7 +184,7 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let data = {}
   try { data = event.data ? event.data.json() : {} } catch (e) { data = {} }
-  const title = data.title || 'EdgeQuote'
+  const title = data.title || 'EdgeHQ'
   // App-icon badge to the unread count the server computed (best-effort).
   if (typeof data.badge === 'number' && self.navigator && self.navigator.setAppBadge) {
     if (data.badge > 0) self.navigator.setAppBadge(data.badge).catch(() => {})

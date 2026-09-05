@@ -329,7 +329,7 @@ export default function ImportCustomersPage() {
               ))}
             </div>
             {!mappingNamesSomeone(mapping) && (
-              <Banner tone="warn" icon={AlertTriangle}>Map a name column — a full name, or a first and last name. EdgeQuote can’t create a customer without one.</Banner>
+              <Banner tone="warn" icon={AlertTriangle}>Map a name column — a full name, or a first and last name. EdgeHQ can’t create a customer without one.</Banner>
             )}
           </CardBody>
         </Card>
@@ -341,7 +341,7 @@ export default function ImportCustomersPage() {
           <CardBody className="space-y-4">
             <div>
               <p className="text-sm font-semibold text-ink">3 · What will happen</p>
-              <p className="text-xs text-ink-muted">Read against the {book.status === 'ready' ? book.customers.length : 0} customers already in EdgeQuote.</p>
+              <p className="text-xs text-ink-muted">Read against the {book.status === 'ready' ? book.customers.length : 0} customers already in EdgeHQ.</p>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -361,7 +361,7 @@ export default function ImportCustomersPage() {
 
             {totals.review > 0 && (
               <Banner tone="warn" icon={AlertTriangle}>
-                {totals.review} row{totals.review !== 1 ? 's' : ''} could be someone you already have. They are switched OFF — tick one to import it as a new customer anyway. EdgeQuote never merges two people on a guess.
+                {totals.review} row{totals.review !== 1 ? 's' : ''} could be someone you already have. They are switched OFF — tick one to import it as a new customer anyway. EdgeHQ never merges two people on a guess.
               </Banner>
             )}
 
@@ -439,7 +439,7 @@ export default function ImportCustomersPage() {
               )}
             </div>
             {totals.toCreate === 0 && totals.existing === totals.detected && totals.detected > 0 && (
-              <p className="text-xs text-ink-muted">Every row in this file is already in EdgeQuote. Importing it again would change nothing.</p>
+              <p className="text-xs text-ink-muted">Every row in this file is already in EdgeHQ. Importing it again would change nothing.</p>
             )}
           </CardBody>
         </Card>

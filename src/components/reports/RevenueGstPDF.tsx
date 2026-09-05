@@ -291,7 +291,7 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
               ? ` Also excludes ${report.excludedDrafts.count} draft invoice${report.excludedDrafts.count === 1 ? '' : 's'} (${formatCurrency(report.excludedDrafts.total)}) that have not been sent to a customer.`
               : ' Draft invoices, if any, are excluded until sent.'}
             {' '}GST shown is charged on invoices, not a filing figure. This is a revenue summary, not a
-            profit statement — business expenses are not tracked in EdgeQuote.
+            profit statement — business expenses are excluded from this report.
           </Text>
         </View>
 

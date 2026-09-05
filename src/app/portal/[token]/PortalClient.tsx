@@ -969,7 +969,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           </div>
         </div>
 
-        <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeQuote</p>
+        <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeHQ</p>
       </div>
       {/* Styled confirmation dialogs (card removal, quote approval…). */}
       <ConfirmHost />

@@ -51,7 +51,7 @@ export const dynamic = 'force-dynamic'
 
 // The one neutral sentence. Deliberately a constant so there is exactly one
 // success shape and it cannot drift into two.
-const NEUTRAL = 'If that address has an EdgeQuote account, a link to choose a new password is on its way.'
+const NEUTRAL = 'If that address has an EdgeHQ account, a link to choose a new password is on its way.'
 const ok = () => NextResponse.json({ ok: true, message: NEUTRAL }, { headers: { 'Cache-Control': 'no-store' } })
 const unavailable = () => NextResponse.json(
   { error: 'We can’t send reset links right now. Please try again shortly.' },

@@ -19,11 +19,11 @@ const syne = Syne({
 })
 
 export const metadata: Metadata = {
-  title: 'EdgeQuote — Field Service Platform',
+  title: 'EdgeHQ — Field Service Platform',
   description: 'Quoting, scheduling, messaging, invoicing and payments for field service businesses.',
-  applicationName: 'EdgeQuote',
+  applicationName: 'EdgeHQ',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'EdgeQuote', statusBarStyle: 'default' },
+  appleWebApp: { capable: true, title: 'EdgeHQ', statusBarStyle: 'default' },
   icons: { icon: '/icon.svg', shortcut: '/icon.svg', apple: '/icon.svg' },
   formatDetection: { telephone: false },
 }
