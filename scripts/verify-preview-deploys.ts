@@ -4,10 +4,27 @@
 //
 // WHY THIS EXISTS
 // `vercel.json` now carries a `git.deploymentEnabled` rule so that pushing a
-// per-session work branch does not spend a full Next.js build on a preview URL
-// nobody opens. On 2026-09-04 alone, 89 branch tips moved on this repo; Vercel
-// creates "Preview deployments for every push", so that is ~89 builds bought for
-// review that is done by reading diffs.
+// per-session work branch does not spend a full Next.js build on a preview
+// nobody asked for. The argument is Vercel's DOCUMENTED behaviour, not a count:
+// "Vercel allows for automatic deployments on every branch push", and "every
+// preview branch automatically receives its own domain ... whenever a commit is
+// pushed to it". The great majority of this repo's branches are per-session work
+// branches, and review here happens by reading a diff at an exact SHA.
+//
+// ⛔ NO BUILD COUNT IS CLAIMED, here or in the report. Git holds no push
+// telemetry — `%(committerdate)` records when a commit was made, not when it was
+// pushed; a rebase rewrites it, an old tip can be pushed today, and several
+// pushes to one branch collapse into one tip. Any "N builds" derived from branch
+// tips would be a fabrication dressed as a measurement.
+//
+// ⛔ AND "nothing consumes previews" WOULD BE FALSE. What is true is narrower:
+// no AUTOMATED GATE consumes them — ci.yml triggers on `push: [main]`,
+// `pull_request` and `workflow_dispatch`, never on a bare branch push. Previews
+// are a supported surface: `src/lib/canonicalHost.ts` exempts every
+// `*.vercel.app` host from the canonical redirect, and docs/GOOGLE-OAUTH-SETUP.md
+// records why — "there the hostname *is* the deployment; redirecting a preview to
+// production deletes the preview". That is the counterweight, and it is why this
+// rule is scoped to `session*/**` instead of turning previews off.
 //
 // ⛔⛔ THE HAZARD THIS PINS IS NOT THE SAVING — IT IS THE BLAST RADIUS.
 // The same key that turns previews off can turn PRODUCTION off. Two shapes do it:
