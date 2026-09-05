@@ -177,10 +177,12 @@ export default function DispatchPage() {
   const dayNotLoaded = loadedDate !== date
   const staleDay = loadError !== null && dayNotLoaded
   // The same truth readable AFTER an await, where a closure's flag describes
-  // the day the call STARTED on. Read by the route_order write funnel and the
-  // optimizer's commit step.
-  const dayScopeRef = useRef<{ date: string; loaded: string | null }>({ date, loaded: null })
-  dayScopeRef.current = { date, loaded: loadedDate }
+  // the day the call STARTED on. Read by the two verbs that write after an
+  // await (optimizer, Balance apply) and by the route_order write funnel.
+  // (Plain JS on one line on purpose: verify:dispatch-board extracts this
+  // declaration and evaluates it untranspiled.)
+  const dayRef = useRef({ date, loadedDate })
+  dayRef.current = { date, loadedDate }
   const [jobs, setJobs] = useState<Job[]>([])
   const [crews, setCrews] = useState<Crew[]>([])
   const [technicians, setTechnicians] = useState<Technician[]>([])
@@ -208,7 +210,7 @@ export default function DispatchPage() {
     if (typeof window === 'undefined') return false
     return new URLSearchParams(window.location.search).get('roster') === '1'
   })
-  const [balancePlan, setBalancePlan] = useState<(BalancePlan & { forDate: string }) | null>(null)
+  const [balancePlan, setBalancePlan] = useState<(BalancePlan & { plannedFor: string }) | null>(null)
   const [applyingBalance, setApplyingBalance] = useState(false)
   const [optimizingLane, setOptimizingLane] = useState<string | null>(null)
   const [filter, setFilter] = useState<DispatchFilterState>(EMPTY_DISPATCH_FILTER)
@@ -610,8 +612,7 @@ export default function DispatchPage() {
     // arrives after awaits, when its closure's flags still describe the day it
     // started on. If the state on hand is not the selected day, nothing is
     // written — the ids would be another day's visits.
-    const scope = dayScopeRef.current
-    if (scope.loaded !== scope.date) { notify.error('This day has not loaded — nothing was reordered.'); return }
+    if (dayRef.current.loadedDate !== dayRef.current.date) { notify.error('This day has not loaded — nothing was reordered.'); return }
     setJobs(cur => {
       const pos = new Map(laneJobIds.map((id, i) => [id, i + 1]))
       return cur.map(j => pos.has(j.id) ? { ...j, route_order: pos.get(j.id)! } : j)
@@ -695,8 +696,9 @@ export default function DispatchPage() {
     // A palette door ("Dispatch: Optimize <crew>") that survives the skeleton:
     // `laneRoutesRef` still holds the LAST LOADED day's lanes. Refuse at entry,
     // before geocoding writes coordinates for stops that are not this day's.
-    if (dayNotLoaded) { if (!opts?.quiet) notify.error('This day has not loaded — retry, then optimize.'); return }
-    const startedFor = date
+    // Through the ref, not the closure: `date` is not in this callback's deps.
+    if (dayRef.current.loadedDate !== dayRef.current.date) { if (!opts?.quiet) notify.error('This day has not loaded — retry, then optimize.'); return }
+    const startedOn = dayRef.current.date
     const route = laneRoutesRef.current[laneId]
     if (!route || !settings.base) return
     setOptimizingLane(laneId)
@@ -717,9 +719,8 @@ export default function DispatchPage() {
       // Commit ownership, re-read AFTER the awaits: the owner may have moved to
       // another day meanwhile — and it may even have loaded, so the write
       // funnel alone would let this through. The order was computed for
-      // `startedFor`; it is applied only if that is still the day on hand.
-      const scope = dayScopeRef.current
-      if (scope.date !== startedFor || scope.loaded !== startedFor) { if (!opts?.quiet) notify('The day changed while ordering — nothing applied.'); return }
+      // `startedOn`; it is applied only if that is still the day on hand.
+      if (dayRef.current.date !== startedOn || dayRef.current.loadedDate !== startedOn) { if (!opts?.quiet) notify('The day changed while ordering — nothing applied.'); return }
       const nowInLane = new Set((laneRoutesRef.current[laneId]?.seq ?? []).map(j => j.id))
       const idsAfter = [...orderedIds, ...rest].filter(id => nowInLane.has(id))
       if (idsAfter.length === 0) { if (!opts?.quiet) notify('This lane changed while ordering — nothing to apply.'); return }
@@ -742,7 +743,7 @@ export default function DispatchPage() {
     } finally {
       setOptimizingLane(null)
     }
-  }, [settings.base, supabase, applyLaneOrder, dayNotLoaded, date])
+  }, [settings.base, supabase, applyLaneOrder])
 
   // What Balance is allowed to see. Balancing is a CREW capacity tool: person
   // lanes never enter it, and a visit given to somebody by name never leaves —
@@ -763,7 +764,7 @@ export default function DispatchPage() {
     // before a plan is even computed over another day's lanes.
     if (dayNotLoaded) { notify.error('This day has not loaded — retry, then balance.'); return }
     // Stamp the plan with the day it was computed for; apply checks it.
-    setBalancePlan({ ...balanceDay(balanceLanes()), forDate: date })
+    setBalancePlan({ ...balanceDay(balanceLanes()), plannedFor: date })
   }, [balanceLanes, dayNotLoaded, date])
 
   const applyBalance = useCallback(async () => {
@@ -773,9 +774,9 @@ export default function DispatchPage() {
     // open dialog (palette "Go to today", a history jump) or the day on hand is
     // not the selected one, apply nothing and say so — the writes would move
     // another day's visits and snapshot the wrong rows for Undo.
-    if (balancePlan.forDate !== date || dayNotLoaded) {
+    if (balancePlan.plannedFor !== dayRef.current.date || dayRef.current.loadedDate !== dayRef.current.date) {
       setBalancePlan(null)
-      notify.error(`The day changed — that plan was for ${format(parseISO(balancePlan.forDate + 'T00:00:00'), 'EEE, MMM d')}; nothing was moved.`)
+      notify.error('That plan was for another day — nothing was moved. Reopen Balance.')
       return
     }
     setApplyingBalance(true)
@@ -800,7 +801,7 @@ export default function DispatchPage() {
         fetchAll()
       },
     })
-  }, [balancePlan, jobs, supabase, fetchAll, date, dayNotLoaded])
+  }, [balancePlan, jobs, supabase, fetchAll])
 
   // An open plan belongs to the day it was computed for: close it when the
   // selected day changes rather than leave it standing over another day.
