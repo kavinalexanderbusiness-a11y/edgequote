@@ -68,7 +68,22 @@ export default function TimeOffPage() {
         supabase.from('pto_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }),
         supabase.from('holidays').select('*').eq('user_id', user.id).order('date'),
       ])
+      // ⛔ Supabase RESOLVES on failure — it returns { data: null, error }, it does
+      // not throw. `?? []` therefore turned a failed read into an empty list and
+      // the line below cleared the banner, so an outage rendered "no time off
+      // booked": the most reassuring screen this page can show, and the one that
+      // gets somebody scheduled who is actually on leave.
+      //
+      // loadTechnicians (above) DOES throw, so a technicians failure already
+      // surfaced — these two reads were the silent ones in the same Promise.all.
+      // Same aggregation the dispatch board already uses for its four reads.
+      // techs FIRST and unconditionally: loadTechnicians throws on failure, so
+      // reaching here proves that read succeeded. Discarding it would make a
+      // time-off outage also claim "No one on the roster yet" — trading one
+      // false empty state for another.
       setTechs(t)
+      const readErr = pRes.error ?? hRes.error
+      if (readErr) { setLoadError('Could not load time off: ' + readErr.message); return }
       setEntries((pRes.data as PtoEntry[]) ?? [])
       setHolidays((hRes.data as Holiday[]) ?? [])
       setLoadError(null)
@@ -456,6 +471,10 @@ function BookTimeOffDialog({ supabase, userId, technicians, onClose, onSaved }: 
 
   async function save() {
     if (invalid) return
+    // The Button is disabled while saving, but Modal fires this on Cmd/Ctrl+Enter
+    // too — a key that can be held down. The in-flight guard belongs HERE, at the
+    // one entry point both doors share.
+    if (saving) return
     setSaving(true)
     const { error } = await supabase.from('pto_entries').insert({
       user_id: userId, technician_id: techId, date, hours: h, kind, is_paid: paid,
@@ -526,6 +545,10 @@ function AddHolidayDialog({ supabase, userId, onClose, onSaved }: {
 
   async function save() {
     if (invalid) return
+    // The Button is disabled while saving, but Modal fires this on Cmd/Ctrl+Enter
+    // too — a key that can be held down. The in-flight guard belongs HERE, at the
+    // one entry point both doors share.
+    if (saving) return
     setSaving(true)
     const { error } = await supabase.from('holidays').insert({
       user_id: userId, date, name: name.trim(), is_paid: paid, default_hours: Number(hours) || 8,

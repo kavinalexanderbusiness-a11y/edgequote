@@ -45,7 +45,7 @@ import { newClientMessageId } from '@/lib/comms/idempotency'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  Plus, Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
+  Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2, Sparkles, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
   FileSignature, ClipboardCheck, Phone, User as UserIcon, Star,
 } from 'lucide-react'
@@ -910,10 +910,8 @@ export function DayOpsPanel({
             </span>
           )}
         </div>
-        {/* On a phone the two SECONDARY actions collapse to their icons (the same
-            pattern the message thread header uses) — three full labels here are
-            ~330px on a 360px screen, which squeezed the date out of its own
-            header. The primary action keeps its label. */}
+        {/* Keep day interventions here. Schedule's main Add job opens the same
+            selected day; the empty-day action below remains discoverable. */}
         <div className="flex items-center gap-2 shrink-0">
           {dayRecipients.length > 0 && (
             <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)}
@@ -927,7 +925,6 @@ export function DayOpsPanel({
               <CloudRain className="w-4 h-4" /> <span className="hidden sm:inline">Delay remaining</span>
             </Button>
           )}
-          <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
         </div>
       </div>
 

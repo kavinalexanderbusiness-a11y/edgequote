@@ -435,3 +435,28 @@ export async function deleteProperty(
   if (promErr) return { promotedId: null, promoteError: promErr.message }
   return { promotedId: heir.id }
 }
+
+// ── A list read either produced rows, or it did not ──────────────────────────
+//
+// ⛔⛔ A FAILED READ IS NOT AN EMPTY LIST. `setCustomers(res.data || [])` turns a
+// dropped connection into the sentence "No customers yet — Add your first
+// customer" in front of a business with hundreds of them, and the customers list
+// then caches that answer, so the next visit paints it instantly with no
+// skeleton. The same `|| []` coercion is what `loadRevenueIntel`'s honesty gate
+// already refuses for the same reason.
+//
+// ⭐ THREE inputs, not two. `{data: null, error: null}` is a real PostgREST shape
+// (a HEAD/count request, an aborted fetch) and it means "no answer", not "no
+// rows" — the `|| []` form cannot tell those apart, which is exactly how the
+// defect hides.
+export type ListRead<T> = { ok: true; rows: T[] } | { ok: false; message: string }
+
+export function listRead<T>(
+  res: { data: T[] | null; error: { message?: string | null } | null } | null | undefined,
+  fallback: string,
+): ListRead<T> {
+  if (!res) return { ok: false, message: fallback }
+  if (res.error) return { ok: false, message: res.error.message || fallback }
+  if (res.data == null) return { ok: false, message: fallback }
+  return { ok: true, rows: res.data }
+}

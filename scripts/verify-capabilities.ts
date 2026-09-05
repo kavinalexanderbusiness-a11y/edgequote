@@ -25,7 +25,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
-import { loadEnvLocal } from './lib/verify-fixture'
+import { loadEnvLocal, openFixtureTenant, isSkipped } from './lib/verify-fixture'
 
 const ROOT = join(__dirname, '..')
 let pass = 0
@@ -243,9 +243,132 @@ check('lib/capabilities fails CLOSED (error or missing row → NO_CAPABILITIES)'
   })())
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('6. LIVE POSTURE — what the database actually refuses (needs credentials)')
+// (the header is printed inside interlock() so it precedes its own results —
+//  both sections below are async, so a module-scope H() would print both
+//  headers before either produced a line)
+//
+// ⭐⭐ WHY THIS IS BEHAVIOURAL AND NOT A GREP. "This guard calls
+// openFixtureTenant" is a source fact; "a false identity answer stops it before
+// a single mutation" is a claim about ORDER, and order is exactly what was wrong
+// before. So the harness is driven here against a recording fake and the
+// assertion is that the fake recorded NO mutation — not that the code looks
+// right.
+//
+// ⛔ Entirely offline. `@supabase/supabase-js` is replaced in require.cache
+// before the harness is loaded, the four env names it reads are set to synthetic
+// values FIRST (loadEnvLocal only fills variables that are undefined, so it
+// cannot override them), and no client, socket or credential is real.
 
+interface Recorder { mutations: string[]; rpcs: string[]; built: number; signedOut: boolean }
+
+function fakeSupabase(rec: Recorder, answer: 'false' | 'missing' | 'error') {
+  // ⭐ Every verb returns the SAME chain object, so any builder shape the harness
+  // uses (`.delete().eq().lt()`, `.select().eq().maybeSingle()`) resolves rather
+  // than throwing. A fake that dies on an unknown method turns a real finding
+  // into a stack trace — and the stale-run sweep at verify-fixture.ts:147 is
+  // exactly such a chain, immediately after the interlock.
+  const table = (name: string) => {
+    const chain: Record<string, unknown> = {}
+    for (const verb of ['insert', 'update', 'upsert', 'delete']) {
+      chain[verb] = () => { rec.mutations.push(`${verb} ${name}`); return chain }
+    }
+    for (const p of ['select', 'eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in', 'is', 'like', 'match', 'limit', 'order', 'range']) {
+      chain[p] = () => chain
+    }
+    chain.maybeSingle = async () => ({ data: null, error: null })
+    chain.single = async () => ({ data: null, error: null })
+    chain.then = (r: (v: unknown) => unknown) => r({ data: [], error: null })
+    return chain
+  }
+  return {
+    __zzFake: 'capabilities-interlock-probe',
+    auth: {
+      signInWithPassword: async () => ({ data: { user: { id: 'zz-fixture-uid' } }, error: null }),
+      signOut: async () => { rec.signedOut = true; return { error: null } },
+    },
+    rpc: async (name: string) => {
+      rec.rpcs.push(name)
+      if (name !== 'is_verify_fixture_tenant') return { data: null, error: null }
+      if (answer === 'error') return { data: null, error: { message: 'zz-synthetic rpc failure' } }
+      return { data: answer === 'missing' ? null : false, error: null }
+    },
+    from: table,
+  }
+}
+
+async function probeInterlock(answer: 'false' | 'missing' | 'error'): Promise<Recorder & { exited: number | null; message: string; handedOut: boolean }> {
+  const rec: Recorder = { mutations: [], rpcs: [], built: 0, signedOut: false }
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const supaId = require.resolve('@supabase/supabase-js')
+  const libId = require.resolve('./lib/verify-fixture')
+  const savedSupa = require.cache[supaId], savedLib = require.cache[libId]
+  // ⭐ The harness destructures `createClient` at ITS import time, so the fake
+  // must be in place BEFORE the harness module is (re)loaded — replacing the
+  // cache entry afterwards would leave the real binding captured.
+  require.cache[supaId] = { id: supaId, filename: supaId, loaded: true,
+    exports: { createClient: () => { rec.built++; return fakeSupabase(rec, answer) } } } as unknown as NodeModule
+  delete require.cache[libId]
+
+  const saved = { ...process.env }
+  const savedExit = process.exit
+  const savedErr = console.error
+  let exited: number | null = null
+  let handedOut = false
+  let message = ''
+  try {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://zz-interlock-probe.invalid'
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'zz-synthetic-anon'
+    process.env.VERIFY_FIXTURE_EMAIL = 'zz-probe@edgequote.invalid'
+    process.env.VERIFY_FIXTURE_PASSWORD = 'zz-synthetic-password'
+    console.error = (...a: unknown[]) => { message += a.map(String).join(' ') }
+    process.exit = ((code?: number) => { exited = code ?? 0; throw new Error('__zz_exit__') }) as typeof process.exit
+    const lib = require(libId) as { openFixtureTenant: (l: string) => Promise<unknown> }
+    const got = await lib.openFixtureTenant('interlock-probe') as { db?: unknown; skipped?: string }
+    // ⭐⭐ THE LOAD-BEARING OBSERVATION. openFixtureTenant writes nothing itself
+    // (fixtureCustomer/fixtureTemplate are lazy), so "no mutation happened while
+    // it decided" is true even with the interlock removed — that assertion alone
+    // would be vacuous. What actually matters is whether a WRITABLE SESSION was
+    // handed back: with a false identity the caller must never receive a `db` it
+    // could write through. That is the property a regression breaks.
+    handedOut = got != null && got.db !== undefined
+  } catch (e) {
+    if (!(e instanceof Error) || e.message !== '__zz_exit__') throw e
+  } finally {
+    process.exit = savedExit
+    console.error = savedErr
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+    Object.assign(process.env, saved)
+    require.cache[supaId] = savedSupa; require.cache[libId] = savedLib
+  }
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  return { ...rec, exited, message, handedOut }
+}
+
+async function interlock() {
+  H('6. THE INTERLOCK — refusal happens BEFORE any write, proven offline')
+  for (const answer of ['false', 'missing', 'error'] as const) {
+    const label = answer === 'false' ? 'says FALSE' : answer === 'missing' ? 'returns NULL (function missing / no answer)' : 'ERRORS'
+    const r = await probeInterlock(answer)
+    check(`the fake is installed, so this probe tests something (${answer})`, r.built > 0, `createClient built ${r.built} times`)
+    check(`identity ${label} → the interlock was asked`, r.rpcs.includes('is_verify_fixture_tenant'), JSON.stringify(r.rpcs))
+    check(`identity ${label} → the run ENDS (exit 1), it does not quietly skip`, r.exited === 1, `process.exit(${String(r.exited)})`)
+    check(`identity ${label} → ⛔ NO writable session is handed back`, r.handedOut === false,
+      'a caller that receives a db here can write to a real tenant — this is the check a removed interlock breaks')
+    check(`identity ${label} → and no mutation was attempted while deciding`, r.mutations.length === 0, JSON.stringify(r.mutations))
+    check(`identity ${label} → it says why, naming the refusal`, /REFUSING TO WRITE/.test(r.message), r.message.slice(0, 120))
+  }
+  // [negative control] the probe can SEE a mutation, so "zero mutations" is a
+  // measurement rather than a fake that records nothing.
+  const rec: Recorder = { mutations: [], rpcs: [], built: 0, signedOut: false }
+  const c = fakeSupabase(rec, 'false') as unknown as { from: (t: string) => { insert: (v: unknown) => unknown } }
+  c.from('platform_capabilities').insert({})
+  check('[negative control] the recorder does register a write when one happens',
+    rec.mutations.length === 1 && rec.mutations[0] === 'insert platform_capabilities', JSON.stringify(rec.mutations))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 async function live() {
+  H('7. LIVE POSTURE — what the database actually refuses (needs credentials)')
   loadEnvLocal()
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -267,18 +390,26 @@ async function live() {
   }
 
   // Signed-in business: may READ its own (absent) grant row, may not WRITE one.
-  const email = process.env.VERIFY_FIXTURE_EMAIL, password = process.env.VERIFY_FIXTURE_PASSWORD
-  if (!email || !password) {
-    console.log('  ⏭️  fixture-tenant half skipped — set VERIFY_FIXTURE_EMAIL / VERIFY_FIXTURE_PASSWORD')
+  //
+  // ⛔⛔ THE IDENTITY COMES FROM THE DATABASE, NOT FROM THE ENV VAR NAMES. This
+  // half used to sign in with VERIFY_FIXTURE_EMAIL / _PASSWORD directly and write
+  // immediately. That made the gate "these two variables are set" rather than
+  // "the database agrees this is a fixture tenant" — so whoever pointed those
+  // names at a real login got real INSERT/UPDATE attempts on that tenant's
+  // platform_capabilities. The checks below are negative (they assert the writes
+  // are REFUSED), but a refusal that has to be attempted against a real business
+  // to be observed is the wrong shape, and if the policy ever regressed the row
+  // would land before the assertion could report it.
+  //
+  // openFixtureTenant asks the database — rpc('is_verify_fixture_tenant') — and
+  // ends the process before the first write if the answer is anything but true.
+  // Same guarantee verify-quote-options and verify-service-bundles already have.
+  const fixture = await openFixtureTenant('verify-capabilities')
+  if (isSkipped(fixture)) {
+    console.log(`  ⏭️  fixture-tenant half skipped — ${fixture.skipped}`)
     return
   }
-  const db = createClient(url, anonKey, { auth: { persistSession: false } })
-  const { data: auth, error: authErr } = await db.auth.signInWithPassword({ email, password })
-  if (authErr || !auth?.user) {
-    console.log(`  ⏭️  fixture-tenant half skipped — sign-in failed (${authErr?.message ?? 'no user'})`)
-    return
-  }
-  const uid = auth.user.id
+  const { db, uid } = fixture
   try {
     {
       const { data, error } = await db.from('platform_capabilities').select('*').eq('user_id', uid)
@@ -303,7 +434,11 @@ async function live() {
       check('no grants row appeared as a side effect', (data ?? []).length === 0)
     }
   } finally {
-    await db.auth.signOut({ scope: 'local' }) // never global — see auth-session-persistence
+    // close() deletes anything this run made and signs out with scope:'local'
+    // (never global — see auth-session-persistence). This guard creates no rows
+    // by design, so close() is a sign-out plus a no-op sweep; it is called
+    // anyway so the cleanup contract is the harness's, not re-implemented here.
+    await fixture.close()
   }
 
   // Resolver behaviour (capable vs not) needs the service role to call it and to
@@ -323,7 +458,7 @@ function walk(dir: string, visit: (f: string) => void) {
   }
 }
 
-live().then(() => {
+interlock().then(live).then(() => {
   console.log(`\n${fail === 0 ? '✅' : '❌'} verify-capabilities: ${pass} passed, ${fail} failed`)
   process.exit(fail === 0 ? 0 : 1)
 }).catch(e => {

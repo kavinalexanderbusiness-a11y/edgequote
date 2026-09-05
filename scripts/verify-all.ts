@@ -109,11 +109,13 @@ const failures: { domain: string; code: number | null; output: string }[] = []
 // can be green and still say plainly what it did not prove.
 const unrunnable: { domain: string; why: string }[] = []
 
-/** The line a skipping guard printed, so the summary says WHY, not just that. */
-function skipReason(out: string): string {
-  const m = out.split(/\r?\n/).find(l => /SKIPPED|BLOCKED|cannot run/i.test(l))
-  return (m ?? '').replace(/^[\s⏭✗❌]+/, '').trim() || 'no reason given'
-}
+// ⭐ The end-of-run report lives in ./lib/verify-summary so it can be driven by a
+// test directly: importing THIS file to test its reporting would run every guard.
+import { summarize, skipReason, partialSkipNotice, type Notice } from './lib/verify-summary'
+
+// A guard that PASSED but said it skipped part of its work. Never a count - the
+// pass is real, and what it skipped is not proof of the half it skipped.
+const notices: Notice[] = []
 
 for (const d of fileDomains) {
   const file = join(SCRIPTS_DIR, `verify-${d}.ts`)
@@ -136,6 +138,8 @@ for (const d of fileDomains) {
     unrunnable.push({ domain: d, why: skipReason(r.stdout ?? '') })
   } else if (ok) {
     console.log(`ok (${ms}ms)`)
+    const note = partialSkipNotice(r.stdout ?? '')
+    if (note) notices.push({ domain: d, note })
   } else {
     console.log(`FAIL (exit ${r.status ?? 'signal'}, ${ms}ms)`)
     failures.push({ domain: d, code: r.status, output: [r.stdout, r.stderr, r.error?.message].filter(Boolean).join('\n') })
@@ -144,23 +148,14 @@ for (const d of fileDomains) {
 
 const totalS = ((Date.now() - started) / 1000).toFixed(1)
 
-if (failures.length) {
-  console.error(`\n✗ ${failures.length}/${fileDomains.length} verify suites FAILED in ${totalS}s:\n`)
-  for (const f of failures) {
-    console.error(`── verify:${f.domain} (exit ${f.code ?? 'signal'}) ${'─'.repeat(Math.max(0, 40 - f.domain.length))}`)
-    console.error(f.output.trimEnd() || '  (no output)')
-    console.error('')
-  }
-  process.exit(1)
-}
-
-// A suite can be green and still have proved less than it looks. Say so.
-if (unrunnable.length) {
-  console.log(`\n⏭  ${unrunnable.length} suite(s) COULD NOT RUN — not proven, and not failed:`)
-  for (const u of unrunnable) console.log(`     verify:${u.domain} — ${u.why}`)
-  console.log('   Resolve these before a release: a guard that cannot run proves nothing.')
-}
-
-const ran = fileDomains.length - unrunnable.length
-console.log(`\n✅ ${ran}/${fileDomains.length} verify suites passed in ${totalS}s\n`)
-process.exit(0)
+// ⛔ ONE report, printed BEFORE either exit. The old tail exited inside the
+// failure branch, so any failure erased the pass count AND the could-not-run
+// list - a run that hid verify:schema's skip behind one failing guard is what
+// prompted this. Exit semantics are unchanged: non-zero iff something FAILED.
+process.exit(summarize({
+  total: fileDomains.length,
+  failures,
+  unrunnable,
+  notices,
+  seconds: totalS,
+}))
