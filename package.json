@@ -177,6 +177,7 @@
     "verify:custom-fields": "tsx scripts/verify-custom-fields.ts",
     "verify:tenant-time": "tsx scripts/verify-tenant-time.ts",
     "verify:weather-truth": "tsx scripts/verify-weather-truth.ts",
+    "verify:customer-load-ordering": "tsx scripts/verify-customer-load-ordering.ts",
     "verify:day-view-tomorrow": "tsx scripts/verify-day-view-tomorrow.ts",
     "verify:client-cache-isolation": "tsx scripts/verify-client-cache-isolation.ts",
     "verify:shared-unread": "tsx scripts/verify-shared-unread.ts"

@@ -74,6 +74,11 @@ import {
 
 const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
 
+// The four reads this page issues itself whose rows every figure below stands
+// on. A slice whose LAST live read failed is NAMED here, never coerced to [] —
+// `[]` is the answer "this customer has none"; a failed read has no answer.
+type ReadSlice = 'Properties' | 'Quotes' | 'Jobs' | 'Invoices'
+
 // Presentation for the engine's verbs. The engine owns WHAT to do; this file
 // only decides how it looks — the same split the dashboard queue makes.
 const ACTION_ICON: Partial<Record<string, typeof FileText>> = {
@@ -115,6 +120,10 @@ export default function CustomerDetailPage() {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const [tick, setTick] = useState(0)   // bump to re-run load() (used by realtime)
+  // Which full load is current. Every run of the load effect advances it; a narrow
+  // refetch captures it when it starts, so a run that began earlier can never land
+  // over one that began later (the effect itself retires through its cleanup).
+  const loadGen = useRef(0)
 
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [referrer, setReferrer] = useState<{ id: string; name: string } | null>(null)
@@ -137,7 +146,7 @@ export default function CustomerDetailPage() {
   // a dozen reads and supabase-js resolves failures as empty, so without this a
   // dropped connection renders as "No history yet" — a claim about the customer
   // that the data never made. See lib/timelineData.
-  const [tlMissing, setTlMissing] = useState<string[]>([])
+  const [loaderMissing, setLoaderMissing] = useState<string[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   // What this business does, derived from its own catalogue and jobs — never asked.
   // Starts SHOWING everything, so a lawn field can't blink out mid-load.
@@ -146,6 +155,16 @@ export default function CustomerDetailPage() {
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // ── Read honesty ──────────────────────────────────────────────────────────
+  // Which of this page's own slices the figures are allowed to stand on, and
+  // where the rows on screen came from. A cached snapshot is a memory of the
+  // last visit — shown, labelled, and never presented as today's answer until a
+  // live read replaces it. (S111 audit: a failed quotes/jobs/invoices read used
+  // to paint as $0 · "Nothing needs action" · a red retention alarm, and was
+  // then CACHED as empty for two minutes; a failed refresh after a cached paint
+  // was silent because loadError rendered only when no customer was on screen.)
+  const [readMissing, setReadMissing] = useState<ReadSlice[]>([])
+  const [source, setSource] = useState<'none' | 'cache' | 'live'>('none')
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
@@ -270,11 +289,24 @@ export default function CustomerDetailPage() {
       setQuotes(cached.quotes)
       setJobs(cached.jobs)
       setInvoices(cached.invoices)
+      setReadMissing([])          // a snapshot is only ever written clean (see load)
+      setSource('cache')          // …and is a memory until the live read lands
       setLoading(false)
     }
   }, [id])
 
   useEffect(() => {
+    // ONE run owns the screen. reload() (tick) re-runs this effect, and React runs
+    // the previous run's cleanup first — which retires it: after any await a
+    // retired run applies nothing (no state, no banner, no cache write), so the
+    // run that started LAST is the only one that can land. Without this, a slow
+    // first load resolving after a Try-again / realtime reload overwrote the
+    // fresher rows (and re-cached them), or raised its stale failure banner over
+    // a successful retry. This is about ORDER within one customer, not identity:
+    // an id change already unmounts this instance — the [id] segment is keyed by
+    // its value — so no run here ever sees another customer's id.
+    let active = true
+    loadGen.current += 1
     async function load() {
       const lease = cacheLease()
       // Local session read (no GoTrue round-trip). ONE batch for everything that
@@ -283,6 +315,7 @@ export default function CustomerDetailPage() {
       // round-trip below. This replaces ~5 serial hops that also re-ran in full on every
       // realtime refresh.
       const { data: { session } } = await supabase.auth.getSession()
+      if (!active) return
       const user = session?.user
       // No session must not strand the skeleton forever.
       if (!user) { setLoading(false); return }
@@ -311,6 +344,7 @@ export default function CustomerDetailPage() {
         // Still part of this batch, so it stays as parallel as it was inline.
         loadCustomerTimelineSources(supabase, user!.id, id),
       ])
+      if (!active) return
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
       if (cRes.error && cRes.error.code !== 'PGRST116') { setLoadError('Could not load this customer — check your connection.'); setLoading(false); return }
@@ -322,10 +356,20 @@ export default function CustomerDetailPage() {
       // still restores from the freshly-loaded `customer`). The rest of the page
       // stays live — this guards the one editable draft, nothing else.
       if (!editingNotesRef.current) setNotesValue(cust?.notes || '')
-      setProperties((pRes.data as Property[]) || [])
-      setQuotes((qRes.data as Quote[]) || [])
-      setJobs((jRes.data as Job[]) || [])
-      setInvoices((iRes.data as Invoice[]) || [])
+      // ⭐ A failed slice keeps whatever is on screen (last known good, or
+      // nothing) and is NAMED in readMissing; the figures it feeds render as
+      // "not loaded", not as zero. The realtime narrow path below already kept
+      // last-known-good — the full load now follows the same rule.
+      if (!pRes.error) setProperties((pRes.data as Property[]) || [])
+      if (!qRes.error) setQuotes((qRes.data as Quote[]) || [])
+      if (!jRes.error) setJobs((jRes.data as Job[]) || [])
+      if (!iRes.error) setInvoices((iRes.data as Invoice[]) || [])
+      const failedSlices = [
+        ...(pRes.error ? ['Properties'] : []), ...(qRes.error ? ['Quotes'] : []),
+        ...(jRes.error ? ['Jobs'] : []), ...(iRes.error ? ['Invoices'] : []),
+      ] as ReadSlice[]
+      setReadMissing(failedSlices)
+      setSource('live')
       // A FAILED read stays null (gate skipped), never an empty map — an empty map
       // would claim every gated booking is unpaid.
       if (depRes.error) { setDepositRows(null) } else {
@@ -335,8 +379,11 @@ export default function CustomerDetailPage() {
         }
         setDepositRows(byQuote)
       }
-      // Warm the cache so the next open (or a back-nav) paints instantly.
-      if (cust) writeCache<CustomerPrefetch>(custCacheKey(id), {
+      // Warm the cache so the next open (or a back-nav) paints instantly — but
+      // ONLY a clean snapshot. A failed slice cached as [] replayed as "no
+      // quotes" for two minutes, on every hover and back-nav, after the network
+      // was back. (The lease, taken at fetch start, still decides the owner.)
+      if (cust && failedSlices.length === 0) writeCache<CustomerPrefetch>(custCacheKey(id), {
         customer: cust, properties: (pRes.data as Property[]) || [], quotes: (qRes.data as Quote[]) || [],
         jobs: (jRes.data as Job[]) || [], invoices: (iRes.data as Invoice[]) || [],
       }, { lease })
@@ -365,17 +412,14 @@ export default function CustomerDetailPage() {
           : null,
         loadJobTimelineSources(supabase, jobIds),
       ])
+      if (!active) return
 
       // Hand the engine the rows; it decides what an event is. The page no longer
       // knows how a credit differs from a refund.
       setTlSources({ ...tlCustomer.sources, ...tlJob.sources })
-      // quotes/jobs/invoices are fetched by this page, not the loader, so their
-      // failures are named here — they are the three the timeline can least afford
-      // to drop silently.
-      setTlMissing([
-        ...(qRes.error ? ['Quotes'] : []), ...(jRes.error ? ['Jobs'] : []),
-        ...(iRes.error ? ['Invoices'] : []), ...tlCustomer.missing, ...tlJob.missing,
-      ])
+      // The loader's own missing sources. quotes/jobs/invoices are this page's
+      // slices and are named in readMissing; the Timeline card receives both.
+      setLoaderMissing([...tlCustomer.missing, ...tlJob.missing])
       if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
       if (referredRevRes?.data) {
         // Referral revenue: the same exclusion rule as every other money
@@ -389,6 +433,7 @@ export default function CustomerDetailPage() {
       setLoading(false)
     }
     load()
+    return () => { active = false }
   }, [id, tick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live timeline: a new message, payment, quote/job/invoice change, or portal
@@ -416,35 +461,48 @@ export default function CustomerDetailPage() {
   const gatherTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const narrowRefetch = useCallback(async (scopes: Set<string>) => {
+    // A full load that starts after this narrow refetch supersedes it: a slice
+    // lands only while no newer full run has begun (the effect's own rule, from
+    // the other side). A narrow refetch that starts DURING a full load is not
+    // retired by it and may still be overwritten by that older run's slices —
+    // a known limit, recorded in the guard.
+    const gen = loadGen.current
+    const live = () => gen === loadGen.current
     const tasks: PromiseLike<unknown>[] = []
+    // A narrow refetch that fails must say so too, and one that succeeds must
+    // clear the name — the same two-way rule the timeline warning follows.
+    const noteSlice = (slice: ReadSlice, ok: boolean) =>
+      setReadMissing(prev => ok ? prev.filter(s => s !== slice) : prev.includes(slice) ? prev : [...prev, slice])
     if (scopes.has('quotes')) tasks.push(
       supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false })
-        .then(r => { if (!r.error) setQuotes((r.data as Quote[]) || []) }),
+        .then(r => { if (!live()) return; noteSlice('Quotes', !r.error); if (!r.error) setQuotes((r.data as Quote[]) || []) }),
     )
     if (scopes.has('jobs')) tasks.push((async () => {
       const r = await supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true })
+      if (!live()) return
+      noteSlice('Jobs', !r.error)
       if (r.error) return
       const rows = (r.data as Job[]) || []
       setJobs(rows)
       const tlJob = await loadJobTimelineSources(supabase, rows.map(j => j.id))
+      if (!live()) return
       setTlSources(prev => ({ ...prev, ...tlJob.sources }))
     })())
     if (scopes.has('invoices') || scopes.has('payments')) tasks.push(
       supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false })
-        .then(r => { if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
+        .then(r => { if (!live()) return; noteSlice('Invoices', !r.error); if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
     )
     if (scopes.has('payments') || scopes.has('messages') || scopes.has('service_requests')) tasks.push((async () => {
       const { data: { session } } = await supabase.auth.getSession()
+      if (!live()) return
       const uid = session?.user?.id
       if (!uid) return
       const tlCust = await loadCustomerTimelineSources(supabase, uid, id)
+      if (!live()) return
       setTlSources(prev => ({ ...prev, ...tlCust.sources }))
       // A realtime refetch that drops a source must state it too — and a clean
       // refetch must clear a stale warning, or the card cries wolf forever.
-      setTlMissing(prev => {
-        const own = prev.filter(m => m === 'Quotes' || m === 'Jobs' || m === 'Invoices')
-        return [...own, ...tlCust.missing]
-      })
+      setLoaderMissing(tlCust.missing)
     })())
     await Promise.all(tasks)
   }, [supabase, id])
@@ -725,6 +783,20 @@ export default function CustomerDetailPage() {
 
   const today = localTodayISO()
 
+  // ── Read status ────────────────────────────────────────────────────────────
+  // What each figure below may stand on. A slice in readMissing has no current
+  // answer, so anything derived from it is shown as "not loaded" — never as 0,
+  // never as "none", never as a retention alarm.
+  const missing = new Set<ReadSlice>(readMissing)
+  const unknownFrom = (...slices: ReadSlice[]) => slices.some(s => missing.has(s))
+  const quotesUnknown = unknownFrom('Quotes')
+  const jobsUnknown = unknownFrom('Jobs')
+  const moneyUnknown = unknownFrom('Invoices')
+  const openUnknown = (['Quotes', 'Jobs', 'Invoices'] as ReadSlice[]).filter(s => missing.has(s))
+  const notLoaded = (slice: string) => `${slice} could not be loaded`
+  // The Timeline card names both this page's failed slices and the loader's.
+  const tlMissing = [...readMissing.filter(s => s !== 'Properties'), ...loaderMissing]
+
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => isWon(q.status))
   // ⛔ WAS `s + Number(q.total || 0)` across every won quote. An unpriced won
@@ -772,12 +844,14 @@ export default function CustomerDetailPage() {
     jobs.filter(j => j.recurrence_id === rid && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress')).length
 
   const warnings: { tone: 'red' | 'amber'; text: string }[] = []
-  if (hasRecurring && upcoming.length === 0) {
+  // Every one of these is a statement about the JOBS slice; with that slice
+  // missing, "no future visits" is not known, so no alarm is raised.
+  if (!jobsUnknown && hasRecurring && upcoming.length === 0) {
     warnings.push({ tone: 'red', text: 'Recurring customer with no future visits scheduled — their series has run out.' })
-  } else if (upcoming.length === 0 && completed.length > 0) {
+  } else if (!jobsUnknown && upcoming.length === 0 && completed.length > 0) {
     warnings.push({ tone: 'amber', text: 'No upcoming visits scheduled.' })
   }
-  if (lastServicedDays != null && lastServicedDays > 60) {
+  if (!jobsUnknown && lastServicedDays != null && lastServicedDays > 60) {
     warnings.push({ tone: 'amber', text: `Last serviced ${lastServicedDays} days ago — may be worth a check-in.` })
   }
 
@@ -845,19 +919,21 @@ export default function CustomerDetailPage() {
     // ⭐ The subtitle carries the exclusion. A total that quietly dropped records
     // is the same lie as one that counted them as zero — the reader cannot tell
     // either from a complete figure unless the figure says so.
+    // A figure whose slice did not load is "—" with the reason as its subtitle:
+    // the same honesty as the exclusion note, for the case where nothing came.
     {
       label: 'Booked Revenue',
-      value: formatCurrency(bookedRevenue),
-      sub: excludedNote(wonUnpriced, 'quote') ?? 'Won quotes',
+      value: quotesUnknown ? '—' : formatCurrency(bookedRevenue),
+      sub: quotesUnknown ? notLoaded('Quotes') : (excludedNote(wonUnpriced, 'quote') ?? 'Won quotes'),
       icon: DollarSign,
       color: 'text-accent-text',
     },
-    { label: 'Collected', value: formatCurrency(collectedRevenue), sub: 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
-    { label: 'Outstanding', value: formatCurrency(outstandingRevenue), sub: 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
+    { label: 'Collected', value: moneyUnknown ? '—' : formatCurrency(collectedRevenue), sub: moneyUnknown ? notLoaded('Invoices') : 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
+    { label: 'Outstanding', value: moneyUnknown ? '—' : formatCurrency(outstandingRevenue), sub: moneyUnknown ? notLoaded('Invoices') : 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
     {
       label: 'Service History',
-      value: `${completed.length} visit${completed.length !== 1 ? 's' : ''}`,
-      sub: `${avgDuration != null ? `~${avgDuration} min avg` : 'No timed visits yet'}${lastServicedDate ? ` · last ${formatDate(lastServicedDate)}` : ''}`,
+      value: jobsUnknown ? '—' : `${completed.length} visit${completed.length !== 1 ? 's' : ''}`,
+      sub: jobsUnknown ? notLoaded('Jobs') : `${avgDuration != null ? `~${avgDuration} min avg` : 'No timed visits yet'}${lastServicedDate ? ` · last ${formatDate(lastServicedDate)}` : ''}`,
       icon: Timer, color: 'text-sky-400',
     },
   ]
@@ -895,6 +971,31 @@ export default function CustomerDetailPage() {
           </div>
         }
       />
+
+      {/* ── Read status — BEFORE any figure below claims to be the answer ──
+          Three honest states, one banner each: a refresh that failed (the rows
+          stay, labelled as the last visit's or the last loaded, with Retry —
+          what the customers list does); a cached snapshot still refreshing (a
+          memory, not today's answer); a live read with slices missing (named,
+          and the figures they feed say "not loaded"). */}
+      {loadError ? (
+        <Banner tone="danger" icon={AlertTriangle}
+          action={<Button size="sm" variant="secondary" onClick={reload}>Try again</Button>}>
+          {loadError}{' '}
+          {source === 'cache'
+            ? 'Showing details from your last visit — they may be out of date.'
+            : 'Showing the last loaded details — they may be out of date.'}
+        </Banner>
+      ) : source === 'cache' ? (
+        <Banner tone="info" icon={RotateCw}>
+          Showing details from your last visit — refreshing now.
+        </Banner>
+      ) : readMissing.length > 0 ? (
+        <Banner tone="warn" icon={AlertTriangle}
+          action={<Button size="sm" variant="secondary" onClick={reload}>Try again</Button>}>
+          {readMissing.join(', ')} could not be loaded — the figures that depend on {readMissing.length > 1 ? 'them are' : 'it is'} shown as not loaded, not as zero.
+        </Banner>
+      ) : null}
 
       {/* Retention warnings — top, highly visible (THE shared Banner) */}
       {warnings.map((w, i) => (
@@ -989,17 +1090,25 @@ export default function CustomerDetailPage() {
                 {/* The answer strip — the two phone-call questions ("how much do I
                     owe?", "when are you coming?") were already computed on this page
                     but rendered many cards down. Same figures, beside the name. */}
-                {outstandingRevenue > 0 && (
+                {moneyUnknown ? (
+                  <span className="text-xs text-ink-faint flex items-center gap-1" title={notLoaded('Invoices')}>
+                    <DollarSign className="w-3 h-3" /> Owed: not loaded
+                  </span>
+                ) : outstandingRevenue > 0 && (
                   <a href="#customer-revenue" className="text-xs text-amber-400 hover:underline flex items-center gap-1">
                     <DollarSign className="w-3 h-3" /> Owes {formatCurrency(outstandingRevenue)}
                   </a>
                 )}
-                {nextVisit && (
+                {jobsUnknown ? (
+                  <span className="text-xs text-ink-faint flex items-center gap-1" title={notLoaded('Jobs')}>
+                    <CalendarClock className="w-3 h-3" /> Next visit: not loaded
+                  </span>
+                ) : nextVisit && (
                   <span className="text-xs text-ink-muted flex items-center gap-1">
                     <CalendarClock className="w-3 h-3" /> Next visit {formatDate(nextVisit.scheduled_date)}
                   </span>
                 )}
-                {openQuotesAll.length > 0 && (
+                {!quotesUnknown && openQuotesAll.length > 0 && (
                   <span className="text-xs text-ink-muted flex items-center gap-1">
                     <FileText className="w-3 h-3" /> {openQuotesAll.length} open quote{openQuotesAll.length !== 1 ? 's' : ''} · {formatCurrency(openQuoteValue)}
                     {/* The count and the money come from DIFFERENT sets when a
@@ -1078,8 +1187,15 @@ export default function CustomerDetailPage() {
           {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
         </CardHeader>
         <CardBody className="p-0">
+          {/* "Nothing needs action" is a claim about quotes, jobs and invoices
+              together; with any of them missing it is not known. */}
+          {openUnknown.length > 0 && (
+            <p className="px-5 py-2 text-xs text-amber-400 border-b border-border">
+              {openUnknown.join(', ')} could not be loaded — items from {openUnknown.length > 1 ? 'those' : 'it'} may be missing here.
+            </p>
+          )}
           {openItems.length === 0 ? (
-            <InlineEmpty className="py-6">Nothing needs action right now.</InlineEmpty>
+            <InlineEmpty className="py-6">{openUnknown.length > 0 ? 'Could not check what needs action — use Try again above.' : 'Nothing needs action right now.'}</InlineEmpty>
           ) : (
             <div className="divide-y divide-border">
               {openItems.map(item => {
@@ -1164,8 +1280,8 @@ export default function CustomerDetailPage() {
         })}
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-ink-muted -mt-2">
-        <span>Accepted jobs: <span className="text-ink font-medium">{wonQuotes.length}</span> of {quotes.length}</span>
-        <span>Avg job value: <span className="text-ink font-medium">{formatCurrency(avgJobValue)}</span></span>
+        <span>Accepted jobs: <span className="text-ink font-medium">{quotesUnknown ? '—' : wonQuotes.length}</span> of {quotesUnknown ? '—' : quotes.length}</span>
+        <span>Avg job value: <span className="text-ink font-medium">{quotesUnknown ? '—' : formatCurrency(avgJobValue)}</span></span>
       </div>
 
       {/* Current Service Plan — the recurring schedule at a glance */}
@@ -1204,14 +1320,21 @@ export default function CustomerDetailPage() {
                 return (
                   <span key={r.id} className="text-xs flex items-center gap-1 text-accent-text border border-accent/20 bg-accent/10 rounded-lg px-2.5 py-1">
                     <Repeat className="w-3 h-3" /> {recurrenceLabel(r.interval_unit, r.interval_count, r.freq)}
-                    {r.end_date ? ` until ${formatDate(r.end_date)}` : r.end_count ? ` · ${remaining} of ${r.end_count} left` : ' · ongoing'}
-                    {!r.end_date && !r.end_count && remaining > 0 ? ` · ${remaining} upcoming` : ''}
+                    {/* "left" and "upcoming" are counted from the jobs slice; when it
+                        did not load, say that instead of "0 left". */}
+                    {r.end_date ? ` until ${formatDate(r.end_date)}` : r.end_count ? (jobsUnknown ? ` · ${r.end_count} planned · visits not loaded` : ` · ${remaining} of ${r.end_count} left`) : ' · ongoing'}
+                    {!r.end_date && !r.end_count && (jobsUnknown ? ' · visits not loaded' : remaining > 0 ? ` · ${remaining} upcoming` : '')}
                   </span>
                 )
               })}
             </div>
           )}
-          {upcoming.length === 0 ? (
+          {jobsUnknown ? (
+            // Not "none": the jobs slice did not load, so nothing is known about
+            // upcoming work. The banner under the header says so; this keeps the
+            // card from contradicting it with a confident empty.
+            <p className="text-sm text-ink-muted">Upcoming visits could not be loaded — use Try again above.</p>
+          ) : upcoming.length === 0 ? (
             // Empty state leads to the fix, not just the fact (the warning banner
             // above already states it).
             <p className="text-sm text-ink-muted">
@@ -1255,20 +1378,60 @@ export default function CustomerDetailPage() {
           </Button>
         </CardHeader>
         <CardBody className="space-y-3">
-          {/* The roll-up: what this customer's whole portfolio is doing, before the
-              per-address detail. Summed from the rows already on the page, so it
-              cannot disagree with the figures elsewhere on this profile. Hidden for
-              a one-property customer — "1 property · 1 active service" is just their
-              only property, restated. */}
+          {/* The roll-up: what this customer's ADDRESSES are doing, before the
+              per-address detail. Summed from the rows already on the page — but
+              only the rows tied to a CURRENT address (propRollup skips a quote or
+              invoice with no property, or whose property was removed). Those rows
+              are in the customer-wide figures above and not here, so "Outstanding"
+              and "Open quotes" here can be LESS than the card and the header chip.
+              Same engines on both sides (invoiceBalance; the sent/draft rule) — but
+              not the same threshold: the header keeps any positive balance and the
+              roll-up skips one cent, so the caption below is computed over the
+              complement DIRECTLY (see there), never as header minus roll-up. The
+              line above the grid says the scope; the caption names the difference
+              whenever there is one. Hidden for a one-property customer — "1
+              property · 1 active service" is just their only property, restated. */}
           {properties.length > 1 && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
-              <RollupStat icon={Repeat} label="Active services" value={String(rollupTotals.activeServices)} />
-              <RollupStat icon={CalendarClock} label="Upcoming visits" value={String(rollupTotals.upcoming)} />
-              <RollupStat icon={FileText} label="Open quotes" value={String(rollupTotals.openQuotes)} />
-              {rollupTotals.outstanding > 0.01 && (
-                <RollupStat icon={DollarSign} label="Outstanding" value={formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
-              )}
+            <div className="space-y-2">
+              <p className="text-[11px] text-ink-faint">Across these addresses only</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
+                {/* Each stat stands on one slice; a slice that did not load is "—". */}
+                <RollupStat icon={Repeat} label="Active services" value={jobsUnknown ? '—' : String(rollupTotals.activeServices)} />
+                <RollupStat icon={CalendarClock} label="Upcoming visits" value={jobsUnknown ? '—' : String(rollupTotals.upcoming)} />
+                <RollupStat icon={FileText} label="Open quotes" value={quotesUnknown ? '—' : String(rollupTotals.openQuotes)} />
+                {(moneyUnknown || rollupTotals.outstanding > 0.01) && (
+                  <RollupStat icon={DollarSign} label="Outstanding" value={moneyUnknown ? '—' : formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
+                )}
+              </div>
+              {(() => {
+                // "Not tied to a current address" is only provable while the current
+                // addresses are known. A failed Properties read keeps last-known-good
+                // rows on screen (the banner names it), so the caption says nothing.
+                if (unknownFrom('Properties')) return null
+                // Money is summed over the complement under the roll-up's OWN rule —
+                // same status filter, same per-invoice > 0.01 — not as the header
+                // total minus the roll-up. The header counts a one-cent balance
+                // (Math.max(0, bal)) that the roll-up skips (bal > 0.01), so that
+                // subtraction can attribute a linked cent, plus float residue, to
+                // "no current address". Header and roll-up figures are unchanged.
+                const owedElsewhere = moneyUnknown ? 0 : invoices
+                  .filter(i => i.status !== 'draft' && i.status !== 'cancelled' && !(i.property_id && propRollup[i.property_id]))
+                  .reduce((s, i) => { const b = invoiceBalance(i, feeSettings).balance; return b > 0.01 ? s + b : s }, 0)
+                // The quote half is exact already: identical predicate on both sides,
+                // integer count, property gate the only difference.
+                const quotesElsewhere = quotesUnknown ? 0 : openQuotesAll.length - rollupTotals.openQuotes
+                const parts = [
+                  owedElsewhere > 0.01 ? `${formatCurrency(owedElsewhere)} outstanding` : '',
+                  quotesElsewhere > 0 ? `${quotesElsewhere} open quote${quotesElsewhere !== 1 ? 's' : ''}` : '',
+                ].filter(Boolean)
+                if (!parts.length) return null
+                return (
+                  <p className="text-[11px] text-ink-faint">
+                    Not tied to a current address, so counted in the totals above only: {parts.join(' and ')}.
+                  </p>
+                )
+              })()}
             </div>
           )}
           {addingProperty && (
@@ -1291,7 +1454,9 @@ export default function CustomerDetailPage() {
               </div>
             </div>
           )}
-          {properties.length === 0 && !addingProperty ? (
+          {unknownFrom('Properties') && properties.length === 0 && !addingProperty ? (
+            <InlineEmpty className="py-6">Properties could not be loaded — use Try again above.</InlineEmpty>
+          ) : properties.length === 0 && !addingProperty ? (
             // Properties are created from the customer's address, so "none" almost
             // always means "this customer has no address" — which is why they can't
             // be scheduled, measured or priced. Say that, and offer the fix.
@@ -1341,21 +1506,26 @@ export default function CustomerDetailPage() {
                         two "100 Main St" in different towns must not read as one. */}
                     {propertyLabel(p, { primaryTag: true })}
                   </Link>
-                  <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
+                  <span className="text-xs text-ink-muted shrink-0">{jobsUnknown ? 'jobs not loaded' : `${jobCount} job${jobCount !== 1 ? 's' : ''}`}</span>
                 </div>
                 {/* What this ADDRESS is doing — the roll-up's per-property half. A job
                     count alone says how busy it's been, never whether it's earning,
                     booked, or owing. Each figure is omitted when it's zero: a quiet
-                    property should read as quiet, not as a row of noughts. */}
+                    property should read as quiet, not as a row of noughts — but a
+                    slice that did not LOAD is named, because silence there would
+                    read as quiet too, and that is the one claim we cannot make. */}
                 {(() => {
                   const r = propRollup[p.id]
                   if (!r) return null
                   const facts = [
-                    r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
-                    r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
-                    r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
-                    r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
-                    !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                    !jobsUnknown && r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
+                    !jobsUnknown && r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
+                    !quotesUnknown && r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
+                    !moneyUnknown && r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
+                    !jobsUnknown && !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                    jobsUnknown && { icon: CalendarClock, text: 'visits not loaded', tone: 'text-ink-faint' },
+                    quotesUnknown && { icon: FileText, text: 'quotes not loaded', tone: 'text-ink-faint' },
+                    moneyUnknown && { icon: DollarSign, text: 'balance not loaded', tone: 'text-ink-faint' },
                   ].filter(Boolean) as { icon: typeof Repeat; text: string; tone: string }[]
                   if (!facts.length) return null
                   return (
