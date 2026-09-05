@@ -111,7 +111,10 @@ const TAB_KEYS = [...PAGE.matchAll(/\{ key: '([\w-]+)', label:/g)].map(m => m[1]
 // The three that share ONE Save footer at the bottom of the page; every other tab
 // owns its own saving behaviour and therefore owes the owner a sentence about it.
 const FORM_TABS = ['business', 'pricing', 'scheduling']
-const selfSavingTabs = TAB_KEYS.filter(k => !FORM_TABS.includes(k))
+// Advanced tools is a navigation directory, with no settings or save action.
+// verify:navigation covers its enabled links. Every other non-form settings tab
+// must still explain its own save/export behavior; new tabs enter this check.
+const selfSavingTabs = TAB_KEYS.filter(k => !FORM_TABS.includes(k) && k !== 'advanced')
 // ⚠️ Bounded by the NEXT tab's marker, not by a fixed character count. A fixed
 // window spills into the following block, so a tab that had lost its own
 // SaveContract still "found" its neighbour's and the check passed — verified by
@@ -123,7 +126,7 @@ const tabBlock = (key: string) => {
   return next === -1 ? PAGE.slice(start) : PAGE.slice(start, start + 1 + next)
 }
 const withoutContract = selfSavingTabs.filter(k => !/<SaveContract text=/.test(tabBlock(k)))
-check(`every non-form tab carries a SaveContract line — ${selfSavingTabs.length} checked`,
+check(`every non-form settings tab carries a SaveContract line — ${selfSavingTabs.length} checked`,
   TAB_KEYS.length > 0 && withoutContract.length === 0,
   withoutContract.length
     ? `${withoutContract.join(', ')} — a tab that saves on its own must say so`
