@@ -17,7 +17,7 @@ import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
-import { formatCurrency, cn } from '@/lib/utils'
+import { formatCurrency, cn, timeAgo } from '@/lib/utils'
 import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw, HelpCircle } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
 
@@ -39,11 +39,25 @@ export default function RevenueIntelligencePage() {
   const [filter, setFilter] = useState<OppKind | 'all'>('all')
   const [busy, setBusy] = useState<string | null>(null)
   const [showForecast, setShowForecast] = useState(false)
+  // ⭐ A refresh that fails must SAY so. loadRevenueIntel returns null when any
+  // read errors (its honesty gate) and throws on a dropped connection; both used
+  // to fall through `if (res)` with nothing said, so the previous figures stayed
+  // on screen as if they were current. The report is still KEPT — stale data
+  // labelled stale beats a blank page — but it is labelled, dated, and a retry
+  // is offered in the same line. `loadedAt` is null while the figures are the
+  // session cache's (an earlier visit), so the label says "earlier results".
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [loadedAt, setLoadedAt] = useState<number | null>(null)
 
   async function load() {
+    setLoading(true)
+    setRefreshError(null)
     try {
       const res = await loadRevenueIntel(supabase)
-      if (res) { setReport(res.report); setFeedback(res.feedback); writeCache('revintel', res.report) }
+      if (res) { setReport(res.report); setFeedback(res.feedback); setLoadedAt(Date.now()); writeCache('revintel', res.report) }
+      else setRefreshError('Could not refresh')
+    } catch {
+      setRefreshError('Could not refresh')
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -79,7 +93,7 @@ export default function RevenueIntelligencePage() {
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Who to call next" />
       <p className="text-sm text-ink-muted">
         Could not load revenue intelligence — check your connection and{' '}
-        <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">try again</button>.
+        <button type="button" onClick={load} disabled={loading} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">try again</button>.
       </p>
     </PageContainer>
   )
@@ -120,6 +134,15 @@ export default function RevenueIntelligencePage() {
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Who to call next"
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
+
+      {/* ⭐ Stale is said, above everything it qualifies. Not a card: one line,
+          rendered only after a failed refresh, dating the figures still shown. */}
+      {refreshError && (
+        <p role="alert" className="text-xs text-amber-400">
+          {refreshError} — showing {loadedAt ? `results from ${timeAgo(new Date(loadedAt).toISOString())}` : 'earlier results'}, which may be out of date.{' '}
+          <button type="button" onClick={load} disabled={loading} className="underline font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">Retry</button>
+        </p>
+      )}
 
       {/* Summary — upside on the left, risk on the right (the two numbers that matter) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-rise">
@@ -180,14 +203,18 @@ export default function RevenueIntelligencePage() {
       <div className="flex flex-wrap items-center gap-1.5">
         {KINDS.map(k => {
           const n = kindCount(k)
-          if (k !== 'all' && n === 0) return null
+          // ⭐ The ACTIVE kind stays visible at zero. Before, a refresh (or the
+          // last dismissal) that emptied the selected kind hid its pill while
+          // `filter` still held it — an empty list under "All" that was not
+          // selected, with no way to see or clear the filter that caused it.
+          if (k !== 'all' && n === 0 && filter !== k) return null
           return (
             <FilterPill key={k} active={filter === k} onClick={() => setFilter(k)}>
               {k === 'all' ? 'All' : OPP_META[k as OppKind].label} {n > 0 && <span className="opacity-70 tabular-nums">{n}</span>}
             </FilterPill>
           )
         })}
-        <button onClick={load} title="Refresh" aria-label="Refresh opportunities" className="ml-auto h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><RefreshCw className="w-3.5 h-3.5" /></button>
+        <button onClick={load} disabled={loading} aria-busy={loading} title="Refresh" aria-label="Refresh opportunities" className="ml-auto h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"><RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} /></button>
       </div>
 
       {/* Ranked opportunities — the Action Center */}
