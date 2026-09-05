@@ -3034,8 +3034,17 @@ export default function SchedulePage() {
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     {/* The CTA runs the EXACT scope/mode/anchor that was simulated to
                         produce the moves, so it can never come back "already optimized". */}
+                    {/* ⭐ EVERY CTA NAMES ITS OWN SCOPE. The fallback used to read
+                        just "Optimize", which was the vaguest label on the widest
+                        scope: the two kinds that reach it (cluster, recurring) are
+                        both scope:'future', mode:'density' — they regroup work
+                        across FUTURE DAYS to cut driving. On the day view that word
+                        sits beside "Optimize day" and "Optimize route", which are
+                        day-scoped and mean different things again, so the one
+                        control that reschedules other days was the one that said
+                        least about itself. Naming the action, not the engine. */}
                     <Button size="sm" variant="secondary" onClick={() => launchOptimizer({ scope: s.scope, mode: s.mode, anchorDate: s.anchorDate })}>
-                      <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? (s.scope === 'month' ? 'Rebalance nearby weeks' : `Rebalance ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}’s week`) : s.kind === 'underutil' ? 'Consolidate' : 'Optimize'}
+                      <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? (s.scope === 'month' ? 'Rebalance nearby weeks' : `Rebalance ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}’s week`) : s.kind === 'underutil' ? 'Consolidate' : 'Group nearby work'}
                     </Button>
                   </div>
                 )}

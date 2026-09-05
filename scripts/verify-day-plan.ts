@@ -682,6 +682,30 @@ H('16. Refresh persistence and tenant isolation')
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ── Three "Optimize" controls, three different promises ─────────────────────
+// A day view can show all three at once, and they are NOT interchangeable:
+//   Optimize day    — day-scoped, constraint-aware proposal, ASKS before applying
+//   Optimize route  — day-scoped, geography only, applies immediately
+//   the suggestion CTA — scope:'future', regroups OTHER days to cut driving
+// Two of them already name their scope. The third said only "Optimize", which
+// was the least specific label attached to the widest blast radius. This does
+// not police wording generally — it pins the one collision a day view can show.
+console.log('\nThe optimize controls each say which one they are:')
+{
+  const SCHED = readFileSync(join(process.cwd(), 'src/app/dashboard/schedule/page.tsx'), 'utf8')
+  const OPS = readFileSync(join(process.cwd(), 'src/components/schedule/DayOpsPanel.tsx'), 'utf8')
+  const cta = SCHED.match(/s\.kind === 'underutil' \? 'Consolidate' : '([^']+)'/)?.[1] ?? ''
+  check('the multi-day suggestion CTA is not the bare word "Optimize"', cta !== 'Optimize',
+    'cluster and recurring suggestions are scope:future — a CTA that reschedules other days must not be the vaguest label on screen')
+  check('…and it names the action it performs', cta.length > 0 && /group|cluster|area|nearby/i.test(cta), `CTA reads "${cta}"`)
+  check('the day-scoped proposal still says "Optimize day"', /> Optimize day\b/.test(OPS),
+    'renaming this would break the distinction the suggestion CTA was clarified to preserve')
+  check('the day-scoped immediate reorder still says "Optimize route"', /> Optimize route\b/.test(OPS),
+    'the two DayOpsPanel controls are different algorithms with different confirmation boundaries')
+  check('…and they remain two separate controls, not merged', /setOptimizeOpen\(true\)/.test(OPS) && /onClick=\{optimizeRouteNow\}/.test(OPS),
+    'Optimize day ASKS; Optimize route applies immediately — collapsing them would hide a confirmation boundary')
+}
+
 console.log('')
 if (failures) {
   console.log(`✗ day-plan: ${failures} rule${failures === 1 ? '' : 's'} broken`)
