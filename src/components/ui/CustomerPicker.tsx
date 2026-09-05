@@ -55,12 +55,19 @@ export function CustomerPicker({
     setQuery(sel ? sel.name : '')
   }, [value, open, customers])
 
+  // A suggestion list owns its first Escape. Capture it before the enclosing
+  // dialog's listener, as PropertySelect and AddressAutocomplete already do.
+  const openRef = useRef(open); openRef.current = open
   useEffect(() => {
     function onDoc(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false) }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false) }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || !openRef.current) return
+      e.stopPropagation()
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
+    document.addEventListener('keydown', onKey, { capture: true })
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey, { capture: true }) }
   }, [])
 
   const matches = useMemo(() => {

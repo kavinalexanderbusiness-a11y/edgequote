@@ -240,6 +240,48 @@ console.log('\n═══ A save that did not happen loses nothing ═══')
     'measured: two taps in one frame produced ONE quote, because the first tap disabled both')
 }
 
+// ── 8. Picker keys act on suggestions before the surrounding form ──────────
+// Execute the actual handlers with synthetic events and setters. The browser
+// reproduction additionally exercises native form submission and dialog Escape.
+console.log('\n═══ Picker keys keep the surrounding draft intact ═══')
+for (const name of ['CustomerPicker', 'PropertySelect']) {
+  const source = read(`src/components/ui/${name}.tsx`)
+  const body = source.match(/function onKeyDown\(e: React\.KeyboardEvent\) \{([\s\S]*?)\n  \}/)?.[1]
+  if (!body) throw new Error(`Missing ${name} keyboard handler`)
+  const run = new Function('open', 'setOpen', 'setHi', 'rows', 'choose', 'e', body)
+  for (const key of ['Enter', 'ArrowDown']) {
+    let prevented = false, opened = false, highlight = -1, choices = 0
+    run(false, (value: boolean) => { opened = value }, (value: number) => { highlight = value }, [{}], () => { choices++ }, {
+      key, preventDefault() { prevented = true },
+    })
+    check(`${name}: closed ${key} opens suggestions without implicit submit/scroll`, prevented && opened && highlight === 0 && choices === 0)
+  }
+  let picked = -1, prevented = false
+  // The open handler reads the highlighted index from component state.
+  const chooseOpen = new Function('open', 'setOpen', 'setHi', 'rows', 'choose', 'e', 'hi', body)
+  chooseOpen(true, () => {}, () => {}, [{}, {}], (index: number) => { picked = index }, {
+    key: 'Enter', preventDefault() { prevented = true },
+  }, 1)
+  check(`${name}: open Enter still chooses the highlighted row`, prevented && picked === 1)
+}
+
+{
+  const source = read('src/components/ui/CustomerPicker.tsx')
+  const body = source.match(/function onKey\(e: KeyboardEvent\) \{([\s\S]*?)\n    \}/)?.[1]
+  if (!body) throw new Error('Missing customer dropdown Escape handler')
+  const escape = new Function('openRef', 'setOpen', 'e', body)
+  for (const open of [true, false]) {
+    let stopped = false, closed = false
+    escape({ current: open }, (next: boolean) => { closed = !next }, {
+      key: 'Escape', stopPropagation() { stopped = true },
+    })
+    check(`CustomerPicker: ${open ? 'open Escape belongs to suggestions' : 'closed Escape reaches the enclosing dialog'}`, stopped === open && closed === open)
+  }
+  check('customer Escape listener captures before the dialog and removes that same listener',
+    /addEventListener\('keydown', onKey, \{ capture: true \}\)/.test(source)
+    && /removeEventListener\('keydown', onKey, \{ capture: true \}\)/.test(source))
+}
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
   console.log(`\n❌ verify:mobile-save — ${failures} failure${failures === 1 ? '' : 's'}\n`)

@@ -184,7 +184,8 @@
     "verify:first-use-setup": "tsx scripts/verify-first-use-setup.ts",
     "verify:customer-card-recovery": "tsx scripts/verify-customer-card-recovery.ts",
     "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts",
-    "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts"
+    "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts",
+    "verify:theme": "tsx scripts/verify-theme.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

@@ -134,7 +134,8 @@ export function PropertySelect({
   function clear() { onChange(''); setQuery(''); setOpen(false) }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { setOpen(true); setHi(0); return }
+    // Opening suggestions must not also submit the surrounding job form.
+    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); setOpen(true); setHi(0); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, rows.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
     else if (e.key === 'Enter' && open) { e.preventDefault(); choose(hi) }

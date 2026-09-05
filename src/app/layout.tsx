@@ -29,7 +29,7 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0b1120',
+  themeColor: '#090a0c',
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',   // draw under the safe-area insets so we control them in CSS

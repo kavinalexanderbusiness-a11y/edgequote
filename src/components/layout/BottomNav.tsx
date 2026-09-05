@@ -93,7 +93,7 @@ export function BottomNav() {
         <span className="text-[10px] font-medium leading-none">{t.label}</span>
         {t.moduleKey === 'messages' && unread > 0 && (
           <span aria-label={`${unread} unread`}
-            className="absolute top-1 right-[calc(50%-1.4rem)] min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center tabular-nums">
+            className="absolute top-1 right-[calc(50%-1.4rem)] min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center tabular-nums">
             {unread > 9 ? '9+' : unread}
           </span>
         )}
@@ -121,7 +121,7 @@ export function BottomNav() {
             <div className="flex-1 flex items-center justify-center">
               <button onClick={() => setSheetOpen(o => !o)}
                 aria-label="Create" aria-expanded={sheetOpen}
-                className="w-12 h-12 -mt-4 rounded-full bg-accent text-white shadow-lg shadow-accent/30 flex items-center justify-center active:scale-95 transition-transform">
+                className="w-12 h-12 -mt-4 rounded-full bg-accent text-black shadow-lg shadow-accent/30 flex items-center justify-center active:scale-95 transition-transform">
                 <Plus className={cn('w-6 h-6 transition-transform', sheetOpen && 'rotate-45')} aria-hidden />
               </button>
             </div>
