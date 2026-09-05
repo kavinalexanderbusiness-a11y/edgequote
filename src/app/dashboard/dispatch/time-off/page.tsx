@@ -486,23 +486,34 @@ function BookTimeOffDialog({ supabase, userId, technicians, onClose, onSaved }: 
     if (inFlight.current) return
     inFlight.current = true
     setSaving(true)
-    const { error } = await supabase.from('pto_entries').insert({
-      user_id: userId, technician_id: techId, date, hours: h, kind, is_paid: paid,
-      // Snapshot the wage NOW — same rule as clock-in.
-      hourly_rate: paid ? rate : null,
-      notes: notes.trim() || null,
-    })
-    // Released on BOTH paths — this runs before the error branch — so a failed
-    // save can be retried at once, which is what matters after a duplicate-date
-    // refusal.
-    inFlight.current = false
-    setSaving(false)
-    if (error) {
-      if (error.code === '23505') { notify.error(`${tech?.name} already has ${PTO_KIND_LABELS[kind].toLowerCase()} booked on that day.`); return }
-      notify.error('Could not book: ' + error.message); return
+    // ⛔ finally, NOT a bare assignment after the await. supabase-js resolves on a
+    // query failure, but it REJECTS on a transport or session fault — and a
+    // release placed after the await never runs on that path, leaving the ref
+    // latched and the spinner turning for a dialog that can no longer save.
+    try {
+      const { error } = await supabase.from('pto_entries').insert({
+        user_id: userId, technician_id: techId, date, hours: h, kind, is_paid: paid,
+        // Snapshot the wage NOW — same rule as clock-in.
+        hourly_rate: paid ? rate : null,
+        notes: notes.trim() || null,
+      })
+      if (error) {
+        if (error.code === '23505') { notify.error(`${tech?.name} already has ${PTO_KIND_LABELS[kind].toLowerCase()} booked on that day.`); return }
+        notify.error('Could not book: ' + error.message); return
+      }
+      notify.success(`${PTO_KIND_LABELS[kind]} booked for ${tech?.name}.`)
+      onSaved(); onClose()
+    } catch {
+      // ⚠️ A request that never came back does NOT prove nothing was written — it
+      // may have reached the database and committed. Saying "not saved" here
+      // would invite a retry that books the day twice, which is the very thing
+      // the latch above exists to prevent. The honest answer is that the outcome
+      // is unknown, and the safe next step is to look before trying again.
+      notify.error('We could not confirm whether that saved — refresh and check before trying again.')
+    } finally {
+      inFlight.current = false
+      setSaving(false)
     }
-    notify.success(`${PTO_KIND_LABELS[kind]} booked for ${tech?.name}.`)
-    onSaved(); onClose()
   }
 
   return (
@@ -574,20 +585,26 @@ function AddHolidayDialog({ supabase, userId, onClose, onSaved }: {
     if (inFlight.current) return
     inFlight.current = true
     setSaving(true)
-    const { error } = await supabase.from('holidays').insert({
-      user_id: userId, date, name: name.trim(), is_paid: paid, default_hours: Number(hours) || 8,
-    })
-    // Released on BOTH paths — this runs before the error branch — so a failed
-    // save can be retried at once, which is what matters after a duplicate-date
-    // refusal.
-    inFlight.current = false
-    setSaving(false)
-    if (error) {
-      if (error.code === '23505') { notify.error('There is already a holiday on that date.'); return }
-      notify.error('Could not add: ' + error.message); return
+    // ⛔ Same contract as the time-off dialog: released in `finally`, because a
+    // transport or session fault REJECTS rather than resolving, and a release
+    // after the await never runs on that path.
+    try {
+      const { error } = await supabase.from('holidays').insert({
+        user_id: userId, date, name: name.trim(), is_paid: paid, default_hours: Number(hours) || 8,
+      })
+      if (error) {
+        if (error.code === '23505') { notify.error('There is already a holiday on that date.'); return }
+        notify.error('Could not add: ' + error.message); return
+      }
+      notify.success(`${name.trim()} added to the holiday calendar.`)
+      onSaved(); onClose()
+    } catch {
+      // ⚠️ Unknown, not "not saved" — see the note in the time-off dialog.
+      notify.error('We could not confirm whether that saved — refresh and check before trying again.')
+    } finally {
+      inFlight.current = false
+      setSaving(false)
     }
-    notify.success(`${name.trim()} added to the holiday calendar.`)
-    onSaved(); onClose()
   }
 
   return (
