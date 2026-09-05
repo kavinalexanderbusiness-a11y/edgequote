@@ -2929,13 +2929,12 @@ export default function SchedulePage() {
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
-          {/* ⭐ Tomorrow, by name. The day the owner plans is almost never the
-              one they are standing in, and "next period" was the only way to
-              reach it — a chevron whose meaning depends on the active view.
-              Day view only: on week/month it would mean something else. */}
-          {view === 'day' && format(cursor, 'yyyy-MM-dd') !== format(addDays(new Date(), 1), 'yyyy-MM-dd') && (
-            <Button variant="secondary" size="sm" onClick={() => setCursor(addDays(new Date(), 1))}>Tomorrow</Button>
-          )}
+          {/* The named "Tomorrow" shortcut that used to sit here was removed on
+              the owner's direction (Session 112) — the header stays simpler, and
+              tomorrow remains one tap away on the next-period chevron (and
+              reachable by ?d=, the date heading's calendar, and month/week
+              taps). Navigation capability is unchanged; only the extra button
+              is gone. */}
           <Button variant="secondary" size="sm" aria-label="Next period" onClick={() => navigate(1)}>
             <ChevronRight className="w-4 h-4" />
           </Button>
