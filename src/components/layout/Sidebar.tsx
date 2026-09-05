@@ -190,9 +190,12 @@ export function Sidebar() {
     return (
       <>
         <nav aria-label="Primary" className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
+          {/* Desktop rail only. On a phone this was a second door to the same palette,
+              behind the Menu tap and above the first real destination. The top bar’s
+              Search is one tap once the drawer is closed (scrim, X or swipe). */}
           <button
             onClick={() => { onNavigate?.(); openCommand() }}
-            className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface-raised transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="hidden lg:flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface-raised transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Search className="w-4 h-4" />
             <span className="flex-1 text-left">Search</span>
             <Kbd className="hidden lg:inline">⌘K</Kbd>
