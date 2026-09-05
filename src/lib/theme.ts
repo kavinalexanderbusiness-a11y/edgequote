@@ -10,8 +10,16 @@ export const THEME_KEY = 'eq-theme'
 
 export function getThemePref(): ThemePref {
   if (typeof window === 'undefined') return 'dark'
-  const v = window.localStorage.getItem(THEME_KEY)
-  return v === 'light' || v === 'system' ? v : 'dark'
+  // The pre-paint script seeds this from storage. After a selection it also
+  // keeps the active preference when the browser cannot persist the change.
+  const active = document.documentElement.dataset.themePref
+  if (active === 'light' || active === 'dark' || active === 'system') return active
+  try {
+    const v = window.localStorage.getItem(THEME_KEY)
+    return v === 'light' || v === 'system' ? v : 'dark'
+  } catch {
+    return 'dark'
+  }
 }
 
 export function resolveTheme(pref: ThemePref): 'light' | 'dark' {
@@ -21,7 +29,7 @@ export function resolveTheme(pref: ThemePref): 'light' | 'dark' {
 
 export function applyThemePref(pref: ThemePref) {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(THEME_KEY, pref)
   document.documentElement.dataset.theme = resolveTheme(pref)
   document.documentElement.dataset.themePref = pref
+  try { window.localStorage.setItem(THEME_KEY, pref) } catch { /* Applied for this visit; storage is optional. */ }
 }
