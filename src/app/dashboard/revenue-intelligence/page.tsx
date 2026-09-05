@@ -5,12 +5,12 @@ import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import {
-  loadRevenueIntel, recordRecommendation, RevenueIntelReport, Opportunity, LtvForecast,
+  loadRevenueIntel, recordRecommendation, readRecommendation, RevenueIntelReport, Opportunity, LtvForecast,
   OppKind, OPP_META, Confidence, FeedbackRow, priorityScoreLabel, priorityScoreTooltip,
 } from '@/lib/revenueIntelligence'
 import { INSUFFICIENT_LABEL, evidenceSummary, insufficientReason } from '@/lib/growthEvidence'
 import { concentrationFact } from '@/lib/growthConcentration'
-import { createActionLedger, withRow, type ActionOutcome } from '@/lib/growthActionState'
+import { createActionController, withRow, type ActionNotice } from '@/lib/growthActions'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
@@ -26,8 +26,6 @@ import { scrollBehavior } from '@/lib/motion'
 // the loud tinted pill is reserved for the churn-risk badge where alarm is the point.
 const CONF_DOT: Record<Confidence, string> = { high: 'bg-emerald-400', medium: 'bg-amber-400', low: 'bg-ink-faint' }
 const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium confidence', low: 'Worth a look' }
-// The button the owner tapped, named back to them when its save fails.
-const ACTION_LABEL: Record<'acted' | 'dismissed' | 'won', string> = { acted: 'Take action', dismissed: 'Dismiss', won: 'Mark won' }
 const RISK_PILL: Record<Confidence, string> = {
   high: 'text-red-400 border-red-500/30 bg-red-500/10',
   medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
@@ -40,13 +38,21 @@ export default function RevenueIntelligencePage() {
   const [feedback, setFeedback] = useState<Record<string, FeedbackRow>>({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<OppKind | 'all'>('all')
-  // ⭐ One save may be in flight per card, on several cards at once. Which cards
-  // are busy, and what each shows while its save is pending or after it fails,
-  // is decided by lib/growthActionState — pure, so it is proven offline in every
-  // interleaving — not by a single `busy` key that the last click overwrote.
-  const ledgerRef = useRef(createActionLedger<FeedbackRow>())
+  // ⭐ The tap handler lives in lib/growthActions — one save in flight per card
+  // (a synchronous latch), concurrent across cards, a server refusal restored
+  // and said, a dropped connection READ BACK rather than declared failed. The
+  // page only lends it React state through these callbacks, so the handler the
+  // page runs is the one verify:growth-actions drives offline.
   const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(new Set())
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
+  const controllerRef = useRef<ReturnType<typeof createActionController> | null>(null)
+  const controller = () => (controllerRef.current ??= createActionController({
+    record: (o, status, value) => recordRecommendation(supabase, o, status, value),
+    read: key => readRecommendation(supabase, key),
+    setRow: (key, row) => setFeedback(prev => withRow(prev, key, row)),
+    setBusy: setBusyKeys,
+    setNotice: setActionNotice,
+  }))
   const [showForecast, setShowForecast] = useState(false)
   // ⭐ A refresh that fails must SAY so. loadRevenueIntel returns null when any
   // read errors (its honesty gate) and throws on a dropped connection; both used
@@ -65,9 +71,9 @@ export default function RevenueIntelligencePage() {
       const res = await loadRevenueIntel(supabase)
       if (res) {
         setReport(res.report); setFeedback(res.feedback); setLoadedAt(Date.now()); writeCache('revintel', res.report)
-        // The server's feedback is the new baseline for every card; a ledger
-        // that remembered pre-refresh saves would restore to the wrong state.
-        ledgerRef.current = createActionLedger<FeedbackRow>()
+        // The server's feedback is the confirmed baseline for every card; cards
+        // with a save in flight keep their optimistic badge until it settles.
+        controller().onRefreshed(res.feedback)
       }
       else setRefreshError('Could not refresh')
     } catch {
@@ -84,32 +90,10 @@ export default function RevenueIntelligencePage() {
   // different, real-money feature — invoicing/payments own that, not this
   // advisor), but every surface reading this value must say "marked won", never
   // "revenue" or "collected". See the `wonValue` tile above.
-  //
-  // ⭐ OPTIMISTIC, BUT NEVER A LIE. The badge changes on tap and the save
-  // follows; if the save answers `ok: false` or throws, the card goes back to
-  // the last state the server acknowledged and one line says what was not
-  // recorded. Overlapping taps — on different cards, or twice on one — are
-  // reconciled by the ledger, never by whichever response happened to land last.
-  async function act(o: Opportunity, status: 'acted' | 'dismissed' | 'won') {
-    const ledger = ledgerRef.current
-    const row: FeedbackRow = { opportunity_key: o.key, kind: o.kind, status, expected_value: o.expectedValue, result_value: status === 'won' ? o.expectedValue : null }
-    const seq = ledger.begin(o.key, row, feedback[o.key])
-    setActionError(null)
-    setBusyKeys(new Set(ledger.pendingKeys()))
-    setFeedback(prev => withRow(prev, o.key, ledger.display(o.key)))
-    let outcome: ActionOutcome
-    try {
-      const r = await recordRecommendation(supabase, o, status, status === 'won' ? o.expectedValue : undefined)
-      outcome = r.ok ? { ok: true } : { ok: false, error: r.error }
-    } catch (e) {
-      outcome = { ok: false, error: String((e as Error)?.message ?? e) }
-    }
-    const settled = ledger.settle(o.key, seq, outcome)
-    setFeedback(prev => withRow(prev, o.key, settled.display))
-    setBusyKeys(new Set(ledger.pendingKeys()))
-    if (settled.failed && !settled.superseded) {
-      setActionError(`Couldn't save "${ACTION_LABEL[status]}" for ${o.customerName} — nothing was recorded. Check your connection and tap it again.`)
-    }
+  // The optimistic row (result_value = the forecast) is built by the controller;
+  // the page only forwards the tap. A second tap on a busy card is refused there.
+  function act(o: Opportunity, status: 'acted' | 'dismissed' | 'won') {
+    controller().act(o, status)
   }
 
   if (loading && !report) {
@@ -253,9 +237,15 @@ export default function RevenueIntelligencePage() {
       </div>
 
       {/* Ranked opportunities — the Action Center */}
-      {/* A save that failed is said once, here, above the cards it concerns; the
-          card itself has already gone back to its acknowledged state. */}
-      {actionError && <p role="alert" className="text-xs text-amber-400">{actionError}</p>}
+      {/* A save the server refused, or one whose answer the wire lost, is said
+          once here, above the cards it concerns. An unconfirmed one is not
+          declared failed: the owner is pointed at a refresh, not at a repeat. */}
+      {actionNotice && (
+        <p role="alert" className="text-xs text-amber-400">
+          {actionNotice.text}
+          {actionNotice.tone === 'unconfirmed' && <>{' '}<button type="button" onClick={load} disabled={loading} className="underline font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">Refresh now</button></>}
+        </p>
+      )}
       <div className="space-y-2.5">
         {inFilter.length === 0 ? (
           <EmptyState icon={Sparkles} className="py-12" title="No opportunities in this view yet"

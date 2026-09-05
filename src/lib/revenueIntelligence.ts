@@ -717,6 +717,28 @@ export async function recordRecommendation(
   return error ? { ok: false, error: error.message } : { ok: true }
 }
 
+/**
+ * Read back ONE recommendation row — the reconciliation step after a save whose
+ * answer was lost on the wire (a thrown request may still have committed).
+ * Never writes. `ok: false` means the read itself could not be made.
+ */
+export async function readRecommendation(
+  supabase: SupabaseClient,
+  key: string,
+): Promise<{ ok: true; row: FeedbackRow | null } | { ok: false; error: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) return { ok: false, error: 'Not signed in' }
+    const { data, error } = await supabase.from('revenue_recommendations')
+      .select('opportunity_key, kind, status, expected_value, result_value')
+      .eq('user_id', session.user.id).eq('opportunity_key', key).limit(1)
+    if (error) return { ok: false, error: error.message }
+    return { ok: true, row: (data as FeedbackRow[] | null)?.[0] ?? null }
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) }
+  }
+}
+
 // ── loader ──────────────────────────────────────────────────────────────────────
 export interface RevenueIntelLoad { report: RevenueIntelReport; feedback: Record<string, FeedbackRow> }
 export async function loadRevenueIntel(supabase: SupabaseClient): Promise<RevenueIntelLoad | null> {
