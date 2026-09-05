@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect } from 'react'
-import { AlertTriangle, RotateCw } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
+import * as Sentry from '@sentry/nextjs'
+import { AlertTriangle, RotateCw, LayoutDashboard } from 'lucide-react'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { Card } from '@/components/ui/Card'
 
@@ -11,14 +12,28 @@ import { Card } from '@/components/ui/Card'
 // occurred" — no sidebar, no nav, no way back. The dev overlay hides that, so it
 // would only ever have been seen in production.
 //
-// It matters most now that loadDashboard THROWS on a failed read instead of
-// rendering zeros: "we couldn't load your morning" has to be visible and
-// retryable, because the alternative — a calm $0 dashboard — is the one outcome
-// the owner must never be shown.
+// It is the boundary for EVERY page under /dashboard — quotes, jobs, customers,
+// invoices, settings — not only the home screen, so it speaks about "this page",
+// promises nothing it cannot know (it cannot see the data, so it does not vouch
+// for it), and never prints the thrown message: a driver or provider string is
+// not something a customer-facing screen should relay. The digest Next attaches
+// to a server-side throw is safe to show — it identifies the incident in the
+// server log without describing it — and it is the one thing worth quoting.
+//
+// It still matters most for loadDashboard, which THROWS on a failed read instead
+// of rendering zeros: "this didn't load" has to be visible and retryable,
+// because the alternative — a calm $0 dashboard — is the one outcome the owner
+// must never be shown.
 export default function DashboardError({
   error, reset,
 }: { error: Error & { digest?: string }; reset: () => void }) {
-  useEffect(() => { console.error('[dashboard]', error) }, [error])
+  useEffect(() => {
+    console.error('[dashboard]', error)
+    // A render or client-side throw under /dashboard is not seen by the server's
+    // automatic instrumentation; report it here. No-op when Sentry is not
+    // configured — captureException on an uninitialised SDK is safe and silent.
+    Sentry.captureException(error)
+  }, [error])
 
   return (
     <PageContainer width="wide">
@@ -28,17 +43,23 @@ export default function DashboardError({
             <AlertTriangle className="w-4.5 h-4.5 text-amber-400" />
           </span>
           <div className="min-w-0">
-            <h1 className="text-base font-bold tracking-tight text-ink">Your dashboard didn&rsquo;t load</h1>
+            <h1 className="text-base font-bold tracking-tight text-ink">This page didn&rsquo;t load</h1>
             <p className="text-sm text-ink-muted mt-1">
-              Something went wrong fetching this morning&rsquo;s numbers, so we&rsquo;re not showing any —
-              a figure we couldn&rsquo;t read is worse than none. Nothing is wrong with your data.
+              Something went wrong while loading it, so nothing is shown rather than a figure that couldn&rsquo;t be read.
+              Try again, or go back to your dashboard.
             </p>
-            {error.message && (
-              <p className="text-xs text-ink-faint mt-2.5 font-mono break-words">{error.message}</p>
-            )}
-            <div className="flex items-center gap-2 mt-4">
+            <div className="flex flex-wrap items-center gap-2 mt-4">
               <Button onClick={reset}><RotateCw className="w-4 h-4" /> Try again</Button>
+              <ButtonLink href="/dashboard" variant="secondary"><LayoutDashboard className="w-4 h-4" /> Go to your dashboard</ButtonLink>
             </div>
+            {/* The digest ties this screen to the server log entry for the same
+                failure. Shown instead of the message: it identifies, it does not
+                describe. */}
+            {error.digest && (
+              <p className="text-xs text-ink-faint mt-3">
+                If this keeps happening, quote reference <span className="font-mono">{error.digest}</span>.
+              </p>
+            )}
           </div>
         </div>
       </Card>
