@@ -1,6 +1,6 @@
 # Disaster recovery
 
-Rebuilding EdgeQuote from nothing.
+Rebuilding EdgeHQ from nothing.
 
 > ## Read this first
 >
@@ -9,8 +9,9 @@ Rebuilding EdgeQuote from nothing.
 > It contains **no customer data whatsoever**: no customers, quotes, invoices,
 > payments, jobs, messages or photos.
 >
-> Those come from a **Supabase backup**, and only from there. If backups are gone,
-> the data is gone, and no amount of this document changes that.
+> Database records require a verified database backup. Uploaded photos and other
+> files require a separate Storage object backup (§4). Neither is supplied by a
+> schema rebuild; confirm recoverable copies before claiming either is protected.
 >
 > The two are separate operations and they happen in a specific order. Doing them
 > out of order — restoring a backup over a freshly built schema — will fail or, worse,
@@ -24,6 +25,7 @@ Rebuilding EdgeQuote from nothing.
 |---|---|
 | This repository | at the commit you intend to run |
 | A Supabase backup | PITR or a daily snapshot. **Verify it exists before dropping anything** |
+| A Storage object backup | separately verified file contents and paths; see §4 |
 | Supabase account access | to create a project and restore |
 | The env vars | see §5 — recovery stalls here more often than anywhere else |
 | Stripe / Twilio / Resend credentials | the app boots without them and then silently cannot take money or send anything |
@@ -34,7 +36,7 @@ Rebuilding EdgeQuote from nothing.
 
 | Situation | Do this |
 |---|---|
-| Database intact, schema damaged (bad migration, dropped object) | **Do not rebuild.** Restore PITR to just before the damage. §7 |
+| Database intact, schema damaged (bad migration, dropped object) | Evaluate a verified recovery point and an approved restore plan. §7 |
 | Project or database lost entirely | Full rebuild: §1 → §6 |
 | Standing up a second environment (staging) | §1 → §5, skip §2 (no data to restore) |
 | Only Vercel is broken | Nothing here applies. §6 alone |
@@ -137,8 +139,15 @@ bucket precisely because `job-photos` is public. **If you recreate buckets by ha
 re-check every `public` flag** — a private bucket recreated as public exposes
 receipts and internal site photos.
 
-Files themselves restore from the Supabase storage backup, or are gone. A missing
-file renders as a broken image; it does not break the app.
+Database backups contain Storage metadata, **not the uploaded file contents**.
+Restoring the database cannot recover a deleted object. See the
+[Supabase backup documentation](https://supabase.com/docs/guides/platform/backups).
+
+Before claiming Storage recovery is ready, establish a separately protected object
+backup and rehearse restoring files into a scratch project. Verify object paths,
+private/public access, and sample downloads against the restored metadata. No
+object backup or successful file-restore rehearsal is currently evidenced here;
+logos, photos and receipts must therefore be treated as unproven recovery scope.
 
 ---
 
@@ -180,8 +189,12 @@ status — commit status has reported "pending" for deployments that were never 
 
 ## 7. Point-in-time restore (the common case)
 
-For a bad migration or a dropped object, **do not rebuild** — restore PITR to just
-before the change. Then:
+Use PITR only when it is enabled and the required recovery point is available.
+For a bad migration or a dropped database object, first confirm the recoverable
+window and the effect on all tenant data. Restoring production requires explicit
+approval and a downtime/data-loss plan; rehearse against a scratch project first.
+If PITR is unavailable, use a verified backup and account for later writes. After
+an approved restore:
 
 ```bash
 npm run schema:contract    # re-read what production now is
