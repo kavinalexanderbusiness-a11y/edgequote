@@ -45,7 +45,7 @@ import { newClientMessageId } from '@/lib/comms/idempotency'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  Plus, Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
+  Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2, Sparkles, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
   FileSignature, ClipboardCheck, Phone, User as UserIcon, Star,
 } from 'lucide-react'
