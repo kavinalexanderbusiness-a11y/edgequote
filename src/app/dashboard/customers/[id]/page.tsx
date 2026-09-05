@@ -120,6 +120,10 @@ export default function CustomerDetailPage() {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const [tick, setTick] = useState(0)   // bump to re-run load() (used by realtime)
+  // Which full load is current. Every run of the load effect advances it; a narrow
+  // refetch captures it when it starts, so a run that began earlier can never land
+  // over one that began later (the effect itself retires through its cleanup).
+  const loadGen = useRef(0)
 
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [referrer, setReferrer] = useState<{ id: string; name: string } | null>(null)
@@ -292,6 +296,17 @@ export default function CustomerDetailPage() {
   }, [id])
 
   useEffect(() => {
+    // ONE run owns the screen. reload() (tick) re-runs this effect, and React runs
+    // the previous run's cleanup first — which retires it: after any await a
+    // retired run applies nothing (no state, no banner, no cache write), so the
+    // run that started LAST is the only one that can land. Without this, a slow
+    // first load resolving after a Try-again / realtime reload overwrote the
+    // fresher rows (and re-cached them), or raised its stale failure banner over
+    // a successful retry. This is about ORDER within one customer, not identity:
+    // an id change already unmounts this instance — the [id] segment is keyed by
+    // its value — so no run here ever sees another customer's id.
+    let active = true
+    loadGen.current += 1
     async function load() {
       const lease = cacheLease()
       // Local session read (no GoTrue round-trip). ONE batch for everything that
@@ -300,6 +315,7 @@ export default function CustomerDetailPage() {
       // round-trip below. This replaces ~5 serial hops that also re-ran in full on every
       // realtime refresh.
       const { data: { session } } = await supabase.auth.getSession()
+      if (!active) return
       const user = session?.user
       // No session must not strand the skeleton forever.
       if (!user) { setLoading(false); return }
@@ -328,6 +344,7 @@ export default function CustomerDetailPage() {
         // Still part of this batch, so it stays as parallel as it was inline.
         loadCustomerTimelineSources(supabase, user!.id, id),
       ])
+      if (!active) return
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
       if (cRes.error && cRes.error.code !== 'PGRST116') { setLoadError('Could not load this customer — check your connection.'); setLoading(false); return }
@@ -395,6 +412,7 @@ export default function CustomerDetailPage() {
           : null,
         loadJobTimelineSources(supabase, jobIds),
       ])
+      if (!active) return
 
       // Hand the engine the rows; it decides what an event is. The page no longer
       // knows how a credit differs from a refund.
@@ -415,6 +433,7 @@ export default function CustomerDetailPage() {
       setLoading(false)
     }
     load()
+    return () => { active = false }
   }, [id, tick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live timeline: a new message, payment, quote/job/invoice change, or portal
@@ -442,6 +461,13 @@ export default function CustomerDetailPage() {
   const gatherTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const narrowRefetch = useCallback(async (scopes: Set<string>) => {
+    // A full load that starts after this narrow refetch supersedes it: a slice
+    // lands only while no newer full run has begun (the effect's own rule, from
+    // the other side). A narrow refetch that starts DURING a full load is not
+    // retired by it and may still be overwritten by that older run's slices —
+    // a known limit, recorded in the guard.
+    const gen = loadGen.current
+    const live = () => gen === loadGen.current
     const tasks: PromiseLike<unknown>[] = []
     // A narrow refetch that fails must say so too, and one that succeeds must
     // clear the name — the same two-way rule the timeline warning follows.
@@ -449,26 +475,30 @@ export default function CustomerDetailPage() {
       setReadMissing(prev => ok ? prev.filter(s => s !== slice) : prev.includes(slice) ? prev : [...prev, slice])
     if (scopes.has('quotes')) tasks.push(
       supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false })
-        .then(r => { noteSlice('Quotes', !r.error); if (!r.error) setQuotes((r.data as Quote[]) || []) }),
+        .then(r => { if (!live()) return; noteSlice('Quotes', !r.error); if (!r.error) setQuotes((r.data as Quote[]) || []) }),
     )
     if (scopes.has('jobs')) tasks.push((async () => {
       const r = await supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true })
+      if (!live()) return
       noteSlice('Jobs', !r.error)
       if (r.error) return
       const rows = (r.data as Job[]) || []
       setJobs(rows)
       const tlJob = await loadJobTimelineSources(supabase, rows.map(j => j.id))
+      if (!live()) return
       setTlSources(prev => ({ ...prev, ...tlJob.sources }))
     })())
     if (scopes.has('invoices') || scopes.has('payments')) tasks.push(
       supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false })
-        .then(r => { noteSlice('Invoices', !r.error); if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
+        .then(r => { if (!live()) return; noteSlice('Invoices', !r.error); if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
     )
     if (scopes.has('payments') || scopes.has('messages') || scopes.has('service_requests')) tasks.push((async () => {
       const { data: { session } } = await supabase.auth.getSession()
+      if (!live()) return
       const uid = session?.user?.id
       if (!uid) return
       const tlCust = await loadCustomerTimelineSources(supabase, uid, id)
+      if (!live()) return
       setTlSources(prev => ({ ...prev, ...tlCust.sources }))
       // A realtime refetch that drops a source must state it too — and a clean
       // refetch must clear a stale warning, or the card cries wolf forever.
