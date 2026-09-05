@@ -217,8 +217,69 @@ console.log('\nReassignment is informed and cancellations are named:')
     'a bare count made "did that cancellation land?" require leaving the board')
 }
 
-if (failures) {
-  console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
-  process.exit(1)
+// ── The day picker is a SCOPE: only the newest request may speak ────────────
+// Three reads are filtered by the selected date, and a slow response for the day
+// you just left used to land after the fast one for the day you are on. This is
+// not asserted ABOUT the source — it EXTRACTS the real fetchAll and runs it over
+// controlled responses, because "useCallback([date]) refetches" was exactly the
+// reasoning that made this look safe when it was not.
+async function raceChecks() {
+  console.log('\n═══ A stale day may finish, but it may not speak ═══')
+  const { transformSync } = await import('esbuild')
+  const { createRequestGate } = await import('../src/lib/requestGate')
+  const s0 = PAGE.indexOf('const fetchAll = useCallback(async () => {')
+  const e0 = PAGE.indexOf('}, [supabase, date])', s0)
+  const raw = PAGE.slice(PAGE.indexOf('{', s0 + 40) + 1, PAGE.lastIndexOf('}', e0))
+  const expr = transformSync(`(async () => {${raw}})`, { loader: 'ts' }).code.replace(/;\s*$/, '')
+  type St = { jobs: { id: string }[]; notes: { day: string }[] | null; loadError: string | null; loading: boolean }
+  const defer = () => { let r!: (v: unknown) => void; const p = new Promise<unknown>(res => { r = res }); return { p, r } }
+  const harness = () => {
+    const st: St = { jobs: [], notes: null, loadError: null, loading: true }
+    const gate = { current: createRequestGate() }
+    const run = (date: string, jobsP: Promise<unknown>) => {
+      const th = (p: Promise<unknown>): unknown => ({ select: () => th(p), eq: () => th(p), order: () => th(p), maybeSingle: () => p, then: (a: unknown, b: unknown) => (p as Promise<unknown>).then(a as never, b as never) })
+      const empty = Promise.resolve({ data: null, error: null })
+      const d: Record<string, unknown> = {
+        gate, supabase: { auth: { getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }) }, from: (t: string) => th(t === 'jobs' ? jobsP : empty) },
+        date, DAY_STATUS_SELECT: '*', DEFAULT_WORK_START: '08:00',
+        loadCrews: async () => [], loadTechnicians: async () => [], loadDispatchNotes: async () => [{ day: date }],
+        resolveAutomations: () => ({}), setUid: () => {}, setCrews: () => {}, setTechnicians: () => {},
+        setEquipment: () => {}, setAutomations: () => {}, setSettings: () => {}, setDayRow: () => {},
+        setJobs: (v: St['jobs']) => { st.jobs = v }, setNotes: (v: St['notes']) => { st.notes = v },
+        setLoadError: (v: string | null) => { st.loadError = v }, setLoading: (v: boolean) => { st.loading = v },
+      }
+      return (new Function(...Object.keys(d), `return (${expr})()`) as (...a: unknown[]) => Promise<void>)(...Object.values(d))
+    }
+    return { st, run }
+  }
+  { const { st, run } = harness(), o = defer(), n = defer()
+    const pO = run('2026-06-01', o.p as Promise<unknown>), pN = run('2026-06-02', n.p as Promise<unknown>)
+    n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
+    o.r({ data: [{ id: 'JOB-OLD' }], error: null }); await pO
+    check('a stale SUCCESS cannot overwrite the newer day', st.jobs[0]?.id === 'JOB-NEW', `board shows ${st.jobs.map(j => j.id).join(',')}`)
+    check('…and the notes still belong to the day on screen', st.notes?.[0]?.day === '2026-06-02', `notes are for ${st.notes?.[0]?.day}`) }
+  { const { st, run } = harness(), o = defer(), n = defer()
+    const pO = run('2026-06-01', o.p as Promise<unknown>), pN = run('2026-06-02', n.p as Promise<unknown>)
+    n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
+    o.r({ data: null, error: { message: 'connection reset' } }); await pO
+    check('a stale FAILURE cannot banner over a good day', st.loadError === null, `banner said ${JSON.stringify(st.loadError)}`)
+    check('…and leaves the newer rows alone', st.jobs[0]?.id === 'JOB-NEW') }
+  { const { st, run } = harness(), o = defer(), n = defer()
+    // (the harness starts loading:true, as the page does while a day is in flight)
+    const pO = run('2026-06-01', o.p as Promise<unknown>), pN = run('2026-06-02', n.p as Promise<unknown>)
+    o.r({ data: [{ id: 'JOB-OLD' }], error: null }); await pO
+    check('a stale FINALLY cannot clear the spinner while the new day is pending', st.loading === true)
+    n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
+    check('…and the newest request still clears it when it lands', st.loading === false) }
+  { const { st, run } = harness(), o = defer()
+    const p = run('2026-06-01', o.p as Promise<unknown>); o.r({ data: [{ id: 'ONLY' }], error: null }); await p
+    check('the ordinary single-load path is unchanged', st.jobs[0]?.id === 'ONLY' && !st.loading && st.loadError === null) }
 }
-console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes\n')
+
+raceChecks().then(() => {
+  if (failures) {
+    console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
+    process.exit(1)
+  }
+  console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes, newest day wins\n')
+})
