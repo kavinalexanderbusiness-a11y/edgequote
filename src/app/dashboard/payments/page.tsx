@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { createRequestGate } from '@/lib/requestGate'
 import { Payment, BusinessSettings, Invoice, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { receiptNumberFor, recordDeposit } from '@/lib/payments/ledger'
 import { summarizeTransactions, creditBalances, ledgerRowType, cashAmountOf } from '@/lib/payments/analytics'
@@ -139,9 +140,20 @@ export default function PaymentsPage() {
   const [depBusy, setDepBusy] = useState(false)
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
 
+  // ⛔ THE RANGE IS A SERVER-SIDE SCOPE, so changing it refetches — and four things
+  // here can have a fetch in flight at once (the range control, realtime, saving a
+  // deposit, Retry). Without a gate the response that RESOLVES last wins, not the
+  // one asked for last: pick 365 days then quickly 30, and the slow 365-day rows
+  // land on top of the 30-day ones. The control then reads '30 days' over a year of
+  // payments, and `summary` — derived from those rows — shows a year's takings under
+  // a 30-day heading. A stale response may finish; it may not speak.
+  const gate = useRef(createRequestGate())
+
   async function fetchAll() {
+    const token = gate.current.begin()
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
+    if (!gate.current.isCurrent(token)) return
     if (!user) { setLoadError('Session expired — sign in again.'); setLoading(false); return }
     setUid(user.id)
     const sinceIso = sinceIsoFor(range)
@@ -158,6 +170,9 @@ export default function PaymentsPage() {
     ])
     // A failed read must never render as "no payments" — an empty ledger and a broken
     // query look identical to someone reconciling their books.
+    // ⛔ Guarded before the ERROR branch too: a superseded request that failed must
+    // not replace a newer request's rows with its error, nor clear its loading state.
+    if (!gate.current.isCurrent(token)) return
     if (pRes.error) { setLoadError('Could not load payments: ' + pRes.error.message); setLoading(false); return }
     const all = (pRes.data as unknown as Row[]) || []
     setTruncated(all.length > LIMIT)
