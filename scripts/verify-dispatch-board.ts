@@ -237,11 +237,14 @@ async function raceChecks() {
   const harness = () => {
     const st: St = { jobs: [], notes: null, loadError: null, loading: true }
     const gate = { current: createRequestGate() }
-    const run = (date: string, jobsP: Promise<unknown>, sessionP: Promise<unknown> = Promise.resolve(null), notesThrows = false) => {
+    // `sessionUser: null` makes getSession resolve with NO session — the shape an
+    // expired login has. Until this existed the harness could only DELAY a good
+    // session, so the guard on the session path had nothing to fail against.
+    const run = (date: string, jobsP: Promise<unknown>, sessionP: Promise<unknown> = Promise.resolve(null), notesThrows = false, sessionUser: { id: string } | null = { id: 'u1' }) => {
       const th = (p: Promise<unknown>): unknown => ({ select: () => th(p), eq: () => th(p), order: () => th(p), maybeSingle: () => p, then: (a: unknown, b: unknown) => (p as Promise<unknown>).then(a as never, b as never) })
       const empty = Promise.resolve({ data: null, error: null })
       const d: Record<string, unknown> = {
-        gate, supabase: { auth: { getSession: async () => { await sessionP; return { data: { session: { user: { id: 'u1' } } } } } }, from: (t: string) => th(t === 'jobs' ? jobsP : empty) },
+        gate, supabase: { auth: { getSession: async () => { await sessionP; return { data: { session: sessionUser ? { user: sessionUser } : null } } } }, from: (t: string) => th(t === 'jobs' ? jobsP : empty) },
         date, DAY_STATUS_SELECT: '*', DEFAULT_WORK_START: '08:00',
         loadCrews: async () => [], loadTechnicians: async () => [], loadDispatchNotes: async () => { if (notesThrows) throw new Error('notes read failed'); return [{ day: date }] },
         resolveAutomations: () => ({}), setUid: () => {}, setCrews: () => {}, setTechnicians: () => {},
@@ -253,6 +256,25 @@ async function raceChecks() {
     }
     return { st, run }
   }
+  // ── the SESSION path ────────────────────────────────────────────────────
+  // An older request whose login has expired, resolving AFTER a newer good one is
+  // already in flight. Without the gate check between getSession and the
+  // `if (!user)` branch, the stale run paints 'Session expired — sign in again.'
+  // over a day the owner is currently loading, and clears its spinner on the way
+  // out. Both are asserted, because that one branch does both.
+  { const { st, run } = harness(), o = defer(), n = defer(), sA = defer(), sB = defer()
+    // A: the old day, whose session will come back EMPTY, and come back LATE.
+    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>, false, null)
+    // B: the newer day — good session, jobs still pending, so it OWNS the spinner.
+    const pN = run('2026-06-02', n.p as Promise<unknown>, sB.p as Promise<unknown>)
+    sB.r(null); await new Promise(r => setTimeout(r, 0))
+    sA.r(null); await pO
+    check('a stale EMPTY session cannot paint "Session expired" over a newer day',
+      st.loadError === null, 'banner said ' + JSON.stringify(st.loadError))
+    check('…and cannot clear the spinner the newer day still owns', st.loading === true)
+    n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
+    check('…and the newer day still lands', st.jobs[0]?.id === 'JOB-NEW') }
+
   { const { st, run } = harness(), o = defer(), n = defer(), sA = defer()
     // A must CLEAR the session check before B begins — otherwise the session
     // guard alone ends the run and the later guards are never exercised.
