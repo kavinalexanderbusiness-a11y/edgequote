@@ -35,6 +35,15 @@
 // If the refusal ever regresses, the rows land in the fixture tenant's own
 // `measurements`, tagged with this run's id — never in anyone's book — and the
 // before/after count plus the tagged-bucket count fail loudly.
+//
+// ⭐ UNKNOWN IS NOT PERMISSION (S121 review of 6f246d68). The fixture tenant's
+// settings row is shared with every other fixture guard, so: nothing is minted
+// unless the prior state was READ without error (you cannot restore what you
+// could not read); the restore is then MEASURED — re-read while still signed
+// in, because after the harness signs out an RLS read sees nothing and a
+// "clean" result would be blindness, not cleanliness. The one call outside
+// the harness names a run-tagged synthetic bucket, never a real neighborhood,
+// so residue from a regression there is findable rather than invisible.
 
 import { randomUUID } from 'node:crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -75,9 +84,13 @@ async function main() {
 
   // ── The case that addresses no business at all ─────────────────────────────
   // A token that matches nothing resolves to no tenant, so this call can affect
-  // no one; it is the one write-intent call permitted outside the harness.
-  const forged = await attack(anon, 'forged-token-not-a-real-business', GHOST, 'T2N')
-  check('a forged booking token is refused',
+  // no one; it is the one write-intent call permitted outside the harness. That
+  // safety is a property of the deployed function this guard exists to test, so
+  // the bucket is a run-tagged synthetic name, never a real postal prefix: if
+  // the lookup ever regressed, the row it left would be findable by this tag.
+  const forgedBucket = `ZZ-GUARD-FORGED-${randomUUID().slice(0, 8)}`
+  const forged = await attack(anon, 'forged-token-not-a-real-business', GHOST, forgedBucket)
+  check(`a forged booking token is refused (bucket ${forgedBucket})`,
     forged.error === null && forged.data === false,
     `returned ${JSON.stringify(forged.data)} / error ${forged.error?.message ?? 'none'}`)
 
@@ -94,11 +107,25 @@ async function main() {
   const { db, uid, runId, tag } = t
   const bucket = tag('GUARD-BUCKET')
 
+  type Settings = { booking_token: string | null; booking_enabled: boolean }
+  const readSettings = async () => {
+    const { data, error } = await db.from('business_settings')
+      .select('booking_token, booking_enabled').eq('user_id', uid).limit(1)
+    return { row: ((data as Settings[] | null)?.[0] ?? null), error }
+  }
+
   // A booking token OF THE FIXTURE TENANT, minted for this run and withdrawn
-  // below. The row it lives on is the fixture tenant's own (RLS: settings own).
-  const { data: priorRows } = await db.from('business_settings')
-    .select('booking_token, booking_enabled').eq('user_id', uid).limit(1)
-  const prior = (priorRows as { booking_token: string | null; booking_enabled: boolean }[] | null)?.[0] ?? null
+  // below. The row it lives on is the fixture tenant's own (RLS: settings own)
+  // and is SHARED with every other fixture guard, so the prior state must be
+  // known before anything is written: an unreadable snapshot is a refusal to
+  // mint, never "there was nothing there".
+  const snapshot = await readSettings()
+  if (snapshot.error) {
+    fail('the fixture tenant\'s prior settings were read (nothing is minted otherwise)', snapshot.error.message)
+    await t.close()
+    return
+  }
+  const prior = snapshot.row
   const token = `zz-fixture-booking-${runId}-${randomUUID()}`
   const { error: mintErr } = await db.from('business_settings')
     .upsert({ user_id: uid, booking_token: token, booking_enabled: true }, { onConflict: 'user_id' })
@@ -115,6 +142,7 @@ async function main() {
     return count ?? -1
   }
 
+  try {
   try {
     const before = await countRows()
 
@@ -146,19 +174,36 @@ async function main() {
       `the bucket must be derived from the booking's persisted property, never from the request (${bucket})`)
   } finally {
     // Withdraw the token: the fixture tenant goes back to exactly what it was.
+    // `prior` is known here — an unreadable snapshot returned before minting.
     if (prior) {
       await db.from('business_settings')
         .update({ booking_token: prior.booking_token, booking_enabled: prior.booking_enabled }).eq('user_id', uid)
     } else {
       await db.from('business_settings').delete().eq('user_id', uid)
     }
-    await t.close()
   }
 
+  // ── Cleanup, MEASURED — while still signed in ────────────────────────────
+  // t.close() signs out. An RLS-scoped read as a signed-out client sees zero
+  // rows with no error, so a residue check placed after it would pass by being
+  // blind. Everything below runs BEFORE close(), and the session itself is
+  // asserted live at the moment of measurement.
+  const { data: sess } = await db.auth.getSession()
+  check('the cleanup is measured by a still-authenticated session (not blind)',
+    !!sess?.session?.access_token && sess.session.user?.id === uid, 'the session was gone before the residue was read')
+  const now = await readSettings()
+  check('the run-minted token was withdrawn and the settings row is back to its prior state',
+    !now.error && (prior
+      ? (now.row?.booking_token === prior.booking_token && now.row?.booking_enabled === prior.booking_enabled)
+      : now.row === null),
+    now.error ? now.error.message : `prior ${JSON.stringify(prior)} vs now ${JSON.stringify(now.row)}`)
   // Cleanup that is claimed but not measured is how ZZ- rows accumulated before.
   const residue = await fixtureResidue(t)
   check('the fixture tenant carries nothing from this run',
     Object.values(residue).every(n => n === 0), JSON.stringify(residue))
+  } finally {
+    await t.close()
+  }
 }
 
 main()
