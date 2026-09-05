@@ -386,11 +386,32 @@ const EMPTY_STAGES = (): Record<SalesStage, number> =>
 /**
  * The value a quote counts for at its rung.
  *
- * A WON deal counts at `accepted_price` when that snapshot exists, because it is
- * what the customer actually agreed to — on a multi-option quote it is the
+ * A WON deal counts at `accepted_price` when that snapshot exists — the figure
+ * recorded when the deal was marked won. On a multi-option quote that is the
  * chosen option's price, which can differ from the recommended one the quote was
  * reported at while it was open. Everything else counts at `total` (the
  * GENERATED column every other surface reports).
+ *
+ * ⚠️ `accepted_price` is NOT proof the customer agreed to that figure. S121
+ * established that STATUS IS NOT ACCEPTANCE EVIDENCE: a status flip or a
+ * born-accepted insert can leave a snapshot behind with no `quote_acceptances`
+ * row at all. This function is deliberately still right, because the question it
+ * answers is HISTORICAL — what the owner recorded as won, and at what figure —
+ * not whether that deal may be charged today. Current charge authority is a
+ * different question with a different answer (`quote_acceptance_is_current`,
+ * `depositChargeBlock`), and it is asked at the money doors, not here.
+ *
+ * ⛔ DO NOT "fix" this by falling back to the live `total` on a drifted quote.
+ * Proven both directions: a deal accepted at $1,400 whose document was later
+ * revised to $500 would be UNDERSTATED by $900, and one accepted at $500 whose
+ * document later grew to $2,000 would be INFLATED fourfold. The snapshot is the
+ * historical fact; the live total is a different quantity.
+ *
+ * ⭐ Every tile fed from here is labelled "Won" / "Won value" / "Collected" —
+ * a statement about what the owner marked and what money arrived, never a claim
+ * that a customer consented. Keep it that way: relabelling these as "Accepted"
+ * would turn an accurate status figure into a consent claim the data cannot
+ * support.
  *
  * NULL when there is no price at all. Never 0 — an unpriced draft is a deal
  * worth an unknown amount, and rendering it as $0 drags every average down.
