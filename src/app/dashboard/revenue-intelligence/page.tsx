@@ -15,7 +15,7 @@ import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FilterPill } from '@/components/ui/FilterPill'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw, HelpCircle } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
@@ -40,9 +40,10 @@ export default function RevenueIntelligencePage() {
   const [showForecast, setShowForecast] = useState(false)
 
   async function load() {
+    const lease = cacheLease()
     try {
       const res = await loadRevenueIntel(supabase)
-      if (res) { setReport(res.report); setFeedback(res.feedback); writeCache('revintel', res.report) }
+      if (res) { setReport(res.report); setFeedback(res.feedback); writeCache('revintel', res.report, { lease }) }
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps

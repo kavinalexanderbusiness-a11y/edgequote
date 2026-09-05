@@ -15,7 +15,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { Tabs } from '@/components/ui/Tabs'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analytics/Workspace'
 import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -52,14 +52,16 @@ export default function IntelligencePage() {
 
   useEffect(() => {
     (async () => {
-      try { const r = await loadBusinessIntelligence(supabase); if (r) { setBi(r); writeCache('bi', r) } }
+      const lease = cacheLease()
+      try { const r = await loadBusinessIntelligence(supabase); if (r) { setBi(r); writeCache('bi', r, { lease }) } }
       finally { setLoading(false) }
     })()
   }, [supabase])
 
   useEffect(() => {
     (async () => {
-      try { const r = await loadLaborInsights(supabase); if (r) { setLabor(r.insights); writeCache('labor', r.insights) } }
+      const lease = cacheLease()
+      try { const r = await loadLaborInsights(supabase); if (r) { setLabor(r.insights); writeCache('labor', r.insights, { lease }) } }
       catch { /* labour insights are supplementary — never break the BI report */ }
     })()
   }, [supabase])
@@ -70,7 +72,8 @@ export default function IntelligencePage() {
   // loadBusinessIntelligence without that loader growing a second dataset.
   useEffect(() => {
     (async () => {
-      try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r) }
+      const lease = cacheLease()
+      try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r, { lease }) }
       catch { /* campaign stats are supplementary — never break the BI report */ }
     })()
   }, [supabase])
@@ -80,10 +83,11 @@ export default function IntelligencePage() {
   // as null rather than being swallowed into an empty board.
   useEffect(() => {
     (async () => {
+      const lease = cacheLease()
       try {
         const r = await loadAcquisitionFunnel(supabase)
         setAcquisition(r)
-        if (r) writeCache('acquisition', r)
+        if (r) writeCache('acquisition', r, { lease })
       } catch { setAcquisition(null) }
     })()
   }, [supabase])
@@ -92,9 +96,10 @@ export default function IntelligencePage() {
   // The RPC is THE insights engine; History renders the identical object.
   useEffect(() => {
     (async () => {
+      const lease = cacheLease()
       try {
         const { data, error } = await supabase.rpc('comms_insights', { p_days: 30 })
-        if (!error && data) { setComms(data as CommsInsights); writeCache('comms', data) }
+        if (!error && data) { setComms(data as CommsInsights); writeCache('comms', data, { lease }) }
       } catch { /* supplementary */ }
     })()
   }, [supabase])

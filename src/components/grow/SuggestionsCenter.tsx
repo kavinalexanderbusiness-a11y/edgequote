@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confidence, applyPriceRaise, createRecurringPlan, dismissSuggestion, undismissSuggestion } from '@/lib/suggestions'
 import { loadSuggestions } from '@/lib/suggestionsLoad'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { FilterPill } from '@/components/ui/FilterPill'
@@ -48,6 +48,7 @@ export function SuggestionsCenter() {
   const [failed, setFailed] = useState(false)
 
   async function load() {
+    const lease = cacheLease()
     setUndo(null)
     try {
       const next = await loadSuggestions(supabase)
@@ -55,7 +56,7 @@ export function SuggestionsCenter() {
       // say so. Do NOT writeCache — caching an empty feed would persist the lie
       // into the next visit, which paints instantly from that cache.
       if (next == null) { setFailed(true); return }
-      setFailed(false); setItems(next); writeCache('suggestions', next)
+      setFailed(false); setItems(next); writeCache('suggestions', next, { lease })
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps

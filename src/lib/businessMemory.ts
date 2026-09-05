@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadLaborModel, serviceKey, serviceLabel, type LaborModel } from '@/lib/labor'
 import { loadTravelModel, type TravelModel } from '@/lib/travelLearning'
 import { loadQuotePricingModel, type LoadedQuoteModel } from '@/lib/quoteLearning'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 
 // ── Business Memory — the ONE read seam over everything EdgeQuote has learned ────
 // NOT a new learning engine and NOT new storage. Every learner keeps its single
@@ -177,6 +177,7 @@ export async function loadBusinessMemory(
   opts?: { force?: boolean },
 ): Promise<BusinessMemory | null> {
   const cacheKey = 'business-memory'
+  const lease = cacheLease()
   if (!opts?.force) {
     const cached = readCache<BusinessMemory>(cacheKey, CACHE_TTL.medium)
     if (cached) return cached
@@ -209,7 +210,7 @@ export async function loadBusinessMemory(
     decidedQuotes: pricing?.model.decidedQuotes ?? 0,
     trainedJobs: labor?.model.totalSamples ?? 0,
   }
-  writeCache(cacheKey, memory)
+  writeCache(cacheKey, memory, { lease })
   return memory
 }
 

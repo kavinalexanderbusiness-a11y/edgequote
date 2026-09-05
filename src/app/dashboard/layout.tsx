@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { readUser } from '@/lib/authState'
 import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { Sidebar } from '@/components/layout/Sidebar'
+import { CacheOwner } from '@/components/layout/CacheOwner'
 import { BottomNav } from '@/components/layout/BottomNav'
 import { QuickAddProvider } from '@/components/layout/QuickAddProvider'
 import { TenantTimeProvider } from '@/components/layout/TenantTimeProvider'
@@ -46,6 +47,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     // let the Dashboard, the Schedule and Weather show three different days.
     <TenantTimeProvider>
     <div className="lg:flex min-h-screen">
+      {/* The client cache answers only for THIS verified account. Rendered first
+          so it is set before any page reads the cache in a useState initializer. */}
+      <CacheOwner id={user.id} />
       {/* Keyboard users can jump the sidebar straight to page content. Visually
           hidden until focused (Tab from the top of the page). */}
       <a href="#main-content"
