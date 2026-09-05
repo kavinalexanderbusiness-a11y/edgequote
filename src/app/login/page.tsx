@@ -139,7 +139,7 @@ function LoginForm() {
             <Input
               label="Email"
               type="email"
-              placeholder="you@edgepropertyservices.ca"
+              placeholder="you@yourcompany.com"
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
@@ -174,7 +174,7 @@ function LoginForm() {
         </div>
 
         <p className="text-center text-xs text-ink-faint mt-6">
-          Internal tool — not publicly accessible
+          Access is by invitation. Sign in with your invited email address.
         </p>
       </main>
     </div>
