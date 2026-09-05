@@ -68,7 +68,22 @@ export default function TimeOffPage() {
         supabase.from('pto_entries').select('*').eq('user_id', user.id).order('date', { ascending: false }),
         supabase.from('holidays').select('*').eq('user_id', user.id).order('date'),
       ])
+      // ⛔ Supabase RESOLVES on failure — it returns { data: null, error }, it does
+      // not throw. `?? []` therefore turned a failed read into an empty list and
+      // the line below cleared the banner, so an outage rendered "no time off
+      // booked": the most reassuring screen this page can show, and the one that
+      // gets somebody scheduled who is actually on leave.
+      //
+      // loadTechnicians (above) DOES throw, so a technicians failure already
+      // surfaced — these two reads were the silent ones in the same Promise.all.
+      // Same aggregation the dispatch board already uses for its four reads.
+      // techs FIRST and unconditionally: loadTechnicians throws on failure, so
+      // reaching here proves that read succeeded. Discarding it would make a
+      // time-off outage also claim "No one on the roster yet" — trading one
+      // false empty state for another.
       setTechs(t)
+      const readErr = pRes.error ?? hRes.error
+      if (readErr) { setLoadError('Could not load time off: ' + readErr.message); return }
       setEntries((pRes.data as PtoEntry[]) ?? [])
       setHolidays((hRes.data as Holiday[]) ?? [])
       setLoadError(null)
