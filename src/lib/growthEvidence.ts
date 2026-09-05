@@ -32,6 +32,9 @@
 // pure leaf with no imports of its own, so this module stays as cheap to import
 // as it was — which matters, because every Growth surface pulls it in.
 import { isAnyFixtureName } from '@/lib/fixtureData'
+// ⭐ THE one price verdict, likewise arriving already decided rather than being
+// re-derived here. Two canonical seams, two imports — this module owns neither
+// rule, it only applies them to the evidence it is asked about.
 import type { PriceState } from '@/lib/pricingState'
 
 // ── 1. What may be counted ───────────────────────────────────────────────────
