@@ -210,7 +210,7 @@ function section6() {
     return ok > -1 && clear > ok
   })())
   check('the cache write carries the total beside the slice',
-    /writeCache\('customers-list', \{ rows: active\.rows\.slice\(0, CUSTOMER_CACHE_ROWS\), total: active\.rows\.length \}\)/.test(page))
+    /writeCache\('customers-list', \{ rows: active\.rows\.slice\(0, CUSTOMER_CACHE_ROWS\), total: active\.rows\.length \}, \{ lease \}\)/.test(page))
   check('⛔ the cache still holds a SCREENFUL — the fix is not "cache the whole book"',
     /slice\(0, CUSTOMER_CACHE_ROWS\)/.test(page) && !/writeCache\('customers-list', active\.rows\)/.test(page))
   check('⛔ the header states no bare count while the rows are a prefix',
