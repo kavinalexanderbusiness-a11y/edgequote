@@ -24,7 +24,7 @@ import { SearchInput } from '@/components/ui/SearchInput'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
-import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
+import { invoiceTotals, applyDiscount, roundInvoiceAmount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -950,7 +950,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const [due, setDue] = useState(inv.due_date || '')
   const [notes, setNotes] = useState(inv.notes || '')
   const [internalNotes, setInternalNotes] = useState(inv.internal_notes || '')
-  const [base, setBase] = useState(String(Math.round(itemized ? liSum : initial.subtotal)))
+  const [base, setBase] = useState(String(roundInvoiceAmount(itemized ? liSum : initial.subtotal)))
   const [dType, setDType] = useState<'' | DiscountType>(inv.discount_type ?? '')
   const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
   // Editable line items — a draft's breakdown belongs to the owner, not just the
@@ -966,7 +966,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       kind: (li as { kind?: string }).kind || 'service',
     })),
   )
-  const lineAmount = (li: { qty: string; unit: string }) => Math.round((Number(li.qty) || 0) * (Number(li.unit) || 0))
+  const lineAmount = (li: { qty: string; unit: string }) => roundInvoiceAmount((Number(li.qty) || 0) * (Number(li.unit) || 0))
   // The exact shape persisted to invoices.line_items — reused to detect a genuine
   // breakdown edit (persisted-vs-baseline, so a blank row, key order, or a
   // defaulted kind can't fake an edit).
@@ -989,7 +989,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
 
   const editItems = items.length > 0
   const itemsSum = items.reduce((s, li) => s + lineAmount(li), 0)
-  const grossNum = Math.round(editItems ? itemsSum : (Number(base) || 0))
+  const grossNum = roundInvoiceAmount(editItems ? itemsSum : (Number(base) || 0))
   const discount = dType && Number(dValue) > 0 ? { type: dType, value: Number(dValue) } : null
   const { net } = applyDiscount(grossNum, discount)
   const t = invoiceTotals(net, settings, discount)
@@ -1034,7 +1034,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // The money half — omitted entirely once the invoice is settled, so a locked
     // invoice cannot have its figures rewritten even if state went stale.
     if (!locked) {
-      patch.amount = Math.round(net)
+      patch.amount = net
       patch.discount_type = hasD ? dType : null
       patch.discount_value = hasD ? Number(dValue) : null
     }
@@ -1098,7 +1098,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input label="Due date" type="date" value={due} onChange={e => setDue(e.target.value)} />
         {!locked && !editItems && (
-          <Input label="Amount (before discount)" type="number" min="0" step="1" value={base} onChange={e => setBase(e.target.value)} />
+          <Input label="Amount (before discount)" type="number" min="0" step="0.01" value={base} onChange={e => setBase(e.target.value)} />
         )}
       </div>
 
@@ -1125,12 +1125,12 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
                   className="w-full sm:w-auto sm:flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 {/* inputMode=decimal → the numeric keypad on a phone, not the
                     full keyboard. text-base on mobile stops iOS zooming the field. */}
-                <input type="number" inputMode="decimal" min="0" step="1" value={li.qty} aria-label="Line item quantity"
+                <input type="number" inputMode="decimal" min="0" step="any" value={li.qty} aria-label="Line item quantity"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
                   className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 <div className="relative w-24 sm:w-28">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
-                  <input type="number" inputMode="decimal" min="0" step="1" value={li.unit} aria-label="Line item unit price"
+                  <input type="number" inputMode="decimal" min="0" step="any" value={li.unit} aria-label="Line item unit price"
                     onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, unit: e.target.value } : x))}
                     className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </div>
@@ -1164,7 +1164,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
           {dType && (
             <div className="relative w-36">
               <input
-                type="number" min="0" step={dType === 'percent' ? '1' : '5'} max={dType === 'percent' ? '100' : undefined}
+                type="number" min="0" step={dType === 'percent' ? '1' : '0.01'} max={dType === 'percent' ? '100' : undefined}
                 autoFocus value={dValue} onChange={e => setDValue(e.target.value)}
                 placeholder={dType === 'percent' ? '10' : '25'}
                 className="w-full bg-bg-tertiary border border-border-strong rounded-xl pl-3 pr-8 py-2.5 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
