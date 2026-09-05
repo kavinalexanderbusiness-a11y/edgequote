@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import Link from 'next/link'
 import { format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
@@ -462,6 +462,9 @@ function BookTimeOffDialog({ supabase, userId, technicians, onClose, onSaved }: 
   const [paid, setPaid] = useState(true)
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  // Synchronous companion to `saving`: the state drives the spinner, the ref
+  // guards re-entry. See save().
+  const inFlight = useRef(false)
 
   const tech = technicians.find(t => t.id === techId)
   const h = Number(hours) || 0
@@ -474,7 +477,14 @@ function BookTimeOffDialog({ supabase, userId, technicians, onClose, onSaved }: 
     // The Button is disabled while saving, but Modal fires this on Cmd/Ctrl+Enter
     // too — a key that can be held down. The in-flight guard belongs HERE, at the
     // one entry point both doors share.
-    if (saving) return
+    //
+    // ⛔ A REF, NOT `saving`. `saving` is state: this closure reads the value from
+    // the render that created it, and setSaving(true) does not change that value
+    // until React re-renders — so two calls in the SAME tick both read false and
+    // both insert. Driving the real save() twice synchronously produced TWO
+    // inserts against the state read and one against this latch. A ref is now.
+    if (inFlight.current) return
+    inFlight.current = true
     setSaving(true)
     const { error } = await supabase.from('pto_entries').insert({
       user_id: userId, technician_id: techId, date, hours: h, kind, is_paid: paid,
@@ -482,6 +492,10 @@ function BookTimeOffDialog({ supabase, userId, technicians, onClose, onSaved }: 
       hourly_rate: paid ? rate : null,
       notes: notes.trim() || null,
     })
+    // Released on BOTH paths — this runs before the error branch — so a failed
+    // save can be retried at once, which is what matters after a duplicate-date
+    // refusal.
+    inFlight.current = false
     setSaving(false)
     if (error) {
       if (error.code === '23505') { notify.error(`${tech?.name} already has ${PTO_KIND_LABELS[kind].toLowerCase()} booked on that day.`); return }
@@ -541,6 +555,9 @@ function AddHolidayDialog({ supabase, userId, onClose, onSaved }: {
   const [hours, setHours] = useState('8')
   const [paid, setPaid] = useState(true)
   const [saving, setSaving] = useState(false)
+  // Synchronous companion to `saving`: the state drives the spinner, the ref
+  // guards re-entry. See save().
+  const inFlight = useRef(false)
   const invalid = !date || !name.trim()
 
   async function save() {
@@ -548,11 +565,22 @@ function AddHolidayDialog({ supabase, userId, onClose, onSaved }: {
     // The Button is disabled while saving, but Modal fires this on Cmd/Ctrl+Enter
     // too — a key that can be held down. The in-flight guard belongs HERE, at the
     // one entry point both doors share.
-    if (saving) return
+    //
+    // ⛔ A REF, NOT `saving`. `saving` is state: this closure reads the value from
+    // the render that created it, and setSaving(true) does not change that value
+    // until React re-renders — so two calls in the SAME tick both read false and
+    // both insert. Driving the real save() twice synchronously produced TWO
+    // inserts against the state read and one against this latch. A ref is now.
+    if (inFlight.current) return
+    inFlight.current = true
     setSaving(true)
     const { error } = await supabase.from('holidays').insert({
       user_id: userId, date, name: name.trim(), is_paid: paid, default_hours: Number(hours) || 8,
     })
+    // Released on BOTH paths — this runs before the error branch — so a failed
+    // save can be retried at once, which is what matters after a duplicate-date
+    // refusal.
+    inFlight.current = false
     setSaving(false)
     if (error) {
       if (error.code === '23505') { notify.error('There is already a holiday on that date.'); return }

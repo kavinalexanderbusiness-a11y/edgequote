@@ -245,8 +245,70 @@ console.log('\n═══ Time off: a failed read says so ═══')
     'a friendly empty state must not double as the failure state')
 }
 
-if (failures) {
-  console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
-  process.exit(1)
+// ── The two time-off save doors cannot fire twice in one tick ───────────────
+// `Modal` fires save() on Cmd/Ctrl+Enter as well as the Button, and only the
+// Button is disabled while saving. The first guard read `saving` — STATE — so the
+// closure saw the value from the render that created it: two calls in the same
+// tick both read false and both inserted. Driving the REAL save() twice produced
+// TWO inserts. A ref updates synchronously, so the second call sees the first.
+//
+// ⭐ The handler under test is the page's own source, executed — not a description
+// of it. Both save() bodies are plain JS, so they run as written.
+// ⚠️ Wrapped: tsx builds this file as CJS, where top-level await is a syntax error.
+async function timeOffLatchChecks() {
+  console.log('\n═══ Time off: one tick, one insert ═══')
+  const TO = readFileSync(join(process.cwd(), 'src/app/dashboard/dispatch/time-off/page.tsx'), 'utf8')
+  const saveBody = (nth: number) => {
+    let f = -1
+    for (let k = 0; k <= nth; k++) f = TO.indexOf('async function save()', f + 1)
+    if (f < 0) throw new Error('save() not found')
+    const o = TO.indexOf('{', f)
+    let d = 0, i = o
+    for (; i < TO.length; i++) { if (TO[i] === '{') d++; else if (TO[i] === '}') { d--; if (!d) break } }
+    return TO.slice(o + 1, i)
+  }
+  const drive = async (nth: number, calls: number, failWith: { code: string; message: string } | null) => {
+    let inserts = 0
+    const release: (() => void)[] = []
+    const inFlight = { current: false }
+    const deps: Record<string, unknown> = {
+      invalid: false, saving: false, setSaving: () => {}, inFlight,
+      supabase: { from: () => ({ insert: () => { inserts++
+        return new Promise(r => release.push(() => r({ error: failWith }))) } }) },
+      userId: 'u', techId: 't', date: '2026-06-01', h: 8, kind: 'vacation', paid: true,
+      rate: 30, notes: '', name: 'Holiday', hours: '8', tech: { name: 'Tech' },
+      PTO_KIND_LABELS: { vacation: 'Vacation' },
+      notify: { error: () => {}, success: () => {} }, onSaved: () => {}, onClose: () => {},
+    }
+    const fn = new Function(...Object.keys(deps), `return (async () => {${saveBody(nth)}})()`) as (...a: unknown[]) => Promise<void>
+    const running: Promise<void>[] = []
+    for (let i = 0; i < calls; i++) running.push(fn(...Object.values(deps)))
+    release.forEach(f => f())
+    await Promise.all(running)
+    return { inserts, inFlight }
+  }
+  for (const [nth, label] of [[0, 'book time off'], [1, 'add holiday']] as [number, string][]) {
+    const two = await drive(nth, 2, null)
+    check(`${label}: two same-tick submits insert ONCE`, two.inserts === 1, `inserted ${two.inserts}`)
+    const okThen = await drive(nth, 1, null)
+    check(`${label}: the latch is released after success`, okThen.inFlight.current === false)
+    // ⭐ The one that matters after a duplicate-date refusal: a FAILED save must be
+    // retryable at once, so the release cannot live in a success branch.
+    const failed = await drive(nth, 1, { code: '23505', message: 'duplicate' })
+    check(`${label}: the latch is released after FAILURE, so a retry is possible`,
+      failed.inFlight.current === false)
+  }
+  check('both dialogs guard on the ref, not on the saving state',
+    (TO.match(/if \(inFlight\.current\) return/g) ?? []).length === 2 &&
+    !/if \(saving\) return/.test(TO))
 }
-console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes\n')
+
+timeOffLatchChecks()
+  .catch(e => { failures++; console.log(`  ✗ the latch harness threw\n      ${String((e as Error)?.message ?? e).slice(0, 200)}`) })
+  .then(() => {
+    if (failures) {
+      console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
+      process.exit(1)
+    }
+    console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes\n')
+  })
