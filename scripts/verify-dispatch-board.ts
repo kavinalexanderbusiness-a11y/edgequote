@@ -236,11 +236,11 @@ async function raceChecks() {
   const harness = () => {
     const st: St = { jobs: [], notes: null, loadError: null, loading: true }
     const gate = { current: createRequestGate() }
-    const run = (date: string, jobsP: Promise<unknown>) => {
+    const run = (date: string, jobsP: Promise<unknown>, sessionP: Promise<unknown> = Promise.resolve(null)) => {
       const th = (p: Promise<unknown>): unknown => ({ select: () => th(p), eq: () => th(p), order: () => th(p), maybeSingle: () => p, then: (a: unknown, b: unknown) => (p as Promise<unknown>).then(a as never, b as never) })
       const empty = Promise.resolve({ data: null, error: null })
       const d: Record<string, unknown> = {
-        gate, supabase: { auth: { getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }) }, from: (t: string) => th(t === 'jobs' ? jobsP : empty) },
+        gate, supabase: { auth: { getSession: async () => { await sessionP; return { data: { session: { user: { id: 'u1' } } } } } }, from: (t: string) => th(t === 'jobs' ? jobsP : empty) },
         date, DAY_STATUS_SELECT: '*', DEFAULT_WORK_START: '08:00',
         loadCrews: async () => [], loadTechnicians: async () => [], loadDispatchNotes: async () => [{ day: date }],
         resolveAutomations: () => ({}), setUid: () => {}, setCrews: () => {}, setTechnicians: () => {},
@@ -252,21 +252,33 @@ async function raceChecks() {
     }
     return { st, run }
   }
-  { const { st, run } = harness(), o = defer(), n = defer()
-    const pO = run('2026-06-01', o.p as Promise<unknown>), pN = run('2026-06-02', n.p as Promise<unknown>)
+  { const { st, run } = harness(), o = defer(), n = defer(), sA = defer()
+    // A must CLEAR the session check before B begins — otherwise the session
+    // guard alone ends the run and the later guards are never exercised.
+    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>)
+    sA.r(null); await new Promise(r => setTimeout(r, 0))
+    const pN = run('2026-06-02', n.p as Promise<unknown>)
     n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
     o.r({ data: [{ id: 'JOB-OLD' }], error: null }); await pO
     check('a stale SUCCESS cannot overwrite the newer day', st.jobs[0]?.id === 'JOB-NEW', `board shows ${st.jobs.map(j => j.id).join(',')}`)
     check('…and the notes still belong to the day on screen', st.notes?.[0]?.day === '2026-06-02', `notes are for ${st.notes?.[0]?.day}`) }
-  { const { st, run } = harness(), o = defer(), n = defer()
-    const pO = run('2026-06-01', o.p as Promise<unknown>), pN = run('2026-06-02', n.p as Promise<unknown>)
+  { const { st, run } = harness(), o = defer(), n = defer(), sA = defer()
+    // A must CLEAR the session check before B begins — otherwise the session
+    // guard alone ends the run and the later guards are never exercised.
+    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>)
+    sA.r(null); await new Promise(r => setTimeout(r, 0))
+    const pN = run('2026-06-02', n.p as Promise<unknown>)
     n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
     o.r({ data: null, error: { message: 'connection reset' } }); await pO
     check('a stale FAILURE cannot banner over a good day', st.loadError === null, `banner said ${JSON.stringify(st.loadError)}`)
     check('…and leaves the newer rows alone', st.jobs[0]?.id === 'JOB-NEW') }
-  { const { st, run } = harness(), o = defer(), n = defer()
+  { const { st, run } = harness(), o = defer(), n = defer(), sA = defer()
     // (the harness starts loading:true, as the page does while a day is in flight)
-    const pO = run('2026-06-01', o.p as Promise<unknown>), pN = run('2026-06-02', n.p as Promise<unknown>)
+    // A must CLEAR the session check before B begins — otherwise the session
+    // guard alone ends the run and the later guards are never exercised.
+    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>)
+    sA.r(null); await new Promise(r => setTimeout(r, 0))
+    const pN = run('2026-06-02', n.p as Promise<unknown>)
     o.r({ data: [{ id: 'JOB-OLD' }], error: null }); await pO
     check('a stale FINALLY cannot clear the spinner while the new day is pending', st.loading === true)
     n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
