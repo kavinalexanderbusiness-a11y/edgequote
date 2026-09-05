@@ -13,6 +13,7 @@ import {
   assessEvidence, declaredCadence, mayShowAnnual, INSUFFICIENT_LABEL,
   type Evidence, type DeclaredCadence,
 } from '@/lib/growthEvidence'
+import { assessConcentration, type ConcentrationEntry, type ConcentrationResult } from '@/lib/growthConcentration'
 
 // ── Revenue Intelligence engine (Growth) ────────────────────────────────────────
 // Predictive + prescriptive layer on top of the BI dashboard. Scores every
@@ -41,7 +42,17 @@ export interface Opportunity {
   kind: OppKind
   customerId: string
   customerName: string
-  score: number         // 0..100 likelihood
+  // ⭐⭐ A HEURISTIC PRIORITIZATION SCORE, NOT A CALIBRATED PROBABILITY. Every
+  // predictor below builds it the same way: start at a fixed base (e.g. 55 for
+  // renewal), add or subtract fixed point deltas for signals like tenure,
+  // completed-visit count and churn level, then clamp to [0, 100]. Nothing here
+  // is fit to observed outcomes or measured against actual conversion — a score
+  // of 61 is "55 base + 6 for 3+ completed visits", not "61% of similar
+  // customers convert". It orders opportunities correctly relative to each
+  // other (that ordering is real and is what drives ranking); it must never be
+  // rendered as "X% likely" or "X% likelihood" — see PRIORITY_SCORE_LABEL /
+  // the "Priority score N/100" wording on the page, which is the honest framing.
+  score: number         // 0..100, higher = higher priority
   confidence: Confidence
   expectedValue: number // $ (annual unless oneTime)
   oneTime: boolean
@@ -61,6 +72,28 @@ export interface Opportunity {
   action: string        // recommended action (one line)
   actionHref: string    // where the owner goes to do it
   offer?: string        // recommended offer (upsell/cross-sell)
+}
+
+/**
+ * ⭐⭐ THE ONE HONEST SENTENCE FOR `score`, said the same way everywhere it is
+ * shown (the top-action hero line and every OppCard's tooltip). Two independent
+ * copies of "how do we describe this number" is exactly how one of them keeps
+ * the old "% likely" framing while the other gets fixed. The compact meter
+ * chip on each OppCard renders the bare `${score}/100` inline (no room for a
+ * sentence there) but uses `priorityScoreTooltip` for its title, so the ONE
+ * place a reader who wants the explanation finds it says the same thing.
+ *
+ * ⛔ Never say "likely", "likelihood", "chance" or "probability" here. The
+ * field comment on `Opportunity.score` explains why: it is a fixed-point
+ * heuristic (a base plus signal deltas), not a number fit to observed outcomes.
+ */
+export function priorityScoreLabel(score: number): string {
+  return `Priority score ${score}/100`
+}
+
+/** The tooltip / title text — names what the score is FOR, not just what it is. */
+export function priorityScoreTooltip(score: number): string {
+  return `${priorityScoreLabel(score)} — ranks this play against this customer's own history. A heuristic for ordering, not a measured probability.`
 }
 
 export interface LtvForecast {
@@ -100,6 +133,17 @@ export interface RevenueIntelReport {
      */
     quantified: number
     unquantified: number
+    /**
+     * ⭐⭐ HOW MUCH OF THE RECURRING HEADLINE RESTS ON ONE CUSTOMER — a DIFFERENT
+     * question from whether each figure was earned (that is lib/growthEvidence's
+     * job, already done by the time an Opportunity reaches this summary). Its
+     * denominator is exactly `totalOpportunity` (recurring, quantified); one-time
+     * upsells belong to `totalOneTime` and are not in it. See
+     * lib/growthConcentration for the full rationale and the threshold.
+     * ⛔ `null` when there is nothing quantified to measure concentration over —
+     * the caller must render nothing, not a "0%".
+     */
+    concentration: ConcentrationResult | null
   }
   labor: LaborContext
 }
@@ -600,6 +644,27 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     if (o.expectedValue > 0) quantified++; else unquantified++
   }
 
+  // ⭐⭐ CONCENTRATION — a DISCLOSURE pass over the same `ranked` list, not a
+  // second pricing or eligibility engine. lib/growthEvidence has already decided
+  // which figures may exist; this only asks how the ones that survived are
+  // distributed ACROSS customers. Every RECURRING opportunity is handed over
+  // (unquantified ones included) — assessConcentration's own filter is the
+  // single place that decides what counts, the same discipline growthEvidence
+  // uses for exclusions, so this call site does not need to duplicate that.
+  //
+  // ⭐ THE SAME SET AS THE HEADLINE. The banner sits under the "Recurring
+  // opportunity" tile, whose figure is `totalOpportunity` — the sum over
+  // `!o.oneTime` in the loop above. One-time upsells are a different tile and a
+  // different total, so they are excluded here for the same reason they are
+  // excluded there: a share "of this projection" must divide the number the
+  // owner is looking at. verify:growth-concentration §13 proves
+  // `concentration.totalConsidered === summary.totalOpportunity`.
+  const concentration = assessConcentration(
+    ranked.filter(o => !o.oneTime).map((o): ConcentrationEntry => ({
+      customerId: o.customerId, customerName: o.customerName, expectedValue: o.expectedValue,
+    })),
+  )
+
   const bookedMin = jobs.filter(j => j.scheduled_date >= today && dDays(j.scheduled_date) >= -14 && j.scheduled_date <= addDaysISO(today, 14) && j.status !== 'cancelled' && j.status !== 'completed')
     .reduce((s, j) => s + (Number(j.duration_minutes) || 45), 0)
   const labor: LaborContext = {
@@ -618,6 +683,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       // subject is expected revenue.
       topAction: ranked.find(o => o.expectedValue > 0) || null,
       quantified, unquantified,
+      concentration: concentration.hasData ? concentration : null,
     },
     labor,
   }
