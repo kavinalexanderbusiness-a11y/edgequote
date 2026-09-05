@@ -161,16 +161,23 @@ export function assessConcentration(entries: readonly ConcentrationEntry[]): Con
     }
   }
 
+  // ⭐ COMPARED IN CENTS, NOT IN FLOATS. Per-customer totals are sums of
+  // decimals, and 100.10 + 200.20 is 300.30000000000007 in IEEE-754 while a
+  // single 300.30 is not — equal money on every screen, unequal as floats. A
+  // float `===` would call that "one customer" instead of a tie. Money the
+  // owner can see is whole cents, so a cent is the unit of both the leader
+  // comparison and the tie count; sub-cent noise cannot split or fake a tie.
+  const cents = (n: number) => Math.round(n * 100)
   let topId: string | null = null
   let topName: string | null = null
   let topAmount = 0
   for (const [id, c] of byCustomer) {
-    if (c.amount > topAmount) { topAmount = c.amount; topId = id; topName = c.name }
+    if (cents(c.amount) > cents(topAmount)) { topAmount = c.amount; topId = id; topName = c.name }
   }
-  // A strict `>` keeps the FIRST of equals as the named contributor; the count
-  // of equals travels with it so the sentence can refuse to say "alone".
+  // A strict `>` keeps the FIRST of equals as the leader; the count of equals
+  // travels with it so the fact can say "each" instead of "one customer".
   let topTiedCount = 0
-  for (const c of byCustomer.values()) if (c.amount === topAmount) topTiedCount++
+  for (const c of byCustomer.values()) if (cents(c.amount) === cents(topAmount)) topTiedCount++
 
   // Clamped defensively: a share should land in [0, 1] by construction (the
   // top contributor's own amount is part of the total it is divided by), but

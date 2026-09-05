@@ -402,6 +402,18 @@ console.log('\n── 13. ⭐⭐ THE DENOMINATOR IS THE HEADLINE — recurring o
   const tie = assessConcentration([entry('A', 500, 'Alpha'), entry('B', 500, 'Beta')])
   eq('a two-way tie is reported as a tie', tie.topTiedCount, 2)
   eq('…and the fact says "each", never one customer', concentrationFact(tie), '50% each from 2 customers')
+  // (b′) Ties are decided in CENTS, not in floats (S121 review of 28bd58df):
+  // 100.10 + 200.20 is 300.30000000000007 as a float, 300.30 on every screen.
+  const decimalTie = assessConcentration([entry('A', 100.10), entry('A', 200.20), entry('B', 300.30)])
+  check('the decimal sum really is float-unequal to the single figure (the case is not vacuous)',
+    100.10 + 200.20 !== 300.30, `${100.10 + 200.20} vs 300.30`)
+  eq('…yet it is a tie, because equal cents are equal money', decimalTie.topTiedCount, 2)
+  eq('…and the fact says "each"', concentrationFact(decimalTie), '50% each from 2 customers')
+  const subCent = assessConcentration([entry('A', 300.301), entry('B', 300.30)])
+  eq('sub-cent noise (a tenth of a cent) cannot break a tie the owner cannot see', subCent.topTiedCount, 2)
+  const oneCent = assessConcentration([entry('A', 300.31), entry('B', 300.30)])
+  eq('NEGATIVE CONTROL: one visible cent does break it', oneCent.topTiedCount, 1)
+  eq('…and the fact says one customer', concentrationFact(oneCent), '50% from one customer')
   eq('one dollar breaks the tie', assessConcentration([entry('A', 501), entry('B', 499)]).topTiedCount, 1)
   eq('a clear leader is not a tie even with equals further down', assessConcentration([entry('A', 600), entry('B', 200), entry('C', 200)]).topTiedCount, 1)
   eq('…and reads as one customer', concentrationFact(assessConcentration([entry('A', 600), entry('B', 200), entry('C', 200)])), '60% from one customer')
