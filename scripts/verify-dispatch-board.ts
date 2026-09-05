@@ -259,11 +259,11 @@ async function raceChecks() {
   const e0 = PAGE.indexOf('}, [supabase, date])', s0)
   const raw = PAGE.slice(PAGE.indexOf('{', s0 + 40) + 1, PAGE.lastIndexOf('}', e0))
   const expr = transformSync(`(async () => {${raw}})`, { loader: 'ts' }).code.replace(/;\s*$/, '')
-  type St = { jobs: { id: string }[]; notes: { day: string }[] | null; loadError: string | null; loading: boolean }
+  type St = { jobs: { id: string }[]; notes: { day: string }[] | null; loadError: string | null; loading: boolean; loadedDate: string | null }
   const defer = () => { let r!: (v: unknown) => void; let rj!: (e: unknown) => void
     const p = new Promise<unknown>((res, rej) => { r = res; rj = rej }); p.catch(() => {}); return { p, r, rj } }
   const harness = () => {
-    const st: St = { jobs: [], notes: null, loadError: null, loading: true }
+    const st: St = { jobs: [], notes: null, loadError: null, loading: true, loadedDate: null }
     const gate = { current: createRequestGate() }
     // `sessionUser: null` makes getSession resolve with NO session — the shape an
     // expired login has. Until this existed the harness could only DELAY a good
@@ -279,6 +279,7 @@ async function raceChecks() {
         setEquipment: () => {}, setAutomations: () => {}, setSettings: () => {}, setDayRow: () => {},
         setJobs: (v: St['jobs']) => { st.jobs = v }, setNotes: (v: St['notes']) => { st.notes = v },
         setLoadError: (v: string | null) => { st.loadError = v }, setLoading: (v: boolean) => { st.loading = v },
+        setLoadedDate: (v: string | null) => { st.loadedDate = v },
       }
       return (new Function(...Object.keys(d), `return (${expr})()`) as (...a: unknown[]) => Promise<void>)(...Object.values(d))
     }
@@ -347,6 +348,102 @@ async function raceChecks() {
   { const { st, run } = harness(), o = defer()
     const p = run('2026-06-01', o.p as Promise<unknown>); o.r({ data: [{ id: 'ONLY' }], error: null }); await p
     check('the ordinary single-load path is unchanged', st.jobs[0]?.id === 'ONLY' && !st.loading && st.loadError === null) }
+  // Handed to the next section so it drives the SAME extracted fetchAll, rather
+  // than standing up a second harness that could drift from this one.
+  return { harness, defer }
+}
+
+// ── A day-scoped ACTION may only run over the day it was loaded for ─────────
+// The board hides itself while a day has not loaded, but print / export / Balance
+// are reachable past the hidden board — the `p` key and the command palette hold
+// refs that survive the `if (loading) return <skeleton>` early return. So the
+// refusal has to be a function of WHICH DAY THE STATE IS, and the only honest
+// answer to that is `loadedDate` versus the selected `date`.
+//
+// ⭐ These do not model the guard: they extract the shipping `staleDay` definition
+// and the shipping action body, and run them over state produced by the shipping
+// fetchAll. ⛔ A flag derived from `loadError` cannot answer "is this day loaded?" —
+// a day that is still LOADING has no error yet, and is equally not this day.
+async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
+  const { harness, defer } = ctx
+  console.log('\n═══ A day-scoped action only acts on the day that loaded ═══')
+
+  // ⭐ Name-agnostic on purpose: the fix may rename or split the flag. What the
+  // action must be a function of is `loadedDate` vs `date`, however it is spelled.
+  const flagLines = [...PAGE.matchAll(/^  const (\w+) = ((?:(?!\n).)*(?:loadedDate|loadError)(?:(?!\n).)*)$/gm)]
+    .map(m => `const ${m[1]} = ${m[2]}`)
+  check('the page derives at least one flag from loadedDate/loadError', flagLines.length > 0,
+    'no `const <name> = …loadedDate…` found — the page has no notion of which day its state is')
+  if (flagLines.length === 0) return
+
+  /** The literal body of a `const <name> = useCallback((…) => { … }` block. */
+  const bodyOf = (name: string): string => {
+    const at = PAGE.indexOf(`const ${name} = useCallback(`)
+    if (at < 0) throw new Error(`${name} not found`)
+    const open = PAGE.indexOf('{', PAGE.indexOf('=>', at))
+    let d = 0, i = open
+    for (; i < PAGE.length; i++) { if (PAGE[i] === '{') d++; else if (PAGE[i] === '}') { d--; if (!d) break } }
+    return PAGE.slice(open + 1, i)
+  }
+
+  /** Runs the REAL action body with the REAL staleDay definition over given state. */
+  const act = (name: string, st: { loadError: string | null; loadedDate: string | null }, date: string) => {
+    let refusal: string | null = null, built = false
+    const notify = Object.assign(() => {}, { error: (m: string) => { refusal = m } })
+    const deps: Record<string, unknown> = {
+      loadError: st.loadError, loadedDate: st.loadedDate, date, notify,
+      onlyIds: undefined,   // exportDayCsv's own parameter — a free name in its body
+      buildSheet: () => { built = true; return { lanes: [{ id: 'L' }] } },
+      openPrintSheet: () => true,
+      sheetCsvRows: () => [{ a: 1 }], exportRowsToCsv: () => {}, SHEET_CSV_COLUMNS: [],
+    }
+    const src = `${flagLines.join('\n')}\n${bodyOf(name)}`
+    new Function(...Object.keys(deps), src)(...Object.values(deps))
+    return { refused: refusal !== null, built }
+  }
+
+  const A = '2026-06-01', B = '2026-06-02'
+
+  // (1) ⛔ THE WINDOW: A loaded, the owner picks B, B is still in flight. No error
+  // has happened yet, so an error-derived flag is false — while the state on screen
+  // is still A’s. Print here stamps B on A’s visits.
+  { const { st, run } = harness(), a = defer(), b = defer()
+    const pA = run(A, a.p as Promise<unknown>); a.r({ data: [{ id: 'JOB-A' }], error: null }); await pA
+    check('a successful load records which day it was', st.loadedDate === A, `loadedDate=${st.loadedDate}`)
+    const pB = run(B, b.p as Promise<unknown>)                       // still loading
+    check('…and a newly picked day does not inherit it', st.loadedDate === A && st.loadError === null,
+      `loadedDate=${st.loadedDate} loadError=${JSON.stringify(st.loadError)}`)
+    for (const fn of ['printDay', 'exportDayCsv']) {
+      const r = act(fn, st, B)
+      check(`${fn} refuses while the newly picked day is STILL LOADING`, r.refused && !r.built,
+        r.built ? `it built a sheet from ${st.loadedDate}’s visits and stamped it ${B}` : 'no refusal')
+    }
+    b.r({ data: [{ id: 'JOB-B' }], error: null }); await pB
+    check('…and once it lands the action is allowed again', !act('printDay', st, B).refused) }
+
+  // (2) The failed-day case the repair already covers — kept so a fix to (1)
+  // cannot be made by simply deleting the error term.
+  { const { st, run } = harness(), a = defer(), b = defer()
+    const pA = run(A, a.p as Promise<unknown>); a.r({ data: [{ id: 'JOB-A' }], error: null }); await pA
+    const pB = run(B, b.p as Promise<unknown>); b.r({ data: null, error: { message: 'connection reset' } }); await pB
+    check('a day that FAILED to load refuses print', act('printDay', st, B).refused)
+    check('…and export', act('exportDayCsv', st, B).refused) }
+
+  // (3) ⭐ The distinction that must survive: a same-day refresh failure keeps the
+  // board, because it IS this day. Guarding on `loadedDate !== date` preserves this;
+  // guarding on "any load error" would wrongly disable the day the owner is on.
+  { const { st, run } = harness(), a = defer(), a2 = defer()
+    const pA = run(A, a.p as Promise<unknown>); a.r({ data: [{ id: 'JOB-A' }], error: null }); await pA
+    const pR = run(A, a2.p as Promise<unknown>); a2.r({ data: null, error: { message: 'flaky' } }); await pR
+    check('a SAME-DAY refresh failure keeps the day actionable (last known good)',
+      st.loadedDate === A && st.loadError !== null && !act('printDay', st, A).refused,
+      'the day on screen is still the day that loaded') }
+
+  // (4) Nothing has ever loaded: there is no day to act on.
+  { const { st, run } = harness(), a = defer()
+    run(A, a.p as Promise<unknown>)
+    check('the very first load refuses print before anything has loaded',
+      st.loadedDate === null && act('printDay', st, A).refused) }
 }
 
 // ── The harness may not pass by failing to finish ───────────────────────────
@@ -380,6 +477,7 @@ process.on('exit', code => {
 })
 
 raceChecks()
+  .then(loadedDateChecks)
   .then(() => {
     finish()
     if (failures) {
