@@ -13,7 +13,7 @@ import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Modal } from '@/components/ui/Modal'
-import { normalizeTags } from '@/lib/customers'
+import { normalizeTags, listRead } from '@/lib/customers'
 import { applyConsent } from '@/lib/consent'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
@@ -34,6 +34,8 @@ export default function CustomersPage() {
   const [archived, setArchived] = useState<Customer[]>([])
   const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(true)
+  // A read that FAILED is a different fact from a book with no customers in it.
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -62,11 +64,26 @@ export default function CustomersPage() {
       supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user.id).is('archived_at', null).order('name'),
       supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user.id).not('archived_at', 'is', null).order('name'),
     ])
-    setCustomers(activeRes.data || [])
-    setArchived(archRes.data || [])
+    // ⛔⛔ A FAILED READ IS NOT AN EMPTY LIST. This was `res.data || []`, so a
+    // dropped connection rendered "No customers yet — Add your first customer"
+    // to a business with hundreds, AND cached that answer, so the next visit
+    // painted it instantly with no skeleton. The properties page beside this one
+    // and 29 other dashboard pages already keep a loadError; this one did not.
+    const active = listRead<Customer>(activeRes, 'Could not load your customers.')
+    const arch = listRead<Customer>(archRes, 'Could not load your archived customers.')
+    if (!active.ok || !arch.ok) {
+      setLoadError(!active.ok ? active.message : (arch as { message: string }).message)
+      // ⛔ Leave `customers` alone and write NOTHING to the cache: a bad answer
+      // must not outlive the request that produced it.
+      setLoading(false)
+      return
+    }
+    setLoadError(null)
+    setCustomers(active.rows)
+    setArchived(arch.rows)
     // Cache only the first screenful for an instant revisit paint — never serialize
     // thousands of customer rows into sessionStorage. The full list follows immediately.
-    writeCache('customers-list', (activeRes.data || []).slice(0, 100))
+    writeCache('customers-list', active.rows.slice(0, 100))
     setLoading(false)
   }
 
@@ -305,6 +322,26 @@ export default function CustomersPage() {
 
       {loading ? (
         <SkeletonRows count={6} />
+      ) : loadError && customers.length === 0 ? (
+        // ⭐⭐ ONLY when there is nothing to show. If rows are already on screen —
+        // from the cache, or from a load that succeeded before a later refresh
+        // failed — CustomerList STAYS MOUNTED, because the search box and the
+        // consent filter are its own useState. Swapping it out for an error card
+        // would silently discard what the owner had typed, so a recoverable
+        // failure would cost them their filters. Same reasoning as the Growth
+        // view extraction: state in a conditionally-rendered child only survives
+        // while the parent keeps rendering it.
+        <Card>
+          <CardBody>
+            <p className="text-sm text-ink">{loadError}</p>
+            <p className="text-sm text-ink-muted mt-1">
+              This isn’t a picture of your book — nothing has changed.
+            </p>
+            <Button className="mt-3" variant="secondary" onClick={() => { setLoading(true); fetchCustomers() }}>
+              Try again
+            </Button>
+          </CardBody>
+        </Card>
       ) : (
         <CustomerList
           customers={customers}
