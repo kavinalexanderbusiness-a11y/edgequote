@@ -28,6 +28,11 @@
 //     (3.94×), max $6,295 = 89.9× the median. Every per-visit figure in the
 //     advisor was a MEAN (`ltv / completedCount`).
 
+// ⭐ THE one fixture rule, imported rather than restated. lib/fixtureData is a
+// pure leaf with no imports of its own, so this module stays as cheap to import
+// as it was — which matters, because every Growth surface pulls it in.
+import { isAnyFixtureName } from '@/lib/fixtureData'
+
 // ── 1. What may be counted ───────────────────────────────────────────────────
 /**
  * Why a record was left out. Every exclusion is NAMED and surfaced to the owner —
@@ -75,36 +80,33 @@ export function priceEvidence(rawPrice: number | null | undefined, derivedValue:
 /**
  * Does this text read as test/fixture data?
  *
- * ⚠️⚠️ NO FIXTURE MARKER EXISTS IN THE SCHEMA (Session 113 measured this). A name
- * is the only signal available, and a name rule over real rows is a coin flip
- * dressed as a fact — S113 found an ACTIVE technician literally called
- * "S61 FIELD FIXTURE — DELETE ME" that an anchored rule missed.
+ * ⭐⭐ ONE CLASSIFIER, AND IT IS NOT THIS FILE'S (Session 114). This used to keep
+ * its own `FIXTURE_MARKERS` list beside lib/fixtureData's rule. Two engines for
+ * one question is this codebase's proven failure mode, and these two were not
+ * even equivalent — they disagreed in BOTH directions:
  *
- * ⭐ So this is deliberately ANCHORED and NARROW: it matches machine-shaped
- * markers, not English words a real business might use. "Test" alone is not
- * enough — "Test Valley Landscaping" is a real company. It must look like
- * something a developer typed.
+ *   TOO BROAD   this list classified on SINGLE words. `/\bfixture\b/` hid
+ *               "Light Fixture Installation"; `/^s\d{2,3}\s/` hid "S61 Roofing
+ *               Ltd". An electrician and a roofer would each have watched their
+ *               own revenue disappear out of Growth — the exact trust failure
+ *               the comment below this one warns about.
  *
- * ⛔ It is a FLAG, not a classification. Excluding a real customer's revenue is
- * as much a trust failure as including a fixture's, so every exclusion is
- * counted and shown to the owner rather than applied silently.
+ *   TOO NARROW  it had no `VERIFY-` rule, so guard fixtures tagged that way were
+ *               counted as REAL MONEY by the one report built to exclude them.
+ *
+ * ⚠️ Production divergence measured ZERO on the day they were merged — which is
+ * exactly why this was worth fixing then rather than after a tenant in the
+ * lighting or roofing trade signed up.
+ *
+ * ⛔ It remains a FLAG, not a verdict: excluding a real customer's revenue is as
+ * much a trust failure as including a fixture's, so every exclusion is counted
+ * and shown to the owner rather than applied silently. That is this file's job;
+ * deciding WHAT a fixture is belongs to lib/fixtureData, which owns the two-tier
+ * rule (classify machine markers only; merely test-LOOKING data is Tier 2 and
+ * never acts).
  */
-const FIXTURE_MARKERS = [
-  /\bfixture\b/i,
-  /\bdelete\s*me\b/i,
-  /\bdo\s*not\s*use\b/i,
-  /\b(test|demo|sample|dummy)\s*(data|record|customer|account|job|service)\b/i,
-  /^(zz|xx|qa|tmp|temp)[\s\-_]/i,
-  /^s\d{2,3}\s/i,          // "S61 FIELD FIXTURE …" — a session-numbered artefact
-  /\btest@|@example\.(com|org)\b/i,
-]
 export function looksLikeFixture(...texts: Array<string | null | undefined>): boolean {
-  for (const t of texts) {
-    const s = String(t ?? '').trim()
-    if (!s) continue
-    if (FIXTURE_MARKERS.some(rx => rx.test(s))) return true
-  }
-  return false
+  return isAnyFixtureName(...texts)
 }
 
 // ── 2. What statistic represents them ────────────────────────────────────────
