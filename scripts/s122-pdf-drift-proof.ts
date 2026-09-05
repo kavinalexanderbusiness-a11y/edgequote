@@ -185,20 +185,87 @@ async function main() {
     const current = line({ acceptance_is_current: true })
     check('…while a current acceptance still prints its figure',
       /\$250\.00/.test(current), current)
-    // An un-widened payload carries neither field, so the snapshot was already
-    // stripped and there is no superseded figure to suppress.
+    // ⭐⭐ THERE ARE THREE REACHABLE PAYLOAD SHAPES, NOT TWO, and the middle one
+    // was the defect. All four are PRINTED before they are asserted — an
+    // independent reviewer found this exact gap with an assertion that passed
+    // through their own escaping error, and printing is what exposed it. A check
+    // I wrote badly is the failure class this lane keeps meeting.
+    const shapes: [string, Record<string, unknown>][] = [
+      ['baseline  (neither field)     ', { acceptance_kind: undefined, acceptance_is_current: undefined, accepted_price: 1400 }],
+      ['OLD C     (kind, no current)  ', { acceptance_kind: 'customer', acceptance_is_current: undefined, accepted_price: 1400 }],
+      ['OLD C     (kind, current NULL)', { acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 }],
+      ['v2        (current = true)    ', { acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 }],
+      ['v2        (current = false)   ', { acceptance_kind: 'customer', acceptance_is_current: false, accepted_price: 1400 }],
+    ]
+    for (const [label, over] of shapes) console.log(`      ${label} => ${line(over).slice(0, 96)}`)
+
     const preWidening = line({ acceptance_kind: undefined, acceptance_is_current: undefined, accepted_price: 1400 })
-    check('a pre-RUN-S122C payload prints the CURRENT figure, not the snapshot',
+    check('baseline · prints the CURRENT figure, not the snapshot',
       /\$250\.00/.test(preWidening) && !/\$700\.00/.test(preWidening), preWidening)
+    // ⛔ THE DEFECT: kind present (old C projects it) and currentness absent (v2
+    // not yet applied) — the snapshot is USABLE and its currentness is UNKNOWN.
+    // `=== false` called that current and printed $700.00 on a $500 document.
+    const oldC = line({ acceptance_kind: 'customer', acceptance_is_current: undefined, accepted_price: 1400 })
+    check('⭐ OLD-C · a usable snapshot with UNKNOWN currentness fails closed',
+      !/\$700\.00/.test(oldC) && /previously agreed no longer applies/.test(oldC), oldC)
+    const oldCNull = line({ acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 })
+    check('⭐ OLD-C · …and a NULL currentness is unknown too, not current',
+      !/\$700\.00/.test(oldCNull) && /previously agreed no longer applies/.test(oldCNull), oldCNull)
+    const v2true = line({ acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 })
+    check('v2 · an explicitly CURRENT acceptance still prints its authoritative figure',
+      /\$700\.00/.test(v2true), v2true)
     const model = readFileSync(join(process.cwd(), 'src/app/portal/[token]/model.ts'), 'utf8')
-    check('⛔ the portal no longer derives drift from a TOTAL comparison',
-      /const acceptanceSuperseded = qq\.acceptance_is_current === false/.test(model)
+    check('⛔ the portal asks "is it known CURRENT", not "is it known stale"',
+      /const acceptanceSuperseded = qq\.acceptance_kind != null && qq\.acceptance_is_current !== true/.test(model)
+      && !/acceptance_is_current === false/.test(model)
       && !/const acceptanceSuperseded = priceMovedSinceAccepted/.test(model))
     const sql = readFileSync(join(process.cwd(), 'supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql'), 'utf8')
     check('…and the payload gets it from the CANONICAL function, in the same patch as the kind',
       /public\.quote_acceptance_is_current\(qt\.id\) as acceptance_is_current/.test(sql)
       && /as acceptance_kind/.test(sql))
     check('⛔ …which is still a CANDIDATE, never applied', /CANDIDATE — NOT APPLIED/.test(sql))
+
+    // ── ⭐⭐ AND THE SAME SHAPE AS A REAL DOCUMENT ─────────────────────────────
+    // The checks above read the model's sentence. This renders the OLD-C row's
+    // own `getBlob` closure — the one the customer's Download button invokes —
+    // through the shipping PDF pipeline, and reads the words back off the paper.
+    // A model-level assertion is not a document.
+    const { renderPortalQuoteBlob } = await import('../src/lib/portalPdf')
+    const realDoc = async (name: string, over: Record<string, unknown>) => {
+      let seen: { q: unknown; doc?: { acceptanceSuperseded?: boolean } } | null = null
+      const data = {
+        customer: { id: 'c', name: 'ZZ Fixture Customer', email: null, phone: null, address: null, city: null },
+        business: { gst_percent: 0 }, property: null, properties: [],
+        quotes: [q(over)], invoices: [], jobs: [], recurrences: [], photos: [], payments: [],
+      }
+      const v = buildPortalView(data as never, '2026-09-04', {
+        quote: async (qq: unknown, doc?: { acceptanceSuperseded?: boolean }) => { seen = { q: qq, doc }; return new Blob() },
+        invoice: async () => new Blob(),
+      } as never)
+      await v.docItems.find(d => d.kind === 'quote')!.getBlob!()
+      const s = seen as unknown as { q: never; doc?: { acceptanceSuperseded?: boolean } }
+      const blob = await renderPortalQuoteBlob(s.q, 'ZZ Fixture Customer', settings as never, s.doc)
+      const buf = Buffer.from(await blob.arrayBuffer())
+      writeFileSync(join(OUT, `${name}.pdf`), buf)
+      const txt = execFileSync('pdftotext', ['-layout', join(OUT, `${name}.pdf`), '-']).toString()
+      writeFileSync(join(OUT, `${name}.txt`), txt)
+      const flat = txt.replace(/\s+/g, ' ')
+      const at = flat.indexOf('deposit')
+      console.log(`    · ${name}: ${at < 0 ? '(no deposit sentence)' : flat.slice(Math.max(0, at - 26), at + 116)}`)
+      return flat
+    }
+    const oldCDoc = await realDoc('OLDC-kind-without-currentness', { acceptance_kind: 'customer', accepted_price: 1400 })
+    check('⭐ REAL PDF · the old-C document does NOT demand $700.00',
+      !/700/.test(oldCDoc), oldCDoc.slice(0, 300))
+    check('…it still shows the current $500.00 total', /Quote Total \$500\.00/.test(oldCDoc))
+    check('…and explains the revision instead of naming a figure',
+      /previously agreed no longer applies/.test(oldCDoc))
+    const oldCNullDoc = await realDoc('OLDC-currentness-null', { acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 })
+    check('⭐ REAL PDF · a NULL currentness document behaves identically',
+      !/700/.test(oldCNullDoc) && /previously agreed no longer applies/.test(oldCNullDoc))
+    const v2Doc = await realDoc('V2-current-true', { acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 })
+    check('REAL PDF · an explicitly current acceptance still prints $700.00',
+      /\$700\.00/.test(v2Doc), v2Doc.slice(0, 300))
   }
 
   console.log('\n■ 4. Offline')

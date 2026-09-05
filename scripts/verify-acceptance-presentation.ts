@@ -333,7 +333,11 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
   // drift follow-up exists to remove. Split in two rather than deleted: the
   // "one basis, every surface" claim keeps a fixture where the acceptance still
   // MATCHES its document, and drift gets its own case below.
-  const same = row({ acceptance_kind: 'customer', total: 1400, initial_price: 1400 })
+  // ⚠️ `acceptance_is_current: true` is REQUIRED here, not decoration. This
+  // fixture omitted it and passed only while an absent field read as "current" —
+  // the very assumption an independent review then showed to be the defect. A
+  // fixture that leans on a permissive default is asserting the default.
+  const same = row({ acceptance_kind: 'customer', acceptance_is_current: true, total: 1400, initial_price: 1400 })
   check('…the sentence follows it too — one basis, every surface',
     /\$700\.00/.test(same.paymentTimingLine ?? ''), same.paymentTimingLine)
   // ⭐⭐ DRIFT IS DECIDED CANONICALLY — by `quote_acceptance_is_current`, the same
@@ -361,9 +365,15 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
     // Read locally — §4's `model` is out of scope here, and a guard that reaches
     // for a name it does not own is a guard that stops running at the first edit.
     const src = read('src/app/portal/[token]/model.ts')
-    check('⛔ the portal reads the canonical answer, never a total comparison',
-      /const acceptanceSuperseded = qq\.acceptance_is_current === false/.test(src)
+    // ⭐ "Is it known CURRENT", not "is it known stale" — the difference is the
+    // old-C payload, where the kind is present and currentness is not.
+    check('⛔ the portal fails closed on a usable snapshot it cannot verify',
+      /const acceptanceSuperseded = qq\.acceptance_kind != null && qq\.acceptance_is_current !== true/.test(src)
+      && !/acceptance_is_current === false/.test(src)
       && !/const acceptanceSuperseded = priceMovedSinceAccepted/.test(src))
+    check('⭐ …so a kind-without-currentness payload drops the figure',
+      !/\$700\.00/.test(row({ acceptance_kind: 'customer' }).paymentTimingLine ?? ''),
+      row({ acceptance_kind: 'customer' }).paymentTimingLine)
   }
   check('…and the PDF is handed the same basis',
     evPdfBasis === 1400, String(evPdfBasis))

@@ -908,13 +908,26 @@ export function buildDocItems(opts: {
     // figure while the customer's copy still printed it. Same quote, two
     // documents, two answers.
     //
-    // ⚠️ THREE-VALUED, and the third value is safe rather than lucky. `undefined`
-    // means the payload predates RUN-S122C — and that same patch is what makes
-    // `acceptance_kind` available, without which the presentation is `unevidenced`
-    // and `customerFacingQuote` has already stripped the snapshot. So on an
-    // un-widened payload there is no superseded figure to suppress: the two fields
-    // arrive together on purpose.
-    const acceptanceSuperseded = qq.acceptance_is_current === false
+    // ⛔⛔ FAIL CLOSED ON "USABLE BUT UNVERIFIABLE", and there are THREE payload
+    // shapes here, not two. My earlier `=== false` read an ABSENT field as
+    // "current", on the argument that the two fields arrive together — true of
+    // baseline → v2, and false of the shape in between:
+    //
+    //   baseline        neither field    kind absent ⇒ presentation is unevidenced,
+    //                                    the snapshot is already stripped, nothing
+    //                                    superseded to suppress
+    //   OLD RUN-S122C   kind, no         ⛔ the snapshot IS usable and currentness
+    //                   currentness         is UNKNOWN — `=== false` called that
+    //                                       current and printed $700.00 on a $500
+    //                                       document, the exact defect this lane
+    //                                       exists to close
+    //   v2 RUN-S122C    both             authoritative either way
+    //
+    // ⭐ So the question is not "is it known-stale" but "is it known-current". A
+    // usable snapshot whose currentness is not explicitly true is treated as
+    // superseded. Baseline is untouched because the kind is absent there, which is
+    // what keeps this a fix to the broken shape and not a behaviour change.
+    const acceptanceSuperseded = qq.acceptance_kind != null && qq.acceptance_is_current !== true
     const timing = paymentTiming(moneyQuote, {
       basisSettled: !(options && !qq.selected_option_id),
       acceptanceSuperseded,

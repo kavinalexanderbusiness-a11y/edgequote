@@ -33,6 +33,16 @@ declare
   v_old text;
   v_new text;
   v_hits int;
+  v_kind_n int;
+  v_cur_n int;
+  -- ⭐ The two projected lines, named once so the baseline splice and the upgrade
+  -- splice cannot drift apart. Both paths must produce the SAME final body.
+  c_kind constant text :=
+       '             (select qa.kind from public.quote_acceptances qa'
+    || E'\n'
+    || '               where qa.quote_id = qt.id order by qa.seq desc limit 1) as acceptance_kind,';
+  c_cur constant text :=
+       '             public.quote_acceptance_is_current(qt.id) as acceptance_is_current,';
 begin
   select pg_get_functiondef(p.oid) into v_src
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -46,17 +56,50 @@ begin
   -- anchor matches ZERO times. This trap has now cost this lane twice.
   v_src := replace(v_src, E'\r\n', E'\n');
 
-  -- ⚠️ Idempotency now keys on the SECOND field, not the first. A ledger that
-  -- already carries `acceptance_kind` from the earlier one-field version of this
-  -- patch must still receive the currentness bit, and keying on the kind would
-  -- silently declare that database already done.
-  if position('acceptance_is_current' in v_src) > 0 then
+  -- Count both projections ONCE, up front: every branch below reasons about them.
+  v_kind_n := (length(v_src) - length(replace(v_src, ') as acceptance_kind,', ''))) / length(') as acceptance_kind,');
+  v_cur_n  := (length(v_src) - length(replace(v_src, ' as acceptance_is_current,', ''))) / length(' as acceptance_is_current,');
+
+  -- ⚠️ Idempotency keys on the SECOND field, not the first. A ledger that already
+  -- carries `acceptance_kind` from the earlier one-field version of this patch
+  -- must still receive the currentness bit, and keying on the kind would silently
+  -- declare that database already done.
+  if v_cur_n > 0 then
+    if v_cur_n <> 1 or v_kind_n <> 1 then
+      raise exception 'get_portal_data already carries % kind and % currentness projections — expected exactly 1 of each, refusing to touch a body this patch did not produce',
+        v_kind_n, v_cur_n;
+    end if;
     raise notice 'already widened — nothing to do';
     return;
   end if;
 
-  -- The quote projection's consent columns, which S122 added and S121 populated.
-  v_old := 'qt.accepted_price, qt.deposit_type, qt.deposit_value,';
+  -- ⭐⭐ BRANCH ON WHAT IS ACTUALLY THERE, because there are TWO starting points
+  -- and they need different anchors.
+  --
+  -- An earlier version of this patch projected the KIND alone. A database that
+  -- took it is not baseline any more, and splicing at the baseline anchor would
+  -- re-insert a projection it already has: measured, `kind=2, is_current=1`.
+  -- Postgres ACCEPTS a duplicate output column and the emitted JSON is still
+  -- correct — so this is not a payload defect — but it leaves two databases with
+  -- different function bodies for no functional reason, and it strands them for
+  -- the NEXT anchor patch, every one of which refuses unless its anchor matches
+  -- exactly once.
+  --
+  -- ⭐ Both paths must end at the SAME body. That is why the kind lines below are
+  -- byte-identical to the ones the earlier version emitted, and why the upgrade
+  -- path appends the currentness line directly after the kind projection rather
+  -- than rebuilding it.
+  if v_kind_n > 0 then
+    if v_kind_n <> 1 then
+      raise exception 'get_portal_data carries % acceptance_kind projections, expected exactly 1 — refusing to patch a malformed body', v_kind_n;
+    end if;
+    -- UPGRADE PATH: anchor on the kind projection that is already there.
+    v_old := ') as acceptance_kind,';
+  else
+    -- BASELINE PATH: the quote projection's consent columns, which S122 added
+    -- and S121 populated.
+    v_old := 'qt.accepted_price, qt.deposit_type, qt.deposit_value,';
+  end if;
   v_hits := (length(v_src) - length(replace(v_src, v_old, ''))) / nullif(length(v_old), 0);
   if coalesce(v_hits, 0) <> 1 then
     raise exception 'anchor found % times, expected exactly 1 — refusing to patch', coalesce(v_hits, 0);
@@ -102,14 +145,27 @@ begin
   -- for an unknown quote and applies its tenant check only when auth.uid() is
   -- non-null, which it is not in the portal. It leaks nothing a token holder
   -- cannot already see about their own quote.
-  v_new := v_old || E'\n'
-        || '             (select qa.kind from public.quote_acceptances qa'
-        || E'\n'
-        || '               where qa.quote_id = qt.id order by qa.seq desc limit 1) as acceptance_kind,'
-        || E'\n'
-        || '             public.quote_acceptance_is_current(qt.id) as acceptance_is_current,';
+  -- The upgrade path appends ONLY the currentness line, after the kind projection
+  -- that is already present. The baseline path adds both.
+  if v_kind_n > 0 then
+    v_new := v_old || E'\n' || c_cur;
+  else
+    v_new := v_old || E'\n' || c_kind || E'\n' || c_cur;
+  end if;
 
   v_src := replace(v_src, v_old, v_new);
+
+  -- ⛔⛔ POST-ASSERT BEFORE EXECUTING, not after. Whatever path got us here, the
+  -- body about to be installed must carry EXACTLY ONE of each projection — that
+  -- is the property the next anchor patch in this lane will depend on, and the
+  -- only way both paths can be said to converge on the same body.
+  v_kind_n := (length(v_src) - length(replace(v_src, ') as acceptance_kind,', ''))) / length(') as acceptance_kind,');
+  v_cur_n  := (length(v_src) - length(replace(v_src, ' as acceptance_is_current,', ''))) / length(' as acceptance_is_current,');
+  if v_kind_n <> 1 or v_cur_n <> 1 then
+    raise exception 'refusing to install a body with % kind and % currentness projections — expected exactly 1 of each',
+      v_kind_n, v_cur_n;
+  end if;
+
   execute v_src;
 end;
 $patch$;
