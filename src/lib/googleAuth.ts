@@ -76,6 +76,28 @@ export const OAUTH_INVITE_COOKIE = 'eq-oauth-invite'
  *  consent to create a business (S110 §4.1). */
 export const OAUTH_REGISTER_COOKIE = 'eq-oauth-register'
 
+/** The intent cookie for ONE round trip, as the start route writes it: SET
+ *  when the sign-up page asked, otherwise CLEARED — with the same attributes,
+ *  so the browser replaces the very cookie an earlier attempt left behind.
+ *
+ *  ⭐ Why the clear is not optional (S110, FIX FIRST at 54498a59): an abandoned
+ *  sign-up — consent screen closed, tab closed — never reaches the callback,
+ *  the only other place that clears, so its cookie lives on for up to
+ *  OAUTH_INVITE_TTL_SECONDS. A plain "Sign in with Google" started inside that
+ *  window would inherit consent nobody gave and land on /setup?intent=register.
+ *  Pure, so the guard can execute both branches and the stale-jar sequence. */
+export function registerIntentCookie(registerIntent: boolean, secure: boolean): {
+  name: string
+  value: string
+  options: { httpOnly: true; sameSite: 'lax'; secure: boolean; path: '/'; maxAge: number }
+} {
+  return {
+    name: OAUTH_REGISTER_COOKIE,
+    value: registerIntent ? '1' : '',
+    options: { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: registerIntent ? OAUTH_INVITE_TTL_SECONDS : 0 },
+  }
+}
+
 /**
  * Does this browser still hold the PKCE verifier that STARTED the flow?
  *

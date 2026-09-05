@@ -6,7 +6,7 @@ import { BETA_TOKEN_RE } from '@/lib/betaInvite'
 import { INTENT_PARAM, REGISTER_INTENT } from '@/lib/registration'
 import {
   GOOGLE_PROVIDER, GOOGLE_SCOPES, AUTH_ERROR_PARAM,
-  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH, OAUTH_REGISTER_COOKIE,
+  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH, registerIntentCookie,
   buildCallbackUrl, safeReturnPath,
 } from '@/lib/googleAuth'
 
@@ -145,14 +145,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       maxAge: OAUTH_INVITE_TTL_SECONDS,
     })
   }
-  if (registerIntent) {
-    res.cookies.set(OAUTH_REGISTER_COOKIE, '1', {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: origin.startsWith('https://'),
-      path: '/',
-      maxAge: OAUTH_INVITE_TTL_SECONDS,
-    })
-  }
+  // The intent marker belongs to THIS round trip only: written when the sign-up
+  // page asked, and otherwise CLEARED with the same attributes (S110 FIX FIRST
+  // at 54498a59) — an abandoned sign-up leaves its cookie behind for up to
+  // 600 s, and a plain sign-in started inside that window must not inherit a
+  // consent nobody gave. Always written, never conditional. The invite cookie
+  // keeps its own contract: bound and cleared at the callback.
+  const intentCookie = registerIntentCookie(registerIntent, origin.startsWith('https://'))
+  res.cookies.set(intentCookie.name, intentCookie.value, intentCookie.options)
   return res
 }

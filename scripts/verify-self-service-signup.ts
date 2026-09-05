@@ -33,7 +33,9 @@ import {
   signUpOutcome, resendOutcome, registrationNextStep, parseProvisioningStatus, hasRegisterIntent,
   REGISTRATION_CLOSED, REGISTER_STATUS_PATH, RESEND_COOLDOWN_SECONDS, RESENT_NOTE, SETUP_REGISTER_PATH, REGISTER_INTENT,
 } from '../src/lib/registration'
-import { readGoogleAuthError, GOOGLE_AUTH_ERROR_TEXT, OAUTH_REGISTER_COOKIE, OAUTH_INVITE_COOKIE } from '../src/lib/googleAuth'
+import {
+  readGoogleAuthError, GOOGLE_AUTH_ERROR_TEXT, OAUTH_REGISTER_COOKIE, OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, registerIntentCookie,
+} from '../src/lib/googleAuth'
 
 let pass = 0, fail = 0
 const check = (name: string, cond: boolean, detail = '') => {
@@ -177,9 +179,38 @@ check('no driver message is ever interpolated into the page', !/\$\{[A-Za-z]+\.m
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('6. the OAuth round trip — intent travels like an invite; a sign-in never creates a business')
-check('the start route sets the intent cookie only for ?intent=register, httpOnly, bounded',
-  /const registerIntent = req\.nextUrl\.searchParams\.get\(INTENT_PARAM\) === REGISTER_INTENT/.test(START)
-  && /if \(registerIntent\) \{\s*res\.cookies\.set\(OAUTH_REGISTER_COOKIE, '1', \{\s*httpOnly: true,\s*sameSite: 'lax',[\s\S]{0,120}?maxAge: OAUTH_INVITE_TTL_SECONDS,/.test(START))
+check('the start route reads intent from ?intent=register only',
+  /const registerIntent = req\.nextUrl\.searchParams\.get\(INTENT_PARAM\) === REGISTER_INTENT/.test(START))
+// S110 FIX FIRST at 54498a59: intent must not outlive the round trip that stated
+// it. The cookie is written on EVERY successful start — set with intent, cleared
+// without — through one pure helper the guard executes below.
+check('the start route writes the intent cookie unconditionally through registerIntentCookie (set OR clear)',
+  /const intentCookie = registerIntentCookie\(registerIntent, origin\.startsWith\('https:\/\/'\)\)\s*res\.cookies\.set\(intentCookie\.name, intentCookie\.value, intentCookie\.options\)/.test(START)
+  && !/if \(registerIntent\) \{/.test(START))
+const setC = registerIntentCookie(true, true), clrC = registerIntentCookie(false, true)
+check('with intent: the marker, bounded to the invite TTL, httpOnly, Lax, host-wide',
+  setC.name === OAUTH_REGISTER_COOKIE && setC.value === '1' && setC.options.maxAge === OAUTH_INVITE_TTL_SECONDS
+  && setC.options.httpOnly === true && setC.options.sameSite === 'lax' && setC.options.path === '/' && setC.options.secure === true)
+check('without intent: CLEARED (maxAge 0) with the SAME attributes, so the browser replaces the stale one',
+  clrC.name === setC.name && clrC.value === '' && clrC.options.maxAge === 0
+  && clrC.options.httpOnly === setC.options.httpOnly && clrC.options.sameSite === setC.options.sameSite
+  && clrC.options.path === setC.options.path && clrC.options.secure === setC.options.secure)
+check('secure mirrors the origin in both branches', registerIntentCookie(true, false).options.secure === false && registerIntentCookie(false, false).options.secure === false)
+// The stale-jar sequence S110 described, executed against a browser-like jar:
+// a sign-up round trip is started and ABANDONED (no callback), then a plain
+// sign-in is started inside the TTL. The jar must hold no intent afterwards.
+{
+  const jar = new Map<string, string>()
+  const apply = (c: { name: string; value: string; options: { maxAge: number } }) => { if (c.options.maxAge <= 0) jar.delete(c.name); else jar.set(c.name, c.value) }
+  apply(registerIntentCookie(true, true))            // /signup → Continue with Google … abandoned
+  const afterSignup = jar.get(OAUTH_REGISTER_COOKIE)
+  apply(registerIntentCookie(false, true))           // /login → Sign in with Google, 30 s later
+  const afterSignin = jar.get(OAUTH_REGISTER_COOKIE)
+  check('stale-jar sequence: the abandoned sign-up left the marker, the sign-in start removed it',
+    afterSignup === '1' && afterSignin === undefined)
+  check('…so the callback would read registerIntent = false', (afterSignin === '1') === false)
+  check('…and the invite cookie is never touched by the intent helper', !jar.has(OAUTH_INVITE_COOKIE) && !/OAUTH_INVITE_COOKIE/.test(String(registerIntentCookie)))
+}
 check('the start route still preserves the PKCE jar and never logs', /for \(const c of jar\) res\.cookies\.set/.test(START) && !/console\./.test(START))
 check('the Google button forwards intent only when given one', /if \(intent\) q\.set\('intent', intent\)/.test(BUTTON) && /intent\?: 'register' \| null/.test(BUTTON))
 check('the callback reads the cookie and clears it on every exit',
