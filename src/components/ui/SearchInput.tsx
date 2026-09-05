@@ -63,7 +63,11 @@ const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
           aria-label={props['aria-label'] ?? label}
         />
         {trailing === 'clear' && (
-          <button type="button" onClick={onClear} aria-label="Clear search"
+          <button type="button" onClick={event => {
+            // Clearing removes this button; keep typing focus in the search field.
+            event.currentTarget.parentElement?.querySelector('input')?.focus({ preventScroll: true })
+            onClear?.()
+          }} aria-label="Clear search"
             className={cn('absolute top-1/2 -translate-y-1/2 flex items-center justify-center rounded-md text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
               sm ? 'right-1 w-7 h-7' : 'right-1.5 w-8 h-8')}>
             <X className={sm ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
