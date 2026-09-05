@@ -16,6 +16,7 @@
     "verify:operator-cli": "tsx scripts/verify-operator-cli.ts",
     "verify:automations": "tsx scripts/verify-automations.ts",
     "verify:capabilities": "tsx scripts/verify-capabilities.ts",
+    "verify:v1-tenant-scoping": "tsx scripts/verify-v1-tenant-scoping.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:comm-prefs": "tsx scripts/verify-comm-prefs.ts",
     "verify:completion": "tsx scripts/verify-completion.ts",
