@@ -349,10 +349,47 @@ async function raceChecks() {
     check('the ordinary single-load path is unchanged', st.jobs[0]?.id === 'ONLY' && !st.loading && st.loadError === null) }
 }
 
-raceChecks().then(() => {
-  if (failures) {
-    console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
-    process.exit(1)
+// ── The harness may not pass by failing to finish ───────────────────────────
+// ⛔ A pending promise does NOT keep Node alive: if anything awaited above never
+// settles, the loop drains, the .then() never runs, and the process exits 0 with
+// no summary — which verify-all, keying on the exit status, cannot tell from a
+// pass. Measured on the parent commit: 0 of 12 race checks ran, exit 0.
+// Two belts, because the failure mode is silence: a REFERENCED timer (never
+// .unref()'d, so it holds the loop open) and an exit assertion that forbids a 0.
+const RACE_TIMEOUT_MS = 30000
+let raceCompleted = false
+
+const watchdog = setTimeout(() => {
+  console.log(`\n❌ verify:dispatch-board — the race section did not finish within ${RACE_TIMEOUT_MS}ms.`)
+  console.log('   Something the harness awaits never settled, so the checks below it never ran.')
+  console.log('   Silence is a FAILURE here, not a pass.\n')
+  process.exitCode = 1
+  // Draining naturally flushes stdout, which process.exit() can truncate on a
+  // pipe. If some handle IS holding the loop open, this unref’d timer forces it.
+  setTimeout(() => process.exit(1), 250).unref()
+}, RACE_TIMEOUT_MS)
+
+/** Reached a verdict: stand the watchdog down and allow a 0. */
+const finish = () => { raceCompleted = true; clearTimeout(watchdog) }
+
+process.on('exit', code => {
+  if (!raceCompleted && code === 0) {
+    console.log('\n❌ verify:dispatch-board — exited before the race section completed.\n')
+    process.exitCode = 1
   }
-  console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes, newest day wins\n')
 })
+
+raceChecks()
+  .then(() => {
+    finish()
+    if (failures) {
+      console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
+      process.exit(1)
+    }
+    console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes, newest day wins\n')
+  })
+  .catch((err: unknown) => {
+    finish()
+    console.log(`\n❌ verify:dispatch-board — the race harness threw\n   ${String((err as Error)?.message ?? err).slice(0, 300)}\n`)
+    process.exit(1)
+  })
