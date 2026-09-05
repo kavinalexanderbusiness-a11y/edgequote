@@ -48,6 +48,10 @@ let storeOwner: string | null = null
 /** Who the session says we are, and whether that has been established at all. */
 let currentOwner: string | null = null
 let ownerKnown = false
+// Advances on every owner CHANGE. persist has no in-flight slot to identify
+// itself by, so it carries this instead: A -> B -> A moves it twice, which an
+// owner comparison alone cannot see.
+let ownerEpoch = 0
 let inFlight: Promise<void> | null = null
 /** The owner `inFlight` was started for — two accounts must never share one load. */
 let inFlightOwner: string | null = null
@@ -92,6 +96,7 @@ function ensureAuthWatch() {
     const changed = !ownerKnown || uid !== currentOwner
     currentOwner = uid
     ownerKnown = true
+    if (changed) ownerEpoch++
     if (!changed) { emit(); return }
     // A switch orphans anything started for the previous account.
     inFlight = null
@@ -116,6 +121,7 @@ function loadModules(): Promise<void> {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id ?? null
+      if (!ownerKnown || uid !== currentOwner) ownerEpoch++
       currentOwner = uid
       ownerKnown = true
       if (!uid) {
@@ -130,6 +136,18 @@ function loadModules(): Promise<void> {
       // ⛔ REJECT A LATE COMPLETION. The session can change while this waits; a
       // read issued as A must never land in B's store.
       if (uid !== currentOwner) return
+      // ⛔⛔ AND THE OWNER CHECK IS NOT ENOUGH ON ITS OWN. A → B → A inside one
+      // page session orphans this read at the switch (`inFlight = null`) without
+      // cancelling it, and returning to A starts a second one. When this one
+      // finally answers, `uid === currentOwner === A`, so the line above passes
+      // and an older read overwrites the newer result. Both are A's own data, so
+      // it is staleness rather than a leak — but the owner is shown a
+      // composition from before a change they just made.
+      //
+      // The request's own identity settles it: this load may commit only while it
+      // is still THE in-flight one. Same test the `finally` below already uses.
+      // Placed before the error branch so a late failure cannot commit either.
+      if (inFlight !== self.p) return
       if (error) {
         // Keep serving OUR last good snapshot if we have one; otherwise fail OPEN
         // (every module visible) but remember that we are guessing.
@@ -184,6 +202,10 @@ export function useModules() {
     // screen belongs to another account — or to nobody yet — would write that
     // account's composition onto this one. Reading may fail open; this may not.
     const owner = currentOwner
+    // Captured with the owner: A -> B -> A moves the epoch twice, so a late answer
+    // to THIS save cannot be mistaken for the current one just because the same
+    // account is signed in again.
+    const epoch = ownerEpoch
     if (owner === null || !mayServeOwner(ownerKnown, storeOwner, owner)) {
       return 'Couldn’t confirm which account is signed in, so nothing was changed. Reload and try again.'
     }
@@ -208,7 +230,7 @@ export function useModules() {
     // ⛔ REJECT A LATE COMPLETION. If the account changed while the upsert was in
     // flight, neither its success nor its failure may touch the store now on
     // screen — the row was written for `owner`, not for whoever is here.
-    if (currentOwner !== owner) return error ? error.message : null
+    if (currentOwner !== owner || ownerEpoch !== epoch) return error ? error.message : null
     if (error) { store = prev; storeOwner = prevOwner; emit(); return error.message }
     window.dispatchEvent(new Event('eq:modules-changed'))
     return null
