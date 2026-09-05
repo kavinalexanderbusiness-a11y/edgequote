@@ -53,6 +53,7 @@ import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 // THE words for the work (lib/vocabulary): a `jobs` row is one VISIT, and this
 // page is where every job's visits live — the subtitle has to say both.
 import { scheduleSubtitle } from '@/lib/vocabulary'
+import { parseScheduleDate } from '@/lib/scheduleDate'
 
 // ── The offline field bundle ──────────────────────────────────────────────────
 // Everything the day board needs to be TRUE with no signal, for the window a
@@ -165,7 +166,7 @@ export default function SchedulePage() {
   // UTC. So "today" here and "today" there were routinely different days, and
   // the board's missed-jobs cut-off moved with whichever machine was looking.
   // One clock now, the tenant's, shared by every dashboard surface.
-  const { todayISO: tenantToday } = useTenantTime()
+  const { todayISO: tenantToday, ready: tenantTimeReady } = useTenantTime()
   // Learned drive speed — feeds the proactive optimizer suggestions below.
   const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
   useEffect(() => { loadTravelModel(supabase).then(setTravel) }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -189,7 +190,10 @@ export default function SchedulePage() {
   // Dispatcher-first: land on TODAY's day board everywhere — "where next / when
   // finished / am I behind" lives there, not in a passive month grid.
   const [view, setView] = useState<CalendarView>('day')
-  const [cursor, setCursor] = useState(new Date())
+  // Null follows the business's day. An explicit link or navigation selects a
+  // date instead, so a late timezone read or midnight cannot move that selection.
+  const [selectedCursor, setCursor] = useState<Date | null>(() => parseScheduleDate(dayParam))
+  const cursor = useMemo(() => selectedCursor ?? parseISO(tenantToday + 'T00:00:00'), [selectedCursor, tenantToday])
   // In-flight guard for the field bar's primary (it shares startJob/completeJob
   // with the cards, which keep their own `acting` guard inside the panel).
   const [fieldActing, setFieldActing] = useState(false)
@@ -1133,11 +1137,11 @@ export default function SchedulePage() {
   // Day deep link (?d=YYYY-MM-DD) — THE focused destination for one DAY, used by
   // the Owner Inbox's "Fix Thursday's schedule" rows. Only moves the cursor: a
   // day-level door opens the board ON that day and touches nothing, so a stale
-  // link can never open, edit or create a visit. Format-checked because this
-  // arrives from a URL — parseISO on garbage would set an Invalid Date cursor.
+  // link can never open, edit or create a visit. Check the actual calendar date:
+  // digit-shaped values such as 2026-02-30 must not crash the board's formatter.
   useEffect(() => {
-    if (!dayParam || !/^\d{4}-\d{2}-\d{2}$/.test(dayParam)) return
-    setCursor(parseISO(dayParam + 'T00:00:00'))
+    const date = parseScheduleDate(dayParam)
+    if (date) setCursor(date)
   }, [dayParam])
 
   // ?panel=time|cost — land ON the panel, not merely on the form that contains
@@ -2769,9 +2773,9 @@ export default function SchedulePage() {
   }
 
   function navigate(dir: 1 | -1) {
-    if (view === 'month') setCursor(c => dir === 1 ? addMonths(c, 1) : subMonths(c, 1))
-    else if (view === 'week') setCursor(c => dir === 1 ? addWeeks(c, 1) : subWeeks(c, 1))
-    else setCursor(c => dir === 1 ? addDays(c, 1) : subDays(c, 1))
+    if (view === 'month') setCursor(c => dir === 1 ? addMonths(c ?? cursor, 1) : subMonths(c ?? cursor, 1))
+    else if (view === 'week') setCursor(c => dir === 1 ? addWeeks(c ?? cursor, 1) : subWeeks(c ?? cursor, 1))
+    else setCursor(c => dir === 1 ? addDays(c ?? cursor, 1) : subDays(c ?? cursor, 1))
   }
 
   function openNewJob(date: Date) {
@@ -2862,7 +2866,7 @@ export default function SchedulePage() {
   // open, else the day's next stop — the same visit the field bar names, so the
   // + and the bar can never mean different jobs. Its status decides which
   // visit-scoped doors exist at all (lib/quickAdd).
-  const quickAddJob = editing ?? (view === 'day' ? fieldNext : undefined)
+  const quickAddJob = tenantTimeReady ? editing ?? (view === 'day' ? fieldNext : undefined) : undefined
   usePublishQuickAddContext(useMemo(() => (quickAddJob ? {
     kind: 'job' as const,
     jobId: quickAddJob.id,
@@ -2871,6 +2875,10 @@ export default function SchedulePage() {
     customerName: quickAddJob.customers?.name ?? null,
     propertyId: quickAddJob.property_id ?? null,
   } : null), [quickAddJob]))
+
+  // The fallback date is usable during loading, but must not be presented as
+  // this business's Today until its timezone has actually been read.
+  if (!tenantTimeReady) return <SkeletonRows label="Loading schedule…" />
 
   return (
     // Reserve the field bar's height on phones so the last job card can still be
@@ -2929,7 +2937,7 @@ export default function SchedulePage() {
           <Button variant="secondary" size="sm" aria-label="Previous period" onClick={() => navigate(-1)}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
+          <Button variant="secondary" size="sm" onClick={() => setCursor(null)}>Today</Button>
           {/* The named "Tomorrow" shortcut that used to sit here was removed on
               the owner's direction (Session 112) — the header stays simpler, and
               tomorrow remains one tap away on the next-period chevron (and
@@ -3290,6 +3298,7 @@ export default function SchedulePage() {
         <Calendar
           view={view}
           cursor={cursor}
+          todayISO={tenantToday}
           jobs={jobs}
           onSelectDay={handleDayTap}
           onSelectJob={handleJobTap}

@@ -15,6 +15,8 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { format } from 'date-fns'
+import { parseScheduleDate } from '../src/lib/scheduleDate'
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -36,19 +38,59 @@ check('the next-period chevron survives, with its accessible name',
 check('Today survives beside it',
   />\s*Today\s*<\/Button>/.test(page))
 check('day-view next-period still steps one DAY',
-  /setCursor\(c => dir === 1 \? addDays\(c, 1\) : subDays\(c, 1\)\)/.test(page),
+  /setCursor\(c => dir === 1 \? addDays\(c \?\? cursor, 1\) : subDays\(c \?\? cursor, 1\)\)/.test(page),
   'navigate(1) in day view is now the one-tap route to tomorrow')
 check('the ?d=YYYY-MM-DD deep link still lands on its day',
   /const dayParam = searchParams\.get\('d'\)/.test(page)
-  && /if \(!dayParam \|\| !\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$\/\.test\(dayParam\)\) return/.test(page)
-  && /setCursor\(parseISO\(dayParam \+ 'T00:00:00'\)\)/.test(page))
+  && /const date = parseScheduleDate\(dayParam\)\s+if \(date\) setCursor\(date\)/.test(page))
 
 console.log('\n═══ Month / Week untouched ═══')
 check('the three views still switch',
   /const viewButtons: CalendarView\[\] = \['month', 'week', 'day'\]/.test(page))
-check('month and week navigation is byte-what-it-was',
-  /if \(view === 'month'\) setCursor\(c => dir === 1 \? addMonths\(c, 1\) : subMonths\(c, 1\)\)/.test(page)
-  && /else if \(view === 'week'\) setCursor\(c => dir === 1 \? addWeeks\(c, 1\) : subWeeks\(c, 1\)\)/.test(page))
+check('month and week navigation still steps their own periods',
+  /if \(view === 'month'\) setCursor\(c => dir === 1 \? addMonths\(c \?\? cursor, 1\) : subMonths\(c \?\? cursor, 1\)\)/.test(page)
+  && /else if \(view === 'week'\) setCursor\(c => dir === 1 \? addWeeks\(c \?\? cursor, 1\) : subWeeks\(c \?\? cursor, 1\)\)/.test(page))
+
+console.log('\n═══ Date links cannot crash the calendar ═══')
+for (const value of [null, '', '2026-02-30', '2026-13-05', '2026-00-10', '2026-09-00', '2026-04-31', '2026-02-29', '2026-9-5', '2026-09-05T00:00:00']) {
+  check(`invalid date ${JSON.stringify(value)} is ignored`, parseScheduleDate(value) === null)
+}
+for (const value of ['2026-09-05', '2028-02-29', '2026-12-31', '2027-01-01']) {
+  const date = parseScheduleDate(value)
+  check(`valid date ${value} survives unchanged`, date !== null && format(date, 'yyyy-MM-dd') === value)
+}
+
+console.log('\n═══ Today belongs to the business ═══')
+check('the initial selection accepts a valid day link, otherwise follows tenant Today',
+  /useState<Date \| null>\(\(\) => parseScheduleDate\(dayParam\)\)/.test(page)
+  && /selectedCursor \?\? parseISO\(tenantToday \+ 'T00:00:00'\)/.test(page))
+check('Today clears the explicit selection and resumes following the tenant day',
+  /onClick=\{\(\) => setCursor\(null\)\}>Today<\/Button>/.test(page))
+check('an unknown tenant timezone shows loading before any schedule controls',
+  /ready: tenantTimeReady/.test(page)
+  && /if \(!tenantTimeReady\) return <SkeletonRows label="Loading schedule…" \/>/.test(page))
+check('the calendar receives the same tenant day as the board', /todayISO=\{tenantToday\}/.test(page))
+
+// Render the actual calendar with empty synthetic data. No client effects or
+// network calls run. This repo's JSX-preserve TS runner needs React in scope,
+// as in verify:mobile-shell.
+const React = require('react') as typeof import('react')
+;(globalThis as Record<string, unknown>).React = React
+const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
+const { Calendar } = require('../src/components/schedule/Calendar') as typeof import('../src/components/schedule/Calendar')
+const calendarCursor = parseScheduleDate('2032-02-28')!
+for (const view of ['month', 'week'] as const) {
+  const render = (todayISO: string | null) => renderToStaticMarkup(React.createElement(Calendar, {
+    view, cursor: calendarCursor, todayISO, jobs: [], onSelectDay: () => {}, onSelectJob: () => {},
+  }))
+  const html = render('2032-02-28')
+  check(`${view}: only the supplied business day is marked Today`,
+    html.includes('data-date="2032-02-28" aria-current="date"')
+    && (html.match(/aria-current="date"/g) ?? []).length === 1)
+  const currentCell = html.split('data-date="2032-02-28"')[1]?.split('data-date=')[0] ?? ''
+  check(`${view}: the business day also has its visual highlight`, currentCell.includes('bg-accent text-black'))
+  check(`${view}: no guessed Today appears before the timezone is ready`, !render(null).includes('aria-current="date"'))
+}
 
 console.log('\n═══ The OTHER Tomorrow is a different feature, and stays ═══')
 const rain = read('src/components/schedule/RainDelayCenter.tsx')

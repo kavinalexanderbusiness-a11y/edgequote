@@ -449,7 +449,9 @@ console.log('\n═══ 8. The wiring: one engine, one count, honest pages ═�
 
   const SCHED = read('src/app/dashboard/schedule/page.tsx')
   check('the schedule’s day door exists and validates its input',
-    /searchParams\.get\('d'\)/.test(SCHED) && /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/.test(SCHED))
+    /searchParams\.get\('d'\)/.test(SCHED)
+    && /const date = parseScheduleDate\(dayParam\)\s+if \(date\) setCursor\(date\)/.test(SCHED)
+    && /isValid\(date\)/.test(read('src/lib/scheduleDate.ts')))
   check('the day door only MOVES the cursor — it opens and edits nothing',
     (() => {
       const eff = SCHED.slice(SCHED.indexOf("// Day deep link (?d=YYYY-MM-DD)"), SCHED.indexOf('}, [dayParam])'))
