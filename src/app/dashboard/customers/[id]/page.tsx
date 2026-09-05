@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence, CustomerFormValues } from '@/types'
 import { WebsiteLead } from '@/lib/leads'
@@ -276,6 +276,7 @@ export default function CustomerDetailPage() {
 
   useEffect(() => {
     async function load() {
+      const lease = cacheLease()
       // Local session read (no GoTrue round-trip). ONE batch for everything that
       // depends only on the customer id / user id — the referrer name + referred-revenue
       // are the only reads that need a prior result, so they run in a tiny second
@@ -338,7 +339,7 @@ export default function CustomerDetailPage() {
       if (cust) writeCache<CustomerPrefetch>(custCacheKey(id), {
         customer: cust, properties: (pRes.data as Property[]) || [], quotes: (qRes.data as Quote[]) || [],
         jobs: (jRes.data as Job[]) || [], invoices: (iRes.data as Invoice[]) || [],
-      })
+      }, { lease })
 
       if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
       // Same rule the customer read above states: a transient error must not

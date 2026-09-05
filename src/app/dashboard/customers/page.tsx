@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
@@ -55,6 +55,7 @@ export default function CustomersPage() {
   const supabase = useMemo(() => createClient(), [])
 
   async function fetchCustomers() {
+    const lease = cacheLease()
     // Local session read — no auth round-trip before the RLS-scoped queries below.
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
@@ -91,7 +92,7 @@ export default function CustomersPage() {
     // the slice alone cannot tell a book of 100 from the first 100 of 240, and a
     // refresh that fails leaves that prefix on screen (lib/customers names the three
     // surfaces that used to present it as the whole book).
-    writeCache('customers-list', { rows: active.rows.slice(0, CUSTOMER_CACHE_ROWS), total: active.rows.length })
+    writeCache('customers-list', { rows: active.rows.slice(0, CUSTOMER_CACHE_ROWS), total: active.rows.length }, { lease })
     setLoading(false)
   }
 
