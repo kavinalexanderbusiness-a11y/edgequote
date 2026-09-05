@@ -425,6 +425,24 @@ export function depositChargeBlockedNote(b: DepositChargeBlock): string {
   return 'We don’t have a record of your acceptance on file, so we can’t take a deposit for this quote online. Message us and we’ll confirm the details with you.'
 }
 
+/**
+ * Why the online deposit is withheld when the ACCEPTANCE ITSELF is the problem
+ * rather than the kind of evidence behind it.
+ *
+ * ⭐ The charge route has TWO acceptance gates — who is named on it, and whether
+ * it still matches the document — and the portal used to mirror only the first.
+ * On a drifted quote the customer was offered a Pay button the door answers 409.
+ * These are the sentences for the second gate.
+ *
+ * ⛔ Short, neutral, one next step, and the same next step in both — the only
+ * thing that differs is the one fact each case actually knows.
+ */
+export function depositCurrentnessBlockedNote(known: 'superseded' | 'unverified'): string {
+  return known === 'superseded'
+    ? 'This quote has been revised since you accepted it, so we’ll agree the deposit with you before anything is due.'
+    : 'The acceptance on file for this quote is still being confirmed, so we’ll agree the deposit with you before anything is due.'
+}
+
 /** The same fact for the OWNER, with the action that clears it. */
 export function depositChargeBlockedOwnerNote(b: DepositChargeBlock): string {
   if (b === 'not_accepted') return 'This quote isn’t accepted yet, so there is no deposit to collect.'

@@ -235,6 +235,13 @@ async function main() {
       valid_until: '2026-12-31', crew_size: 1, hours: 2, travel_fee: 0,
       accepted_price: r.accepted_price == null ? null : Number(r.accepted_price),
       acceptance_kind: kind ?? null,
+      // ⭐ The canonical currentness, ASKED OF THE DATABASE rather than assumed —
+      // this is exactly what RUN-S122C projects, so the fixture feeds the portal
+      // the payload production would. Omitting it made every row here read as an
+      // old-C shape, and the portal now withholds the Pay button on those: a
+      // fixture leaning on a permissive default is asserting the default.
+      acceptance_is_current: Boolean((await q(
+        `select public.quote_acceptance_is_current($1) c`, [id])).rows[0].c),
       deposit_type: 'percent', deposit_value: 50,
     } as unknown as PortalQuote
     return buildDocItems({ quotes: [pq], invoices: [], properties: [], business, todayISO: '2026-09-04', renderers })[0]

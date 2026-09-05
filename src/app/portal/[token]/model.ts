@@ -40,7 +40,7 @@ import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import {
   isAcceptedOrBeyond, acceptedPresentation, customerFacingQuote,
-  acceptedAmountNote, depositChargeBlockedNote, type AcceptanceKind,
+  acceptedAmountNote, depositChargeBlockedNote, depositCurrentnessBlockedNote, type AcceptanceKind,
 } from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
@@ -993,10 +993,24 @@ export function buildDocItems(opts: {
     const schedulingDeposit = gate && gate.required > 0 ? {
       required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
       percent: gate.percent, satisfied: gate.status === 'satisfied',
-      payable: facing.depositChargeBlock === null,
+      // ⛔⛔ BOTH of the door's acceptance gates, not one. The charge route asks
+      // who is named on the acceptance AND whether it still matches the document
+      // (`quote_acceptance_is_current`); this mirrored only the first, so a
+      // drifted quote drew a Pay button the route answers 409.
+      //
+      // ⚠️ `unverified` withholds the button too, and there the two deliberately
+      // DISAGREE: the route reads the database and can always check, while an
+      // old-C payload leaves the portal unable to. A button whose eligibility we
+      // cannot establish is one we must not draw — and the disagreement runs in
+      // the safe direction, an affordance withheld rather than a refusal charged.
+      payable: facing.depositChargeBlock === null && acceptanceCurrentness === 'current',
     } : undefined
-    const depositBlockedLine = schedulingDeposit && !schedulingDeposit.payable && facing.depositChargeBlock
-      ? depositChargeBlockedNote(facing.depositChargeBlock)
+    // The evidence KIND is the stronger objection, so it speaks first; otherwise
+    // the acceptance's currentness explains itself. Either way the customer gets
+    // one sentence and one next step, never a button that will be refused.
+    const depositBlockedLine = !schedulingDeposit || schedulingDeposit.payable ? undefined
+      : facing.depositChargeBlock ? depositChargeBlockedNote(facing.depositChargeBlock)
+      : acceptanceCurrentness !== 'current' ? depositCurrentnessBlockedNote(acceptanceCurrentness)
       : undefined
     // The preference travels on any live approved/scheduled quote (so a reload
     // shows it back); the FORM only opens while the RPC will still accept a
