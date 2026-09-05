@@ -1,22 +1,12 @@
 'use client'
 
 // ── Last-resort error boundary ───────────────────────────────────────────────
-// Catches React rendering errors that escape every other boundary — the "white
-// screen" class. Without this, two things were true: the error was never
-// reported (automatic instrumentation only sees thrown route/server errors, not
-// a render crash), and the user saw Next's unstyled default page.
-//
-// It replaces a page that already failed, so there is no working behaviour to
-// change here. Deliberately minimal: no data fetching, no shared components, no
-// design tokens — this file must render when the app itself is broken, so it can
-// depend on nothing that could be the thing that's broken.
-//
-// What it SAYS is bounded by what it KNOWS. It cannot see whether Sentry is
-// configured (captureException is a silent no-op without a DSN), so it does not
-// promise that anyone was told; it cannot see what the person was doing, so it
-// does not promise that nothing was lost. It offers the two honest moves — try
-// again, or go to the dashboard — and the digest, which identifies the failure
-// in the server log without describing it.
+// Catches render errors that escape every other boundary — the "white screen"
+// class. Deliberately minimal: no data fetching, no shared components, no design
+// tokens — this file must render when the app itself is broken. It promises
+// only what it knows: captureException is a silent no-op without a DSN, so it
+// does not claim anyone was told; it cannot see what was on screen, so it does
+// not claim nothing was lost. The digest identifies the failure in the log.
 
 import * as Sentry from '@sentry/nextjs'
 import { useEffect } from 'react'
@@ -41,7 +31,7 @@ export default function GlobalError({ error, reset }: {
         <div style={{ maxWidth: 420, textAlign: 'center' }}>
           <h1 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>Something went wrong</h1>
           <p style={{ fontSize: 14, lineHeight: 1.6, color: '#9AA4B2', margin: '0 0 20px' }}>
-            This page couldn&rsquo;t be shown. Try again, or go to your dashboard.
+            We could not show this page. Try again, or return to your dashboard.
           </p>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
@@ -53,8 +43,7 @@ export default function GlobalError({ error, reset }: {
             >
               Try again
             </button>
-            {/* A plain anchor on purpose: a full navigation to a route that renders
-                on its own, with no dependency on the tree that just failed. */}
+            {/* A plain anchor: a full navigation with no dependency on the failed tree. */}
             <a
               href="/dashboard"
               style={{
@@ -66,8 +55,6 @@ export default function GlobalError({ error, reset }: {
               Go to your dashboard
             </a>
           </div>
-          {/* The digest identifies this failure in the server log without
-              describing it — the one thing worth quoting if they do get in touch. */}
           {error.digest && (
             <p style={{ fontSize: 11, color: '#5B6672', marginTop: 16 }}>
               If this keeps happening, quote reference {error.digest}.

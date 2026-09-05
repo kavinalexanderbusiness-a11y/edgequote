@@ -1,39 +1,20 @@
 'use client'
 
 import { useEffect } from 'react'
-import * as Sentry from '@sentry/nextjs'
 import { AlertTriangle, RotateCw, LayoutDashboard } from 'lucide-react'
 import { Button, ButtonLink } from '@/components/ui/Button'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { Card } from '@/components/ui/Card'
 
-// Without this boundary any throw inside /dashboard fell through to Next's
-// built-in one: a bare, unstyled "Application error: a server-side exception has
-// occurred" — no sidebar, no nav, no way back. The dev overlay hides that, so it
-// would only ever have been seen in production.
-//
-// It is the boundary for EVERY page under /dashboard — quotes, jobs, customers,
-// invoices, settings — not only the home screen, so it speaks about "this page",
-// promises nothing it cannot know (it cannot see the data, so it does not vouch
-// for it), and never prints the thrown message: a driver or provider string is
-// not something a customer-facing screen should relay. The digest Next attaches
-// to a server-side throw is safe to show — it identifies the incident in the
-// server log without describing it — and it is the one thing worth quoting.
-//
-// It still matters most for loadDashboard, which THROWS on a failed read instead
-// of rendering zeros: "this didn't load" has to be visible and retryable,
-// because the alternative — a calm $0 dashboard — is the one outcome the owner
-// must never be shown.
+// The boundary for every page under /dashboard. Without it a throw fell through
+// to Next's bare "Application error" page — no sidebar, no way back. It says only
+// what it knows: the page did not load. The thrown message is never rendered
+// (it may be a driver or provider string); the digest Next attaches to a
+// server-side throw is safe to quote and identifies the failure in the log.
 export default function DashboardError({
   error, reset,
 }: { error: Error & { digest?: string }; reset: () => void }) {
-  useEffect(() => {
-    console.error('[dashboard]', error)
-    // A render or client-side throw under /dashboard is not seen by the server's
-    // automatic instrumentation; report it here. No-op when Sentry is not
-    // configured — captureException on an uninitialised SDK is safe and silent.
-    Sentry.captureException(error)
-  }, [error])
+  useEffect(() => { console.error('[dashboard]', error) }, [error])
 
   return (
     <PageContainer width="wide">
@@ -45,16 +26,12 @@ export default function DashboardError({
           <div className="min-w-0">
             <h1 className="text-base font-bold tracking-tight text-ink">This page didn&rsquo;t load</h1>
             <p className="text-sm text-ink-muted mt-1">
-              Something went wrong while loading it, so nothing is shown rather than a figure that couldn&rsquo;t be read.
-              Try again, or go back to your dashboard.
+              We could not load this page. Try again, or return to your dashboard.
             </p>
             <div className="flex flex-wrap items-center gap-2 mt-4">
               <Button onClick={reset}><RotateCw className="w-4 h-4" /> Try again</Button>
               <ButtonLink href="/dashboard" variant="secondary"><LayoutDashboard className="w-4 h-4" /> Go to your dashboard</ButtonLink>
             </div>
-            {/* The digest ties this screen to the server log entry for the same
-                failure. Shown instead of the message: it identifies, it does not
-                describe. */}
             {error.digest && (
               <p className="text-xs text-ink-faint mt-3">
                 If this keeps happening, quote reference <span className="font-mono">{error.digest}</span>.
