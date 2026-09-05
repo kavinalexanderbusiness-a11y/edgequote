@@ -18,17 +18,33 @@
 // Rules the store holds:
 //   • TENANT SCOPE — the query and the stream filter both carry the signed-in
 //     user's id; nothing is ever read unscoped.
-//   • MUTED EXCLUDED — `.eq('muted', false)` on the read.
+//   • MUTED EXCLUDED — the read filters muted conversations out.
+//   • AUTH EVENTS OUTRANK THE BOOTSTRAP READ — the first thing a start does is
+//     read the local session; an auth event that arrives while that read is in
+//     flight is later, authoritative information, so the read's answer is
+//     dropped when it lands. (Found by review: a SIGNED_OUT during the
+//     bootstrap used to be ignored because "null is already the attached
+//     user", and the stale session answer then attached an account the auth
+//     stream had already said was gone.) This is tracked apart from `gen` so a
+//     same-user token refresh never discards an in-flight count read.
 //   • STALE RESPONSES DROPPED — every read carries a sequence number and the
 //     generation it was issued in; a response that is older than one already
 //     applied, or from before a stop/account switch, is ignored.
 //   • A FAILED READ KEEPS THE LAST NUMBER — an error is not "nothing waiting".
-//     (The old hook rendered 0 on a failed read: a false all-clear.)
+//     (The old hook rendered 0 on a failed read: a false all-clear.) A failed
+//     read also does not close the door on an OLDER read still in flight: its
+//     data is older than the failed attempt but newer than what is showing.
+//   • REJECTIONS ARE CONTAINED — the session read and the count read are
+//     fire-and-forget; a rejected promise is caught here, never an unhandled
+//     rejection. A rejected session read attaches nothing (the auth stream
+//     will speak); a rejected count read keeps the last number.
 //   • ACCOUNT CHANGE — sign-out zeroes and closes the stream; a different user
 //     signing in gets a fresh scoped read and stream; the same user's token
 //     refreshes are ignored.
 //   • CLEANUP — the last unsubscribe removes the channel, the auth listener and
-//     any pending debounce, and resets to 0 so no one inherits a number.
+//     any pending debounce, and resets to 0 so no one inherits a number. A
+//     start → stop → start (React StrictMode's dev double mount) leaves exactly
+//     one live stream and drops the first start's late answers.
 //   • BURSTS COALESCE — a trailing 250 ms debounce on stream events, matching
 //     useRealtimeRefresh and the bell.
 //
@@ -38,8 +54,8 @@
 export interface UnreadSession { user?: { id: string } | null }
 
 /** The slice of a Supabase browser client this store touches. Narrow on
- *  purpose: the real client satisfies it structurally, and a guard's fake
- *  implements exactly this much. */
+ *  purpose: hooks/useUnread adapts the real client to it call by call, and a
+ *  guard's fake implements exactly this much. */
 export interface UnreadClient {
   auth: {
     getSession(): Promise<{ data: { session: UnreadSession | null } }>
@@ -94,11 +110,16 @@ export function createUnreadStore(deps: UnreadStoreDeps): UnreadStore {
   let timer: unknown = null
   // `gen` changes on every start, stop and account switch: a response issued
   // under an older generation belongs to a world that no longer exists.
-  // `seq`/`applied` order responses within a generation: a slow read that
+  // `seq`/`applied` order count reads within a generation: a slow read that
   // lands after a newer one must not overwrite it.
+  // `bootstrapping` is true only while the start's session read is in flight
+  // AND no auth event has spoken since; an auth event clears it without
+  // touching `gen`, so the bootstrap answer is dropped but in-flight count
+  // reads for the same account survive.
   let gen = 0
   let seq = 0
   let applied = 0
+  let bootstrapping = false
 
   function set(n: number) {
     if (n === count) return
@@ -110,12 +131,17 @@ export function createUnreadStore(deps: UnreadStoreDeps): UnreadStore {
     const c = client, u = uid
     if (!c || !u) return
     const g = gen, s = ++seq
-    const { data, error } = await c.from('conversations').select('unread')
-      .eq('user_id', u).gt('unread', 0).eq('muted', false)
+    let result: UnreadResult
+    try {
+      result = await c.from('conversations').select('unread')
+        .eq('user_id', u).gt('unread', 0).eq('muted', false)
+    } catch {
+      return // a rejected read keeps the last number; nothing else changes
+    }
     if (g !== gen || s <= applied) return
+    if (result.error) return // keep the last number; `applied` stays so an older good read may still land
     applied = s
-    if (error) return
-    set((data ?? []).reduce((sum, row) => sum + (row.unread || 0), 0))
+    set((result.data ?? []).reduce((sum, row) => sum + (row.unread || 0), 0))
   }
 
   function scheduleRefresh() {
@@ -156,20 +182,37 @@ export function createUnreadStore(deps: UnreadStoreDeps): UnreadStore {
     const g = gen
     const c = deps.client()
     client = c
+    bootstrapping = true
     authSub = c.auth.onAuthStateChange((_event, session) => {
-      if (running) switchAccount(session?.user?.id ?? null)
+      if (!running) return
+      // Later information than the session read below: whatever that read
+      // returns afterwards describes a session that has since changed (or
+      // never was). Cleared here, not via `gen`, so a same-user event never
+      // discards an in-flight count read.
+      bootstrapping = false
+      switchAccount(session?.user?.id ?? null)
     }).data.subscription
     // Local session read — no auth round-trip; RLS scopes the read and the
     // stream to this user anyway.
-    const { data: { session } } = await c.auth.getSession()
-    if (g !== gen) return // stopped, or an auth event already attached, while this was in flight
-    const id = session?.user?.id ?? null
+    let id: string | null
+    try {
+      const { data: { session } } = await c.auth.getSession()
+      id = session?.user?.id ?? null
+    } catch {
+      // The session could not be read: attach nothing on a guess and stay at
+      // 0; the auth stream registered above will say who this is.
+      if (g === gen) bootstrapping = false
+      return
+    }
+    if (g !== gen || !bootstrapping) return // stopped, or an auth event has already spoken
+    bootstrapping = false
     if (id) attach(id); else set(0)
   }
 
   function stop() {
     running = false
     gen++
+    bootstrapping = false
     detach()
     if (authSub) { authSub.unsubscribe(); authSub = null }
     client = null

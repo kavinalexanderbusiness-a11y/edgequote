@@ -57,7 +57,9 @@ function realClient(): UnreadClient {
     },
     removeChannel: wrapped => {
       const ch = channels.get(wrapped)
-      if (ch) void sb.removeChannel(ch)
+      // Fire-and-forget teardown: a rejected unsubscribe (socket already gone)
+      // must not surface as an unhandled rejection.
+      if (ch) sb.removeChannel(ch).catch(() => {})
     },
   }
 }

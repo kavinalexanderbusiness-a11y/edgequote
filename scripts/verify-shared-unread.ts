@@ -1,5 +1,9 @@
 // ── verify:shared-unread — one owner for the unread number ───────────────────
 //   npx tsx scripts/verify-shared-unread.ts
+//   VERIFY_UNREAD_STORE=<path/to/other/unreadStore.ts> npx tsx scripts/verify-shared-unread.ts
+//     → §2/§3 against another implementation. Used as the NEGATIVE CONTROL: the
+//       frozen 3b94e37b blob must FAIL the §3 bootstrap/rejection cases this
+//       guard was extended for, and pass everything else.
 //
 // §1 SOURCE: the conversations-unread read exists once (lib/unreadStore); the
 //    Sidebar, the BottomNav and CommsNav all read it through useUnread; no
@@ -12,9 +16,24 @@
 //    number, account switch / sign-out / same-user token refresh, and full
 //    cleanup on the last unsubscribe — a late response after teardown applies
 //    nothing.
+// §3 BOOTSTRAP vs AUTH EVENTS, StrictMode, REJECTIONS — each case on a fresh
+//    store with manually-resolved session reads, so the ORDER of answers is
+//    the test: a SIGNED_OUT that lands while the bootstrap session read is in
+//    flight outranks that read's later answer (the reviewed failure: 1 read,
+//    1 channel, snapshot 4 where 0/0/0 was owed); a later legitimate sign-in
+//    still attaches; INITIAL_SESSION before the bootstrap answers attaches
+//    once; start → stop → start leaves one live stream; a same-user token
+//    refresh does NOT discard an in-flight count read; a rejected session or
+//    count read is caught (no unhandled rejection), attaches nothing on a
+//    guess, keeps the last same-account number, and the store recovers.
 // Synthetic throughout: nothing here touches Supabase.
 import { readFileSync } from 'node:fs'
-import { createUnreadStore, type UnreadClient, type UnreadChannel, type UnreadFilter, type UnreadResult, type UnreadSession } from '../src/lib/unreadStore'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
+import type { UnreadClient, UnreadChannel, UnreadFilter, UnreadResult, UnreadSession } from '../src/lib/unreadStore'
+
+type StoreModule = typeof import('../src/lib/unreadStore')
 
 let pass = 0, fail = 0
 const check = (name: string, ok: boolean, detail = '') => {
@@ -22,6 +41,20 @@ const check = (name: string, ok: boolean, detail = '') => {
 }
 const read = (p: string) => readFileSync(p, 'utf8')
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+// Every rejection the store swallows must be swallowed; one that escapes is a
+// failure of THIS guard's cases, counted here.
+let unhandled = 0
+process.on('unhandledRejection', () => { unhandled++ })
+
+async function loadStore(): Promise<StoreModule> {
+  const p = process.env.VERIFY_UNREAD_STORE
+  if (!p) return import('../src/lib/unreadStore')
+  const abs = resolve(p)
+  // A file outside the project loads as CommonJS under tsx: its exports arrive under `default`.
+  const unwrap = (m: StoreModule & { default?: StoreModule }) => (typeof m.createUnreadStore === 'function' ? m : m.default!)
+  try { return unwrap(await import(pathToFileURL(abs).href)) } catch { return unwrap(createRequire(resolve('package.json'))(abs) as StoreModule) }
+}
 
 // ── §1 source ───────────────────────────────────────────────────────────────
 console.log('\n── §1 one owner in source ──')
@@ -37,6 +70,7 @@ console.log('\n── §1 one owner in source ──')
   check('useUnread builds exactly one store at module scope and reads it with useSyncExternalStore',
     (store.match(/createUnreadStore\(/g) || []).length === 1 && (hook.match(/createUnreadStore\(/g) || []).length === 1
     && /useSyncExternalStore\(store\.subscribe, store\.getSnapshot, store\.getServerSnapshot\)/.test(hook) && !/useEffect/.test(hook))
+  check('the hook\'s channel teardown swallows a rejected unsubscribe', /removeChannel\(ch\)\.catch\(/.test(hook))
   check('CommsNav no longer reads conversations itself', !/from\('conversations'\)/.test(comms))
   check('CommsNav reads the shared number through useUnread', /const unread = useUnread\(\)/.test(comms))
   check('CommsNav keeps its own scheduled-messages pending count (one consumer, other table)',
@@ -46,29 +80,36 @@ console.log('\n── §1 one owner in source ──')
   check('exactly one conversations stream binding across the five files (the store)', bindings.join() === '1,0,0,0,0', bindings.join())
 }
 
-// ── §2 behaviour against a fake client ───────────────────────────────────────
-console.log('\n── §2 behaviour (fake client) ──')
-
-interface Deferred { resolve(r: UnreadResult): void; uid: string; filters: [string, string, unknown][]; select: string; table: string }
+// ── the fake ─────────────────────────────────────────────────────────────────
+interface Deferred { resolve(r: UnreadResult): void; reject(e: unknown): void; uid: string; filters: [string, string, unknown][]; select: string; table: string }
+interface SessionRead { resolve(uid: string | null): void; reject(e: unknown): void }
 interface FakeChannel extends UnreadChannel { name: string; subscribed: boolean; removed: boolean; binding: { event: string; schema: string; table: string; filter: string } | null; fire: () => void }
 
-function fakeClient(sessionUid: string | null) {
+/** `manual: true` → every getSession() is a deferred the case resolves or rejects itself. */
+function fakeClient(sessionUid: string | null, opts: { manual?: boolean } = {}) {
   const queries: Deferred[] = []
   const channels: FakeChannel[] = []
+  const sessions: SessionRead[] = []
   let sessionReads = 0
   let authListener: ((event: string, session: UnreadSession | null) => void) | null = null
   let authUnsubscribed = 0
+  const sessionOf = (uid: string | null) => ({ data: { session: uid ? { user: { id: uid } } : null } })
   const client: UnreadClient = {
     auth: {
-      async getSession() { sessionReads++; return { data: { session: sessionUid ? { user: { id: sessionUid } } : null } } },
+      getSession() {
+        sessionReads++
+        if (!opts.manual) return Promise.resolve(sessionOf(sessionUid))
+        return new Promise((res, rej) => { sessions.push({ resolve: uid => res(sessionOf(uid)), reject: rej }) })
+      },
       onAuthStateChange(cb) { authListener = cb; return { data: { subscription: { unsubscribe() { authUnsubscribed++; authListener = null } } } } },
     },
     from(table) {
       return {
         select(columns) {
           let resolve!: (r: UnreadResult) => void
-          const p = new Promise<UnreadResult>(r => { resolve = r })
-          const d: Deferred = { resolve, uid: '', filters: [], select: columns, table }
+          let reject!: (e: unknown) => void
+          const p = new Promise<UnreadResult>((r, j) => { resolve = r; reject = j })
+          const d: Deferred = { resolve, reject, uid: '', filters: [], select: columns, table }
           queries.push(d)
           const f: UnreadFilter = {
             eq(c, v) { d.filters.push(['eq', c, v]); if (c === 'user_id') d.uid = String(v); return f },
@@ -91,7 +132,7 @@ function fakeClient(sessionUid: string | null) {
     removeChannel(ch) { (ch as FakeChannel).removed = true },
   }
   return {
-    client, queries, channels,
+    client, queries, channels, sessions,
     sessionReads: () => sessionReads,
     authUnsubscribed: () => authUnsubscribed,
     emitAuth: (event: string, uid: string | null) => authListener?.(event, uid ? { user: { id: uid } } : null),
@@ -112,12 +153,21 @@ function fakeTimers() {
 }
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0))
+// Long enough for Node to report an unhandled rejection from the previous turn.
+const settle = () => new Promise<void>(r => setTimeout(r, 15))
 const rows = (...n: (number | null)[]): UnreadResult => ({ data: n.map(unread => ({ unread })), error: null })
 
 async function main() {
+  const mod = await loadStore()
+  if (process.env.VERIFY_UNREAD_STORE) console.log(`\n(§2/§3 against ${resolve(process.env.VERIFY_UNREAD_STORE)})`)
+  const S = (fx: ReturnType<typeof fakeClient>, t: ReturnType<typeof fakeTimers>) =>
+    mod.createUnreadStore({ client: () => fx.client, setTimeout: t.setTimeout, clearTimeout: t.clearTimeout })
+
+  // ── §2 behaviour against a fake client ─────────────────────────────────────
+  console.log('\n── §2 behaviour (fake client) ──')
   const fx = fakeClient('tenant-a')
   const t = fakeTimers()
-  const store = createUnreadStore({ client: () => fx.client, setTimeout: t.setTimeout, clearTimeout: t.clearTimeout })
+  const store = S(fx, t)
   const notified = { a: 0, b: 0, c: 0 }
 
   check('before any subscriber: no session read, no query, no channel, snapshot 0, server snapshot 0',
@@ -210,7 +260,6 @@ async function main() {
   check('a debounce is pending before teardown', t.size() === 1)
   offA(); offB()
   check('two of three gone: still live (channel kept, listener kept)', !ch3.removed && fx.hasAuthListener() && store.getSnapshot() === 4)
-  const notifiedBefore = { ...notified }
   offC(); offC() // the second call is a no-op, not a double-decrement
   check('last unsubscribe: channel removed, auth listener unsubscribed, debounce cleared, snapshot 0',
     ch3.removed && !fx.hasAuthListener() && fx.authUnsubscribed() === 1 && t.size() === 0 && store.getSnapshot() === 0)
@@ -221,25 +270,194 @@ async function main() {
   check('an auth event after teardown is ignored (listener gone)', fx.queries.length === reads && fx.channels.length === 3)
 
   // Late response after teardown
-  const fx2 = fakeClient('tenant-a')
-  const t2 = fakeTimers()
-  const s2 = createUnreadStore({ client: () => fx2.client, setTimeout: t2.setTimeout, clearTimeout: t2.clearTimeout })
-  let heard = 0
-  const off2 = s2.subscribe(() => { heard++ })
-  await tick()
-  off2()
-  fx2.queries[0].resolve(rows(50)); await tick()
-  check('a read that resolves after the last unsubscribe applies nothing and notifies no one', s2.getSnapshot() === 0 && heard === 0)
-  const off3 = s2.subscribe(() => { heard++ }); await tick()
-  check('subscribing again restarts cleanly (a second session read, a second channel)', fx2.sessionReads() === 2 && fx2.live().length === 1)
-  off3()
+  {
+    const fx2 = fakeClient('tenant-a')
+    const t2 = fakeTimers()
+    const s2 = S(fx2, t2)
+    let heard = 0
+    const off2 = s2.subscribe(() => { heard++ })
+    await tick()
+    off2()
+    fx2.queries[0].resolve(rows(50)); await tick()
+    check('a read that resolves after the last unsubscribe applies nothing and notifies no one', s2.getSnapshot() === 0 && heard === 0)
+    const off3 = s2.subscribe(() => { heard++ }); await tick()
+    check('subscribing again restarts cleanly (a second session read, a second channel)', fx2.sessionReads() === 2 && fx2.live().length === 1)
+    off3()
+  }
 
   // No session at all
-  const fx3 = fakeClient(null)
-  const s3 = createUnreadStore({ client: () => fx3.client })
-  const off4 = s3.subscribe(() => {}); await tick()
-  check('with no session: no read, no channel, snapshot 0', fx3.queries.length === 0 && fx3.channels.length === 0 && s3.getSnapshot() === 0)
-  off4()
+  {
+    const fx3 = fakeClient(null)
+    const s3 = mod.createUnreadStore({ client: () => fx3.client })
+    const off4 = s3.subscribe(() => {}); await tick()
+    check('with no session: no read, no channel, snapshot 0', fx3.queries.length === 0 && fx3.channels.length === 0 && s3.getSnapshot() === 0)
+    off4()
+  }
+
+  // ── §3 bootstrap vs auth events, StrictMode, rejections ────────────────────
+  console.log('\n── §3 bootstrap vs auth events, StrictMode, rejections (fresh store per case, manual session reads) ──')
+
+  // 3.1 POSITIVE CONTROL — the same shape with NO auth event attaches. This is
+  // what makes 3.2's 0/0/0 a finding rather than a store that never attaches.
+  {
+    const fx = fakeClient('tenant-a', { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    check('3.1 control: bootstrap session read pending → nothing read yet', fx.sessions.length === 1 && fx.queries.length === 0 && fx.channels.length === 0)
+    fx.sessions[0].resolve('tenant-a'); await tick()
+    fx.queries[0]?.resolve(rows(4)); await tick()
+    check('3.1 control: with NO auth event, the bootstrap answer attaches A — 1 read, 1 live channel, snapshot 4',
+      fx.queries.length === 1 && fx.live().length === 1 && s.getSnapshot() === 4, `reads=${fx.queries.length} live=${fx.live().length} snap=${s.getSnapshot()}`)
+    off()
+  }
+
+  // 3.2 THE REVIEWED FAILURE — SIGNED_OUT lands while the bootstrap read is in
+  // flight; the read then answers "user A". The auth event is later, so A must
+  // NOT attach. (3b94e37b attached: 1 read, 1 channel, snapshot 4.)
+  {
+    const fx = fakeClient('tenant-a', { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    fx.emitAuth('SIGNED_OUT', null); await tick()
+    fx.sessions[0].resolve('tenant-a'); await tick()
+    fx.queries[0]?.resolve(rows(4)); await tick()
+    check('3.2 SIGNED_OUT during the bootstrap, then the session read answers A: NOTHING attaches — 0 reads, 0 channels, snapshot 0',
+      fx.queries.length === 0 && fx.channels.length === 0 && s.getSnapshot() === 0, `reads=${fx.queries.length} channels=${fx.channels.length} snap=${s.getSnapshot()}`)
+    fx.emitAuth('SIGNED_IN', 'tenant-a'); await tick()
+    check('3.2 …and a later legitimate SIGNED_IN attaches: 1 read for A, 1 live channel',
+      fx.queries.length === 1 && fx.queries[0]?.uid === 'tenant-a' && fx.live().length === 1, `reads=${fx.queries.length} live=${fx.live().length}`)
+    fx.queries[0]?.resolve(rows(4)); await tick()
+    check('3.2 …with the number landing (4)', s.getSnapshot() === 4)
+    off()
+    check('3.2 cleanup: live channel removed, snapshot 0', fx.live().length === 0 && s.getSnapshot() === 0)
+  }
+
+  // 3.3 Initial signed-out session, then a legitimate sign-in, then sign-out
+  {
+    const fx = fakeClient(null, { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    fx.sessions[0].resolve(null); await tick()
+    check('3.3 a signed-out bootstrap attaches nothing: 0 reads, 0 channels, snapshot 0', fx.queries.length === 0 && fx.channels.length === 0 && s.getSnapshot() === 0)
+    fx.emitAuth('SIGNED_IN', 'tenant-a'); await tick()
+    fx.queries[0]?.resolve(rows(2)); await tick()
+    check('3.3 a later SIGNED_IN attaches A: 1 read, 1 live channel, snapshot 2', fx.queries.length === 1 && fx.live().length === 1 && s.getSnapshot() === 2)
+    fx.emitAuth('SIGNED_OUT', null); await tick()
+    check('3.3 SIGNED_OUT again: 0, channel removed, no read issued', s.getSnapshot() === 0 && fx.live().length === 0 && fx.queries.length === 1)
+    off()
+  }
+
+  // 3.4 INITIAL_SESSION arrives before the bootstrap read answers
+  {
+    const fx = fakeClient('tenant-a', { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    fx.emitAuth('INITIAL_SESSION', 'tenant-a'); await tick()
+    check('3.4 INITIAL_SESSION(A) before the bootstrap answers: attaches once — 1 read, 1 live channel', fx.queries.length === 1 && fx.live().length === 1)
+    fx.sessions[0].resolve('tenant-a'); await tick()
+    check('3.4 the bootstrap answer arriving afterwards adds nothing (still 1 read, 1 channel)', fx.queries.length === 1 && fx.channels.length === 1)
+    fx.queries[0].resolve(rows(3)); await tick()
+    check('3.4 …snapshot 3', s.getSnapshot() === 3)
+    off()
+  }
+
+  // 3.5 StrictMode: start → stop → start before anything answers
+  {
+    const fx = fakeClient('tenant-a', { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off1 = s.subscribe(() => {}); off1()
+    const off2 = s.subscribe(() => {}); await tick()
+    check('3.5 start→stop→start: two session reads, the first auth listener unsubscribed, one listener live, nothing read',
+      fx.sessions.length === 2 && fx.authUnsubscribed() === 1 && fx.hasAuthListener() && fx.queries.length === 0)
+    fx.sessions[0].resolve('tenant-a'); await tick()
+    check('3.5 the FIRST start\'s session answer is dropped (still nothing read, no channel)', fx.queries.length === 0 && fx.channels.length === 0)
+    fx.sessions[1].resolve('tenant-a'); await tick()
+    fx.queries[0]?.resolve(rows(3)); await tick()
+    check('3.5 the second start attaches exactly once: 1 read, 1 live channel, snapshot 3', fx.queries.length === 1 && fx.live().length === 1 && s.getSnapshot() === 3)
+    off2()
+    check('3.5 cleanup after the second: no live channel, no listener, snapshot 0', fx.live().length === 0 && !fx.hasAuthListener() && s.getSnapshot() === 0)
+  }
+
+  // 3.5b StrictMode where the FIRST start's session read rejects after the restart
+  {
+    const fx = fakeClient('tenant-a', { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off1 = s.subscribe(() => {}); off1()
+    const off2 = s.subscribe(() => {}); await tick()
+    const u0 = unhandled
+    fx.sessions[0].reject(new Error('first session read failed')); await settle()
+    check('3.5b the first start\'s rejected session read is caught (no unhandled rejection) and changes nothing', unhandled === u0 && fx.queries.length === 0)
+    fx.sessions[1].resolve('tenant-a'); await tick()
+    check('3.5b the second start still bootstraps: 1 read, 1 live channel', fx.queries.length === 1 && fx.live().length === 1)
+    off2()
+  }
+
+  // 3.6 A same-user auth event must NOT discard an in-flight count read
+  const fx6 = fakeClient('tenant-a'); const t6 = fakeTimers(); const s6 = S(fx6, t6)
+  {
+    const off = s6.subscribe(() => {}); await tick()
+    fx6.queries[0].resolve(rows(5)); await tick()
+    fx6.live()[0].fire(); t6.run(); await tick()
+    check('3.6 a count read is in flight', fx6.queries.length === 2)
+    fx6.emitAuth('TOKEN_REFRESHED', 'tenant-a'); await tick()
+    check('3.6 TOKEN_REFRESHED for the same user: no new channel, no new read', fx6.channels.length === 1 && fx6.queries.length === 2 && !fx6.channels[0].removed)
+    fx6.queries[1].resolve(rows(6)); await tick()
+    check('3.6 …and the in-flight read still applies (6) — not discarded', s6.getSnapshot() === 6, `${s6.getSnapshot()}`)
+
+    // 3.7 SIGNED_OUT while a same-account read is in flight
+    fx6.live()[0].fire(); t6.run(); await tick()
+    const inflight = fx6.queries[2]
+    fx6.emitAuth('SIGNED_OUT', null); await tick()
+    check('3.7 SIGNED_OUT with a read in flight: zero at once, channel removed', s6.getSnapshot() === 0 && fx6.live().length === 0)
+    inflight.resolve(rows(9)); await tick()
+    check('3.7 …the signed-out account\'s late answer does not paint (still 0)', s6.getSnapshot() === 0)
+    off()
+  }
+
+  // 3.8 A rejected session read
+  {
+    const fx = fakeClient('tenant-a', { manual: true }); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    const u0 = unhandled
+    fx.sessions[0].reject(new Error('session read failed')); await settle()
+    check('3.8 a rejected session read is caught: no unhandled rejection, nothing attached, snapshot 0',
+      unhandled === u0 && fx.queries.length === 0 && fx.channels.length === 0 && s.getSnapshot() === 0, `unhandled+${unhandled - u0} reads=${fx.queries.length}`)
+    fx.emitAuth('SIGNED_IN', 'tenant-a'); await tick()
+    fx.queries[0]?.resolve(rows(1)); await tick()
+    check('3.8 …and the store recovers on the auth stream: 1 read, 1 live channel, snapshot 1', fx.queries.length === 1 && fx.live().length === 1 && s.getSnapshot() === 1)
+    off()
+  }
+
+  // 3.9 A rejected count read keeps the last same-account number; the stream stays; the next read applies
+  {
+    const fx = fakeClient('tenant-a'); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    fx.queries[0].resolve(rows(7)); await tick()
+    fx.live()[0].fire(); t.run(); await tick()
+    const u0 = unhandled
+    fx.queries[1].reject(new Error('network')); await settle()
+    check('3.9 a rejected count read is caught: no unhandled rejection, snapshot still 7, channel intact',
+      unhandled === u0 && s.getSnapshot() === 7 && fx.live().length === 1, `unhandled+${unhandled - u0} snap=${s.getSnapshot()} live=${fx.live().length}`)
+    fx.live()[0].fire(); t.run(); await tick()
+    fx.queries[2].resolve(rows(8)); await tick()
+    check('3.9 …the next read applies (8)', s.getSnapshot() === 8)
+    off()
+  }
+
+  // 3.10 An older good read landing after a newer FAILED one still applies (older data beats no data)
+  {
+    const fx = fakeClient('tenant-a'); const t = fakeTimers(); const s = S(fx, t)
+    const off = s.subscribe(() => {}); await tick()
+    fx.queries[0].resolve(rows(7)); await tick()
+    fx.live()[0].fire(); t.run(); await tick()
+    const older = fx.queries[1]
+    fx.live()[0].fire(); t.run(); await tick()
+    const newer = fx.queries[2]
+    newer.resolve({ data: null, error: { message: 'timeout' } }); await tick()
+    check('3.10 the newer read fails: still 7', s.getSnapshot() === 7)
+    older.resolve(rows(3)); await tick()
+    check('3.10 the older good read then lands (3): newer than what is showing, so it applies', s.getSnapshot() === 3, `${s.getSnapshot()}`)
+    fx.live()[0].fire(); t.run(); await tick()
+    fx.queries[3].resolve(rows(10)); await tick()
+    check('3.10 ordering is still enforced afterwards (10)', s.getSnapshot() === 10)
+    off()
+  }
+
+  check('no unhandled rejection escaped any case', unhandled === 0, `${unhandled}`)
 }
 
 main().then(() => {
