@@ -59,7 +59,9 @@ check('exactly one required card, and it is needsYou',
 check('updates ships defaultOn:false (an existing dashboard must not grow a band unasked)',
   DASHBOARD_CARDS.find(c => c.id === 'updates')?.defaultOn === false)
 eq('default order = registry order', DEFAULT_DASHBOARD_LAYOUT.order.join(), ALL.join())
-eq('default hides exactly the defaultOn:false cards', DEFAULT_DASHBOARD_LAYOUT.hidden.join(), 'updates')
+eq('default hides exactly the defaultOn:false cards', DEFAULT_DASHBOARD_LAYOUT.hidden.join(), 'month,review,updates')
+eq('unconfigured dashboard focuses on money, attention and upcoming work',
+  visibleDashboardCards(DEFAULT_DASHBOARD_LAYOUT).map(c => c.id).join(), 'money,needsYou,today')
 
 for (const [name, raw] of [
   ['null (no row / no column)', null],
@@ -82,6 +84,12 @@ for (const [name, raw] of [
   check('a saved hide is honored', l.hidden.includes('review'))
   check('updates, never mentioned by this save, is appended HIDDEN (defaultOn:false)', l.hidden.includes('updates'))
   eq('visible = order minus hidden', visibleDashboardCards(l).map(c => c.id).join(), 'month,needsYou,money,today')
+}
+
+{
+  const l = normalizeDashboardLayout({ order: ['money', 'needsYou', 'today', 'month', 'review'], hidden: [] })
+  eq('an explicitly saved previous default keeps its monthly and weekly cards',
+    visibleDashboardCards(l).map(c => c.id).join(), 'money,needsYou,today,month,review')
 }
 
 {
@@ -108,14 +116,17 @@ for (const [name, raw] of [
   const hidMoney = toggleCardHidden(base, 'money')
   check('toggle hides a normal card', hidMoney.hidden.includes('money'))
   check('toggle round-trips', !toggleCardHidden(hidMoney, 'money').hidden.includes('money'))
+  const withReports = toggleCardHidden(toggleCardHidden(base, 'month'), 'review')
+  eq('Customize can restore monthly and weekly cards without changing the three defaults',
+    visibleDashboardCards(withReports).map(c => c.id).join(), 'money,needsYou,today,month,review')
 
   // Stepping skips hidden cards: with money hidden, needsYou (visible index 0)
   // steps down past it to land after `today`.
   const stepped = stepCard(hidMoney, 'needsYou', 1)
   eq('stepCard moves among VISIBLE cards (hidden ones are skipped over)',
-    visibleDashboardCards(stepped).map(c => c.id).join(), 'today,needsYou,month,review')
+    visibleDashboardCards(stepped).map(c => c.id).join(), 'today,needsYou')
   check('canStepCard is false at the top edge', !canStepCard(base, 'money', -1))
-  check('canStepCard is false at the bottom edge', !canStepCard(base, 'review', 1))
+  check('canStepCard is false at the bottom visible edge', !canStepCard(base, 'today', 1))
   check('stepCard on a hidden card is a no-op', stepCard(hidMoney, 'money', 1).order.join() === hidMoney.order.join())
   check('isCustomised: default false', !isDashboardCustomised(base))
   check('isCustomised: true after a hide', isDashboardCustomised(hidMoney))

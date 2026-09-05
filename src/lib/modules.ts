@@ -51,6 +51,8 @@ export interface FeatureModule {
   /** One-liner for the Modules surface / marketplace listing. */
   description: string
   category: ModuleCategory
+  /** Navigation home only; installation, permissions and search remain unchanged. */
+  navigation?: 'settings' | 'grow'
   /** Bump when the module meaningfully changes — drives the "Updated" badge. */
   version: number
   /** One line shown to businesses whose installed version is older. */
@@ -115,7 +117,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // manager agree. An owner looking for "who changed this" types "audit" or "who
   // changed" — both are keywords, because neither is in the label.
   { key: 'activity',   label: 'Activity',   href: '/dashboard/activity',   icon: History,
-    category: 'admin', version: 1, updatedAt: '2026-08-15',
+    category: 'admin', navigation: 'settings', version: 1, updatedAt: '2026-08-15',
     description: 'Who changed what, when — and what it was before.',
     whatsNew: 'Every meaningful change is now recorded, with the person who made it.',
     permissions: ['activity:read'],
@@ -183,7 +185,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // describe. It reads invoices and payments too, but degrades honestly without
   // them (invoiced and collected simply stay at zero, which is the truth).
   { key: 'sales',      label: 'Sales',      href: '/dashboard/sales',      icon: TrendingUp,
-    category: 'growth', version: 1, updatedAt: '2026-08-16', requires: ['quotes'],
+    category: 'growth', navigation: 'grow', version: 1, updatedAt: '2026-08-16', requires: ['quotes'],
     description: 'What you quoted, won, invoiced and actually collected — and which sources produced it.',
     whatsNew: 'Quoted, won, authorized, invoiced and collected are now five separate figures you can trace back to the quotes behind them.',
     permissions: ['quotes:read', 'invoices:read', 'payments:read', 'customers:read'],
@@ -207,7 +209,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // So it belongs in Setup — something you look in on, not something you run the
   // day from — and it now describes what it actually does: watch, and flag.
   { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
-    category: 'admin', version: 1, updatedAt: '2026-08-09', requires: ['messages'],
+    category: 'admin', navigation: 'settings', version: 1, updatedAt: '2026-08-09', requires: ['messages'],
     description: 'Watches for customers due to re-book and flags them for you. It never messages anyone on its own.',
     permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'],
     keywords: 'rules reminders follow up watch churn re-book suggestions' },
@@ -215,8 +217,8 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // Make", which is the answer to a question almost no owner is asking. The page
   // still holds all of it — the pitch just stops opening with it.
   { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
-    category: 'admin', version: 1, updatedAt: '2026-08-09',
-    description: 'Connect other apps to EdgeQuote — plus a developer API, if yours needs one.',
+    category: 'admin', navigation: 'settings', version: 1, updatedAt: '2026-08-09',
+    description: 'Connect other apps to EdgeHQ — plus a developer API, if yours needs one.',
     permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'],
     keywords: 'api webhooks zapier make connect apps developer accounts' },
 ]
@@ -252,6 +254,15 @@ export function visibleModules(enabled: unknown): FeatureModule[] {
   if (!Array.isArray(enabled)) return FEATURE_MODULES
   const keys = new Set(enabled.filter((k): k is string => typeof k === 'string'))
   return FEATURE_MODULES.filter(m => m.core || keys.has(m.key))
+}
+
+/** Group an already-visible list without disabling modules or limiting search.
+ * Sales stays directly reachable if its optional Grow navigation home is off. */
+export function modulesForNavigation(modules: readonly FeatureModule[], home: 'sidebar' | 'settings' | 'grow'): FeatureModule[] {
+  const hasGrow = modules.some(m => m.key === 'grow')
+  return modules.filter(m => home === 'sidebar'
+    ? !m.navigation || (m.navigation === 'grow' && !hasGrow)
+    : m.navigation === home)
 }
 
 // The installed NON-CORE keys implied by a stored value (core is always in).

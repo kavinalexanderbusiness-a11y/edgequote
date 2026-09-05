@@ -45,16 +45,16 @@ export interface DashboardCardMeta {
 /**
  * THE registry, in default order.
  *
- * This order deliberately MATCHES the page as it ships today (money → the work
- * pair → month → review), so shipping customisation rearranges nothing for
- * anyone until they choose to. `updates` is the one addition and starts OFF.
+ * The default focuses on money, attention and upcoming work. Historical bands
+ * remain available in Customize, and explicitly saved layouts keep their order
+ * and visibility through normalization below.
  */
 export const DASHBOARD_CARDS: DashboardCardMeta[] = [
   { id: 'money',    title: 'Money',             blurb: 'In today, this week, owed with the overdue slice, quotes out', defaultOn: true },
   { id: 'needsYou', title: 'Needs you',         blurb: 'The ranked queue of what genuinely needs you', defaultOn: true, required: true },
   { id: 'today',    title: 'Today & next days', blurb: 'Weather risk and your next work days', defaultOn: true },
-  { id: 'month',    title: 'This month',        blurb: 'Collected, jobs done and conversion, against last month', defaultOn: true },
-  { id: 'review',   title: 'Weekly review',     blurb: 'The door to last week’s results and next week’s moves', defaultOn: true },
+  { id: 'month',    title: 'This month',        blurb: 'Collected, jobs done and conversion, against last month', defaultOn: false },
+  { id: 'review',   title: 'Weekly review',     blurb: 'The door to last week’s results and next week’s moves', defaultOn: false },
   // NOT the audit trail (the Activity module in Settings → Features is "who
   // changed what"); this is the Inbox's Updates column — news from the last
   // 7 days — previewed on the home screen.
