@@ -517,9 +517,13 @@ console.log('\n═══ Client request lifecycle (the REAL ask() handler, execu
     const f = () => { calls++; return d.pr }
     const p = c.gesture(f)('first')
     await tick()
-    await c.gesture(f)('second')
+    // NOT awaited: if the serialisation guard is ever removed, this second ask
+    // waits on the same unsettled promise, and awaiting it here would hang the
+    // suite instead of failing it.
+    const p2 = c.gesture(f)('second')
+    await tick()
     check('a second ask during an in-flight ask issues no second request', calls === 1)
-    d.resolve(ok('A1')); await p; await tick()
+    d.resolve(ok('A1')); await p; await p2; await tick()
     check('…so the answer that lands is the one that was asked', c.st.answer?.answer === 'A1')
     check('…and the spinner clears', c.st.loading === false)
   }
