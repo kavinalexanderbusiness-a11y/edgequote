@@ -15,7 +15,7 @@ import { isQuoteExpired, markSentPatch, canSendQuote, sendBlockedReason, sendBlo
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { Menu } from '@/components/ui/Menu'
@@ -371,6 +371,11 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
     { key: 'delete', label: 'Delete', icon: Trash2, tone: 'danger', onClick: bulkDelete },
   ]
 
+  // Named in the no-match state so the owner can see which filter is hiding
+  // the rows — including the follow-up queue, whose pill is not rendered when
+  // the count is zero, which left "?followup=1" with no visible way out.
+  const statusLabel = STATUS_FILTERS.find(f => f.value === statusFilter)?.label ?? ''
+
   return (
     <div className="space-y-4">
       {/* Filters — THE shared SearchInput + FilterPill (one chip shape app-wide) */}
@@ -378,10 +383,13 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
         <SearchInput
           ref={searchRef}
           className="flex-1"
-          placeholder="Search quotes…  ( / )"
+          label="Search quotes"
+          placeholder="Search by customer, quote # or service"
+          shortcutHint="/"
           onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
           value={search}
           onChange={e => setSearch(e.target.value)}
+          onClear={() => setSearch('')}
         />
         {/* One scrollable row on phones (the wrap made a 3-row wall of pills
             before any quotes); wraps normally on desktop. */}
@@ -420,7 +428,25 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
               action={{ label: 'New quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
-          <Card><InlineEmpty>No quotes match your filters.</InlineEmpty></Card>
+          <Card>
+            <div className="px-6 py-8 text-center space-y-3">
+              {/* Same shape as the Customers list: say WHAT is narrowing the
+                  rows, then offer to undo one thing at a time. */}
+              <p className="text-sm text-ink-muted">
+                No quotes match{search.trim() ? <> “<span className="text-ink">{search.trim()}</span>”</> : null}
+                {statusFilter ? <> {search.trim() ? 'among' : 'with status'} <span className="text-ink">{statusLabel}</span></> : null}
+                {followUpOnly ? <> in the follow-up queue</> : null}.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {search.trim() && (
+                  <Button size="sm" variant="secondary" onClick={() => setSearch('')}>Clear search</Button>
+                )}
+                {(statusFilter || followUpOnly) && (
+                  <Button size="sm" variant="secondary" onClick={() => { setStatusFilter(''); setFollowUpOnly(false) }}>Clear filter{statusFilter && followUpOnly ? 's' : ''}</Button>
+                )}
+              </div>
+            </div>
+          </Card>
         )
       ) : (
         <Card className="overflow-hidden">
@@ -434,8 +460,8 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden md:table-cell">Service</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Total</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Status</th>
-                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden lg:table-cell">Date</th>
-                  <th className="px-3 sm:px-5 py-3" />
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden lg:table-cell">Created</th>
+                  <th className="px-3 sm:px-5 py-3"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -448,7 +474,14 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
                     </td>
                     {/* Hidden on phones — the follow-up state it carried is already
                         shown as "Sent Xd ago · follow up" under the customer name. */}
-                    <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted hidden sm:table-cell">
+                    {/* whitespace-nowrap: "EPS-2026-0158" broke at its hyphens onto
+                        two lines in EVERY row at ~950px while the cells beside it
+                        had room — auto table layout squeezes the column whose
+                        content CAN break. nowrap makes the column's minimum its own
+                        width, so the flexible Customer column gives way instead;
+                        the full identifier stays on one line, nothing is truncated,
+                        and below sm this cell is not rendered at all. */}
+                    <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted hidden sm:table-cell whitespace-nowrap">
                       <span className="flex items-center gap-1.5">
                         {/* An expired quote is NOT a follow-up: the automatic chaser
                             has stopped on it, so the dot would promise work the app
@@ -503,7 +536,7 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
                         sentAt={q.sent_at} validUntil={q.valid_until}
                         customerName={q.customer_name} />
                     </td>
-                    <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
+                    <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell whitespace-nowrap">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
                       {/* ── Why this is a menu and not a red button ──────────────
                           It used to be a bare `variant="danger"` Delete, and its

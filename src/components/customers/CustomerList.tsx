@@ -242,14 +242,22 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, in
     } finally { setPortalBusy(null) }
   }
 
+  // Named in the no-match state so the owner can see WHICH filter is hiding
+  // the rows — and clear just that, rather than everything.
+  const activeConsentLabel = CONSENT_FILTERS.find(f => f.value === consentFilter)?.label ?? ''
+
   return (
     <div className="space-y-4">
-      {/* Search — THE shared SearchInput */}
+      {/* Search — THE shared SearchInput. The name is a real accessible name,
+          the "/" hint sits beside the field, and Clear is a button. */}
       <SearchInput
         ref={searchRef}
-        placeholder="Search name, email, phone, address…  ( / )"
+        label="Search customers"
+        placeholder="Search by name, email, phone or address"
+        shortcutHint="/"
         value={search}
         onChange={e => setSearch(e.target.value)}
+        onClear={() => setSearch('')}
         onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
       />
 
@@ -285,7 +293,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, in
                   false negative about a real person, and the owner's next move (assume
                   they are not in the book) is the wrong one. */}
               <p className="text-sm text-ink-muted">
-                No {incomplete ? 'match' : 'customers match'} {search.trim() ? <>“<span className="text-ink">{search.trim()}</span>”</> : 'these filters'}
+                No {incomplete ? 'match' : 'customers match'} {search.trim() ? <>“<span className="text-ink">{search.trim()}</span>”</> : <>the “<span className="text-ink">{activeConsentLabel}</span>” filter</>}
+                {search.trim() && consentFilter ? <> among “<span className="text-ink">{activeConsentLabel}</span>”</> : null}
                 {incomplete ? <> in the first {incomplete.shown} loaded.</> : '.'}
               </p>
               {incomplete && (
@@ -295,10 +304,16 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, in
                     : 'The rest of your book hasn’t loaded yet.'}
                 </p>
               )}
+              {/* Each button undoes ONE thing: clearing the search keeps the
+                  consent filter, and vice versa — the same two verbs the Quotes
+                  list offers, so recovery reads the same on both lists. */}
               <div className="flex flex-wrap items-center justify-center gap-2">
-                <Button size="sm" variant="secondary" onClick={() => { setSearch(''); setConsentFilter('') }}>
-                  Clear search &amp; filters
-                </Button>
+                {search.trim() && (
+                  <Button size="sm" variant="secondary" onClick={() => setSearch('')}>Clear search</Button>
+                )}
+                {consentFilter && (
+                  <Button size="sm" variant="secondary" onClick={() => setConsentFilter('')}>Clear filter</Button>
+                )}
                 {incomplete && (
                   <Button size="sm" variant="secondary" onClick={() => { void onRefresh() }}>
                     Load the rest
@@ -400,7 +415,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, in
                 <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
-                <Menu align="end" width={220} items={[
+                <Menu align="end" width={220} ariaLabel="Customer actions" items={[
                   { key: 'message', label: 'Send a message', icon: MessageSquare, onSelect: () => setMsgOne(c) },
                   { key: 'portal', label: 'Copy portal link', icon: Link2, onSelect: () => copyPortal(c.id) },
                   { key: 'edit', label: 'Edit customer', icon: Edit2, onSelect: () => onEdit(c) },
@@ -408,7 +423,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, in
                   { key: 'archive', label: 'Archive customer', icon: Archive, onSelect: () => handleDelete(c.id) },
                 ]}>
                   {({ toggle, triggerProps }) => (
-                    <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions"
+                    <Button size="sm" variant="ghost" onClick={toggle} aria-label="Customer actions" title="Customer actions"
                       loading={portalBusy === c.id || deleting === c.id} {...triggerProps}>
                       <MoreHorizontal className="w-4 h-4" />
                     </Button>
