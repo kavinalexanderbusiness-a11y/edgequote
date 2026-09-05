@@ -51,8 +51,8 @@ check('the primary button waits on the trade alone', /disabled=\{!picked\}/.test
 check('the name never gates the primary button', !/disabled=\{[^}]*\bname\b[^}]*\}/.test(SETUP))
 
 // ═══════════════════════════════════════════════════════════════════════════
-H('2. the trade is the one required step — said once, to a first run only')
-const REQ = 'Pick one to continue — the only required step.'
+H('2. the trade choice and optional skip are explained once')
+const REQ = 'Choose a trade to load starter services, or skip for now.'
 const reqCount = SETUP.split(REQ).length - 1
 check('the requirement is stated exactly once', reqCount === 1, `found ${reqCount}`)
 check('…only for a first run (the reseed surface says nothing new)',
@@ -61,8 +61,8 @@ const iLabel = SETUP.indexOf('What kind of work do you do?')
 const iReq = SETUP.indexOf(REQ)
 const iGrid = SETUP.indexOf('TRADE_PACKS.map')
 check('…between the section label and the trade grid', iLabel > 0 && iReq > iLabel && iGrid > iReq)
-// What makes "the only required step" TRUE: Skip needs nothing — it records the
-// neutral type when no trade was picked, and the name only if typed.
+// Skip is an honest exit: it records the neutral type when no trade was picked,
+// and the name only if typed. Selecting a trade loads its starter services.
 check('Skip for now requires no pick (neutral type when none)', /business_type: picked \|\| 'general'/.test(SETUP))
 check('Skip for now requires no name (written only if typed)', /if \(trimmed\) row\.company_name = trimmed/.test(SETUP))
 
@@ -78,7 +78,10 @@ check('`firstRun` is decided inside the done branch, before it renders',
 check('…from the same fact the dashboard gate redirects on (no settings row)',
   /hasSettingsRow: !!s\b/.test(SEED) && /if \(!bizErr && !bizRow\) redirect\('\/setup'\)/.test(LAYOUT))
 
-const done = SETUP.slice(iDone, SETUP.indexOf('  // ── Pick ──') > 0 ? SETUP.indexOf('  // ── Pick ──') : SETUP.indexOf('return (\n    <Shell wide>'))
+const pickReturn = /return\s*\(\s*<Shell\s+wide\s*>/.exec(SETUP)
+const iPick = pickReturn?.index ?? -1
+check('the done-region boundary exists after its return', iPick > iDoneReturn && iDoneReturn > iDone)
+const done = iPick > iDoneReturn ? SETUP.slice(iDone, iPick) : ''
 const iBranch = done.indexOf('{firstRun ? (')
 const iElse = done.indexOf(') : (', iBranch)
 const iEnd = done.indexOf(')}', iElse)

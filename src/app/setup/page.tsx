@@ -97,6 +97,8 @@ export default function SetupPage() {
     // scheduled work and the invoice all follow from it, so nothing has to be
     // set up first. A configured business reseeding from Settings goes back to
     // its dashboard exactly as before.
+    // A returning owner who previously skipped already has a settings row;
+    // keep that existing owner's dashboard action even if no services were seeded.
     const firstRun = !state.hasSettingsRow
     return (
       <Shell>
@@ -161,7 +163,7 @@ export default function SetupPage() {
 
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">What kind of work do you do?</p>
       {!configured && (
-        <p className="text-xs text-ink-muted -mt-1 mb-3">Pick one to continue — the only required step.</p>
+        <p className="text-xs text-ink-muted -mt-1 mb-3">Choose a trade to load starter services, or skip for now.</p>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-5">
         {TRADE_PACKS.map(p => {
