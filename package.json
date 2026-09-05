@@ -37,6 +37,7 @@
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:season-end": "tsx scripts/verify-season-end.ts",
     "season:audit": "tsx scripts/season-end-audit.ts",
+    "verify:modules-owner": "tsx scripts/verify-modules-owner.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:measure": "tsx scripts/verify-measure.ts",
     "verify:measure-price": "tsx scripts/verify-measure-price.ts",

@@ -43,40 +43,130 @@ interface ModulesSnapshot {
 }
 
 let store: ModulesSnapshot | null = null
+/** Whose composition `store` describes. `null` = the signed-out fail-open default. */
+let storeOwner: string | null = null
+/** Who the session says we are, and whether that has been established at all. */
+let currentOwner: string | null = null
+let ownerKnown = false
+// Advances on every owner CHANGE. persist has no in-flight slot to identify
+// itself by, so it carries this instead: A -> B -> A moves it twice, which an
+// owner comparison alone cannot see.
+let ownerEpoch = 0
 let inFlight: Promise<void> | null = null
+/** The owner `inFlight` was started for — two accounts must never share one load. */
+let inFlightOwner: string | null = null
 const listeners = new Set<() => void>()
 
 function emit() { for (const l of Array.from(listeners)) l() }
 function subscribe(cb: () => void) { listeners.add(cb); return () => { listeners.delete(cb) } }
-function getSnapshot() { return store }
+
+// ⛔⛔ IDENTITY MUST BE TRUSTWORTHY *AT RENDER TIME*. getSnapshot is synchronous —
+// useSyncExternalStore calls it during render — while every way of asking Supabase
+// who is signed in is async. So an owner tag on the snapshot alone cannot fix the
+// first render after an account switch: the tag says "A" but nothing yet says the
+// session is now B. `currentOwner` is therefore kept up to date by an auth
+// subscription (below) so the comparison can happen synchronously.
+//
+// Until identity is established, and whenever it does not match, this serves
+// `null` — which is the hook's existing pre-load state: navigation shows every
+// module. Fail OPEN for reading is the documented behaviour and is preserved;
+// fail CLOSED for writing is enforced in `persist`.
+/**
+ * THE rule, in one place so the reader and the writer cannot drift apart, and so
+ * it can be exercised offline without a renderer. Signed out is `null === null`,
+ * which matches and still serves the fail-open default.
+ */
+export function mayServeOwner(ownerKnown: boolean, snapshotOwner: string | null, sessionOwner: string | null): boolean {
+  return ownerKnown && snapshotOwner === sessionOwner
+}
+
+function getSnapshot(): ModulesSnapshot | null {
+  return mayServeOwner(ownerKnown, storeOwner, currentOwner) ? store : null
+}
 function getServerSnapshot() { return null }
+
+let authWatch: { unsubscribe: () => void } | null = null
+/** One app-lifetime subscription. Supabase emits the current session immediately
+ *  on subscribe (INITIAL_SESSION, a local read), so identity is established
+ *  without a network round-trip. */
+function ensureAuthWatch() {
+  if (authWatch) return
+  const { data } = createClient().auth.onAuthStateChange((_event, session) => {
+    const uid = session?.user?.id ?? null
+    const changed = !ownerKnown || uid !== currentOwner
+    currentOwner = uid
+    ownerKnown = true
+    if (changed) ownerEpoch++
+    if (!changed) { emit(); return }
+    // A switch orphans anything started for the previous account.
+    inFlight = null
+    inFlightOwner = null
+    emit()
+    if (uid) void loadModules()
+  })
+  authWatch = data.subscription
+}
 
 // Stale-while-revalidate: every mount calls this, but concurrent callers share
 // one round-trip and an existing snapshot keeps serving until fresh data lands.
 function loadModules(): Promise<void> {
-  if (inFlight) return inFlight
-  inFlight = (async () => {
+  // Dedupe PER OWNER: concurrent mounts for one account still share a round-trip,
+  // but a load started for A is never handed to B.
+  if (inFlight && inFlightOwner === currentOwner) return inFlight
+  const startedFor = currentOwner
+  // A holder, so the body can compare against its own promise when it settles.
+  const self: { p?: Promise<void> } = {}
+  self.p = (async () => {
     try {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
-      const uid = session?.user?.id
-      if (!uid) { store = store ?? { enabled: null, meta: {} }; emit(); return }
+      const uid = session?.user?.id ?? null
+      if (!ownerKnown || uid !== currentOwner) ownerEpoch++
+      currentOwner = uid
+      ownerKnown = true
+      if (!uid) {
+        // Signed out: the fail-open default, owned by nobody — so it matches the
+        // session and still serves, exactly as before.
+        store = { enabled: null, meta: {} }
+        storeOwner = null
+        emit()
+        return
+      }
       const { data, error } = await supabase.from('business_settings').select('enabled_modules, module_meta').eq('user_id', uid).maybeSingle()
+      // ⛔ REJECT A LATE COMPLETION. The session can change while this waits; a
+      // read issued as A must never land in B's store.
+      if (uid !== currentOwner) return
+      // ⛔⛔ AND THE OWNER CHECK IS NOT ENOUGH ON ITS OWN. A → B → A inside one
+      // page session orphans this read at the switch (`inFlight = null`) without
+      // cancelling it, and returning to A starts a second one. When this one
+      // finally answers, `uid === currentOwner === A`, so the line above passes
+      // and an older read overwrites the newer result. Both are A's own data, so
+      // it is staleness rather than a leak — but the owner is shown a
+      // composition from before a change they just made.
+      //
+      // The request's own identity settles it: this load may commit only while it
+      // is still THE in-flight one. Same test the `finally` below already uses.
+      // Placed before the error branch so a late failure cannot commit either.
+      if (inFlight !== self.p) return
       if (error) {
-        // Keep serving the last good snapshot if we have one; otherwise fail OPEN
+        // Keep serving OUR last good snapshot if we have one; otherwise fail OPEN
         // (every module visible) but remember that we are guessing.
-        store = store ?? { enabled: null, meta: {}, unknown: true }
+        store = storeOwner === uid && store ? store : { enabled: null, meta: {}, unknown: true }
+        storeOwner = uid
         emit()
         return
       }
       const d = data as { enabled_modules: unknown; module_meta: unknown } | null
       store = { enabled: d?.enabled_modules ?? null, meta: readMeta(d?.module_meta) }
+      storeOwner = uid
       emit()
     } finally {
-      inFlight = null
+      if (inFlight === self.p) { inFlight = null; inFlightOwner = null }
     }
   })()
-  return inFlight
+  inFlight = self.p
+  inFlightOwner = startedFor
+  return self.p
 }
 
 export function useModules() {
@@ -86,6 +176,8 @@ export function useModules() {
   const loaded = snap !== null
 
   useEffect(() => {
+    // Establish identity before anything is served — see getSnapshot.
+    ensureAuthWatch()
     loadModules()
     // Every consumer refreshes the moment any of them saves a new composition —
     // same event idiom as before; with the shared store one reload now feeds
@@ -102,14 +194,28 @@ export function useModules() {
     nextMeta: ModuleMetaMap,
   ): Promise<string | null> => {
     const prev = store
+    const prevOwner = storeOwner
     // Never save on top of a guess — see ModulesSnapshot.unknown.
     if (prev?.unknown) return 'Couldn’t load which features are on, so nothing was changed. Reload and try again.'
+    // ⛔⛔ WRITES FAIL CLOSED ON AN UNKNOWN OR MISMATCHED OWNER. install/uninstall
+    // compute the next set FROM the current one, so saving while the snapshot on
+    // screen belongs to another account — or to nobody yet — would write that
+    // account's composition onto this one. Reading may fail open; this may not.
+    const owner = currentOwner
+    // Captured with the owner: A -> B -> A moves the epoch twice, so a late answer
+    // to THIS save cannot be mistaken for the current one just because the same
+    // account is signed in again.
+    const epoch = ownerEpoch
+    if (owner === null || !mayServeOwner(ownerKnown, storeOwner, owner)) {
+      return 'Couldn’t confirm which account is signed in, so nothing was changed. Reload and try again.'
+    }
     store = { enabled: nextEnabled, meta: nextMeta }
+    storeOwner = owner
     emit()
     const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id
-    if (!uid) { store = prev; emit(); return 'Not signed in.' }
+    if (!uid || uid !== owner) { store = prev; storeOwner = prevOwner; emit(); return 'Not signed in.' }
     // UPSERT, not update. A bare .update() on a business that has no
     // business_settings row yet matches ZERO rows and returns NO error — so the
     // optimistic store above would keep the new composition, navigation would
@@ -121,7 +227,11 @@ export function useModules() {
     // not enough — the Modules tab's save does not live in its component.
     const { error } = await supabase.from('business_settings')
       .upsert({ user_id: uid, enabled_modules: nextEnabled, module_meta: nextMeta }, { onConflict: 'user_id' })
-    if (error) { store = prev; emit(); return error.message }
+    // ⛔ REJECT A LATE COMPLETION. If the account changed while the upsert was in
+    // flight, neither its success nor its failure may touch the store now on
+    // screen — the row was written for `owner`, not for whoever is here.
+    if (currentOwner !== owner || ownerEpoch !== epoch) return error ? error.message : null
+    if (error) { store = prev; storeOwner = prevOwner; emit(); return error.message }
     window.dispatchEvent(new Event('eq:modules-changed'))
     return null
   }, [])
