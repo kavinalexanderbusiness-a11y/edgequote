@@ -167,6 +167,7 @@
     "schema:baseline": "tsx scripts/schema/generate-baseline.ts",
     "schema:tenant-weld-manifest": "tsx scripts/schema/capture-tenant-weld-manifest.ts",
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",
+    "verify:runner-report": "tsx scripts/verify-runner-report.ts",
     "verify:schema": "tsx scripts/verify-schema.ts",
     "verify:migrations": "tsx scripts/verify-migrations.ts",
     "verify:custom-fields": "tsx scripts/verify-custom-fields.ts",
