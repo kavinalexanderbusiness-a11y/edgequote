@@ -34,6 +34,8 @@ search-*.png
 search-cdp-*.txt
 .chrome-search-*/
 .dayactions-harness/
+# Session 97 hydrated Customize-sheet fixture output (scripts/dashboard-hydrated-harness.tsx)
+.dashboard-hydrated/
 
 # Session fixture credentials (worker passwords for authenticated E2E proofs).
 # ⛔ Never commit: these are real logins on the production project.
