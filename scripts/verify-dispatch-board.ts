@@ -236,13 +236,13 @@ async function raceChecks() {
   const harness = () => {
     const st: St = { jobs: [], notes: null, loadError: null, loading: true }
     const gate = { current: createRequestGate() }
-    const run = (date: string, jobsP: Promise<unknown>, sessionP: Promise<unknown> = Promise.resolve(null)) => {
+    const run = (date: string, jobsP: Promise<unknown>, sessionP: Promise<unknown> = Promise.resolve(null), notesThrows = false) => {
       const th = (p: Promise<unknown>): unknown => ({ select: () => th(p), eq: () => th(p), order: () => th(p), maybeSingle: () => p, then: (a: unknown, b: unknown) => (p as Promise<unknown>).then(a as never, b as never) })
       const empty = Promise.resolve({ data: null, error: null })
       const d: Record<string, unknown> = {
         gate, supabase: { auth: { getSession: async () => { await sessionP; return { data: { session: { user: { id: 'u1' } } } } } }, from: (t: string) => th(t === 'jobs' ? jobsP : empty) },
         date, DAY_STATUS_SELECT: '*', DEFAULT_WORK_START: '08:00',
-        loadCrews: async () => [], loadTechnicians: async () => [], loadDispatchNotes: async () => [{ day: date }],
+        loadCrews: async () => [], loadTechnicians: async () => [], loadDispatchNotes: async () => { if (notesThrows) throw new Error('notes read failed'); return [{ day: date }] },
         resolveAutomations: () => ({}), setUid: () => {}, setCrews: () => {}, setTechnicians: () => {},
         setEquipment: () => {}, setAutomations: () => {}, setSettings: () => {}, setDayRow: () => {},
         setJobs: (v: St['jobs']) => { st.jobs = v }, setNotes: (v: St['notes']) => { st.notes = v },
@@ -283,6 +283,16 @@ async function raceChecks() {
     check('a stale FINALLY cannot clear the spinner while the new day is pending', st.loading === true)
     n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
     check('…and the newest request still clears it when it lands', st.loading === false) }
+  // A stale request that THROWS takes the CATCH branch, not the read-error
+  // branch — a different guard, and one a resolved { error } never reaches.
+  { const { st, run } = harness(), o = defer(), n = defer(), sA = defer()
+    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>, true)
+    sA.r(null); await new Promise(r => setTimeout(r, 0))
+    const pN = run('2026-06-02', n.p as Promise<unknown>)
+    n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
+    o.r({ data: [{ id: 'JOB-OLD' }], error: null }); await pO
+    check('a stale THROW cannot banner over a good day', st.loadError === null, 'banner said ' + JSON.stringify(st.loadError))
+    check('…and the newer day survives it', st.jobs[0]?.id === 'JOB-NEW') }
   { const { st, run } = harness(), o = defer()
     const p = run('2026-06-01', o.p as Promise<unknown>); o.r({ data: [{ id: 'ONLY' }], error: null }); await p
     check('the ordinary single-load path is unchanged', st.jobs[0]?.id === 'ONLY' && !st.loading && st.loadError === null) }
