@@ -44,48 +44,61 @@ export default function SetupPage() {
   const [status, setStatus] = useState<ProvisioningStatus | null>(null)
   const [consented, setConsented] = useState(false)
   const [email, setEmail] = useState('')
+  const [loadPhase, setLoadPhase] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
     let alive = true
+    setLoadPhase('loading')
+    setStatus(null)
+    setConsented(false)
+    setUid(null)
+    setState(null)
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.replace('/login'); return }
-      // Finish a pending beta redemption before anything is written (idempotent;
-      // answers calmly for everyone: legacy owner → 'already-owner', crew →
-      // 'no-invite'). Without this, an invited owner whose /signup/confirm tab
-      // died between verification and redemption would hit the business_settings
-      // INSERT policy below with no way through.
-      await supabase.rpc('claim_beta_invite')
-      if (!alive) return
-      // Then ask whether this account may create a business at all — the same
-      // function the business_settings INSERT policy derives from. A public
-      // sign-up while the switch is closed, or a crew-linked account, is told so
-      // HERE, calmly, instead of by a refused upsert. If the question itself
-      // fails, carry on exactly as before: the database still gates the write.
-      const { data: gateAnswer, error: gateErr } = await supabase.rpc('provisioning_status')
-      if (!alive) return
-      if (!gateErr) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!alive) return
+        if (!user) { router.replace('/login'); return }
+        // Finish a pending beta redemption before anything is written (idempotent;
+        // answers calmly for everyone: legacy owner → 'already-owner', crew →
+        // 'no-invite'). Without this, an invited owner whose /signup/confirm tab
+        // died between verification and redemption would hit the business_settings
+        // INSERT policy below with no way through.
+        await supabase.rpc('claim_beta_invite')
+        if (!alive) return
+        // Then ask whether this account may create a business at all — the same
+        // function the business_settings INSERT policy derives from. A public
+        // sign-up while the switch is closed, or a crew-linked account, is told so
+        // HERE, calmly, instead of by a refused upsert. An unknown answer cannot
+        // reveal creation controls: self-service still requires explicit consent.
+        const { data: gateAnswer, error: gateErr } = await supabase.rpc('provisioning_status')
+        if (!alive) return
+        if (gateErr) throw new Error('Account check unavailable')
         const parsed = parseProvisioningStatus(gateAnswer)
+        if (!parsed) throw new Error('Account check unavailable')
         setStatus(parsed)
         const step = registrationNextStep(parsed)
-        if (step !== 'setup') { setGate(step); return }
+        if (step !== 'setup') { setGate(step); setLoadPhase('ready'); return }
         if (parsed === 'self-service' && hasRegisterIntent(window.location.search)) setConsented(true)
+        setEmail(user.email ?? '')
+        setUid(user.id)
+        const [st, biz] = await Promise.all([
+          loadSeedState(supabase, user.id),
+          supabase.from('business_settings').select('company_name').eq('user_id', user.id).maybeSingle(),
+        ])
+        if (!alive) return
+        setState(st)
+        setName(((biz.data as { company_name: string | null } | null)?.company_name || '').trim())
+        // Pre-select the recorded type; a fresh account starts unpicked on purpose —
+        // the choice should be made, not defaulted past.
+        if (st.hasSettingsRow && st.businessType) setPicked(st.businessType)
+        setLoadPhase('ready')
+      } catch {
+        if (alive) setLoadPhase('error')
       }
-      setEmail(user.email ?? '')
-      setUid(user.id)
-      const [st, biz] = await Promise.all([
-        loadSeedState(supabase, user.id),
-        supabase.from('business_settings').select('company_name').eq('user_id', user.id).maybeSingle(),
-      ])
-      if (!alive) return
-      setState(st)
-      setName(((biz.data as { company_name: string | null } | null)?.company_name || '').trim())
-      // Pre-select the recorded type; a fresh account starts unpicked on purpose —
-      // the choice should be made, not defaulted past.
-      if (st.hasSettingsRow && st.businessType) setPicked(st.businessType)
     })()
     return () => { alive = false }
-  }, [supabase, router])
+  }, [supabase, router, loadAttempt])
 
   const pack: TradePack | null = picked ? tradePack(picked) : null
   const plan = state && pack ? seedPlan(state, pack) : null
@@ -128,6 +141,22 @@ export default function SetupPage() {
       return
     }
     setResult(res)
+  }
+
+  // Loading/retry never exposes a stale licence or consent from an earlier read.
+  if (loadPhase === 'loading') {
+    return <div className="min-h-screen bg-bg flex items-center justify-center" role="status" aria-label="Checking your account"><Zap className="w-6 h-6 text-accent animate-pulse" /></div>
+  }
+  if (loadPhase === 'error') {
+    return (
+      <Shell>
+        <div className="text-center mb-6" role="alert">
+          <h1 className="text-xl font-bold text-ink">Couldn’t check your account</h1>
+          <p className="text-sm text-ink-muted mt-1">We couldn’t confirm the next step for this account. Try again to continue setup.</p>
+        </div>
+        <Button className="w-full" type="button" onClick={() => { setLoadPhase('loading'); setLoadAttempt(attempt => attempt + 1) }}>Try again</Button>
+      </Shell>
+    )
   }
 
   // ── Not licensed to set up a business — one honest screen each ──

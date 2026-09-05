@@ -1,8 +1,8 @@
 # ADR-003 — Platform billing (EdgeHQ → the business owner)
 
-**Status: B1 OFFLINE DRAFT, UNAPPLIED. Commercial activation is deferred.**
+**Status: B1 + B2 OFFLINE DRAFTS, UNAPPLIED. Free early access; paid activation is deferred.**
 
-Updated September 5, 2026. The user's explicit self-service signup request supersedes the August 11 demo-only assumptions. The old proposed trial defaults, business-insert trigger, backfill, `standard` plan and event-claim algorithm are withdrawn. They were proposals, not applied schema. This revision prepares an isolated foundation; it does not make paid signup ready.
+Updated September 5, 2026. The user approved public self-service signup and free early access. A later paid price, billing cadence and trial duration remain unset. The old proposed trial defaults, business-insert trigger, backfill and `standard` plan are withdrawn. This revision prepares an isolated foundation and reconciliation engine; it does not make paid signup ready.
 
 ## Merchant payments and platform billing
 
@@ -56,7 +56,27 @@ B2 must implement and independently prove all of the following before acknowledg
 5. Set `last_synced_at` only after successful canonical reconciliation. Complete the event atomically with that successful write, or deliberately ignore a verified irrelevant event under an explicit policy. Unknown mappings/statuses are reviewable failures unless a later reviewed policy says otherwise.
 6. Return a retryable error for unfinished work unless a separately designed durable recoverable queue owns it. This table stores no raw event payload; there is no polling cron or recovery worker in B1.
 
-Provider state, ordering, lease races, crash recovery, signature rejection, test/live isolation and acknowledgment behavior require handler-level synthetic and provider test-mode proof in B2. Sequential database tests do not establish those guarantees.
+Provider state, ordering, lease races, crash recovery, signature rejection, test/live isolation and acknowledgment behavior require behavioral proof. Synthetic B2 proof is described below. Provider test-mode proof and real multi-backend lock contention remain activation gates.
+
+## B2 dormant reconciliation
+
+The additive [B2 draft](supabase/drafts/platform-billing-b2.sql) follows the unchanged B1 draft only in disposable PostgreSQL. It adds a private account lease and service-only claim, commit and failure RPCs. Account and event rows are locked in the same order; an attempt must still own both unexpired leases when committing subscription state and event completion in one transaction. Different events for replacement subscriptions share that account lease. A stale worker cannot update subscriptions or release a newer worker's lease. Terminal history is preserved; a missing provider result is never interpreted as cancellation.
+
+The account's new coordination columns are private. Authenticated callers retain only explicit SELECT of the original B1 account columns under the existing owner RLS policy. They cannot SELECT the account's lease or private event data, execute processing RPCs, or mutate billing state.
+
+[reconcile.ts](src/lib/billing/reconcile.ts) claims before fetching current provider state and accepts only complete, owner/account/mode-matching snapshots. It returns retry for unknown mappings, failed reads, busy leases, invalid states or unsuccessful commits. An event row's existence is not successful processing. No raw payloads, provider exceptions or credentials are persisted.
+
+[webhook.ts](src/lib/billing/webhook.ts) is an **unmounted server library**. There is no `/api/platform/billing/webhook`, checkout, portal, billing UI, signup hook or background consumer. Setting environment variables alone cannot activate it. Its prepared handler verifies the exact raw payload with HMAC-SHA256, constant-time v1 comparison and a five-minute signature tolerance. It verifies each key's actual current account with `/v1/account`, requires the SaaS and EPS account IDs to differ, and retrieves the event using the SaaS account key before any database claim. Connect/organization deliveries and wrong mode fail. Supported `customer.subscription.*` events reconcile; unknown subscription event types retry; verified non-subscription events are deliberate no-ops.
+
+[provider.ts](src/lib/billing/provider.ts) performs only GET requests, always to the fixed Stripe API origin with redirects refused, no caching and bounded request timeouts. It pins the documented `2025-03-31.basil` contract, loads every subscription page with `status=all`, and explicitly retrieves required IDs omitted from the list. Periods come from the subscription item, not removed top-level fields. B1 represents one price/period pair, so incomplete or multiple-item subscriptions remain reviewable retries. This does not choose or create a price. Provider errors are reduced to generic responses, without logging raw exceptions or headers.
+
+Future reviewed configuration requires `PLATFORM_BILLING_RECONCILIATION_ENABLED=true`, `PLATFORM_STRIPE_SECRET_KEY`, `PLATFORM_STRIPE_WEBHOOK_SECRET`, `PLATFORM_STRIPE_ACCOUNT_ID`, `PLATFORM_STRIPE_MODE=test|live`, `MERCHANT_STRIPE_ACCOUNT_ID`, and the existing merchant key solely to verify its account identity. This list is a contract, not an instruction to set them now. Key prefixes are input validation; actual account and event reads establish scope. No credentials or provider configuration were provisioned by this lane.
+
+The transport guard executes the actual signature verifier, adapter and core using synthetic provider responses and an injected store. The reconciliation guard applies real B1+B2 SQL to disposable PostgreSQL, interleaves held provider reads with competing claims, and checks rollback/fencing/ACL. PGlite executes PostgreSQL semantics in one backend; interleaved calls do not prove independent backend lock waits. Neither guard is a live provider, Supabase Auth, PostgREST or production test.
+
+## Remaining B3 activation plan
+
+Before exposing any billing route: apply the exact approved schema through S106; verify the separate Stripe account and pinned endpoint version in test mode; run real concurrent backend and provider replay tests; and add trusted owner-only customer mapping creation. Checkout needs a server-owned allowlist for an explicitly approved paid offer, durable idempotent coordination that prevents concurrent duplicate customers/checkouts/subscriptions, and fixed server-owned return URLs. Portal sessions must use the authenticated owner's stored customer, never a submitted customer ID. Test renewal, cancellation, failed payment, retries and return-page interruption with no effects on merchant money recording. Free early access continues until that separate activation decision. No charging, trial timer, restrictions or automatic conversion are introduced here.
 
 ## Commercial decisions still open
 
@@ -66,7 +86,7 @@ Any later restrictions need an explicit product decision and a single server-own
 
 ## Local verification and its limits
 
-`npm run verify:platform-billing-foundation` first checks that B1 remains outside the migration path and no existing runtime path imports or queries billing. With the already available optional PGlite dependency, it rebuilds a disposable PostgreSQL database from the platform prelude and all current migrations, then applies the exact draft.
+`npm run verify:platform-billing-foundation` first checks that B1 remains outside the migration path and no existing runtime path imports or queries the dormant billing library. With the already available optional PGlite dependency, it rebuilds a disposable PostgreSQL database from the platform prelude and all current migrations, then applies the exact B1 draft unchanged. B2's separate guard applies B1 then B2 and checks the additive processing contract.
 
 The guard checks unchanged existing catalogue definitions, exact new columns/defaults/types/nullability, composite keys, RLS and ACL, update triggers and indexes. It tests owner A/B, a crew UUID with an intentionally bad server fixture, anonymous callers, service writes, refused browser mutations, provider account/mode mappings, nonterminal conflicts, terminal history, invalid dates/statuses/identifiers, event privacy and retryable unfinished leases. New business creation must produce zero billing rows.
 
@@ -84,3 +104,5 @@ PGlite's platform-only `pg_net` and `pg_stat_statements` substitutions are print
 If application fails, the SQL transaction rolls back. After a successful application, leaving inert empty tables is safe while investigating. Any rollback drop requires a separate S106 plan and verified emptiness; never drop a populated billing table or delete users automatically.
 
 Documentation consulted: [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [Data API grants](https://supabase.com/docs/guides/api/securing-your-api). The separate-account rule comes from the repository's merchant reconciliation behavior, not from a provider guarantee.
+
+B2 references: [Stripe signature verification and event delivery](https://docs.stripe.com/webhooks), [Stripe's current-account implementation](https://github.com/stripe/stripe-node/blob/master/src/resources/Accounts.ts), [all-status subscription pagination](https://docs.stripe.com/api/subscriptions/list), [Basil item-level period change](https://docs.stripe.com/changelog/basil/2025-03-31/deprecate-subscription-current-period-start-and-end).

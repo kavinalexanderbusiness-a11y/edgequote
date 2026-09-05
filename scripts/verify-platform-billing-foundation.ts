@@ -23,7 +23,9 @@ async function main() {
     for (const file of files('src').filter(f => /\.(ts|tsx)$/.test(f) && !f.startsWith('src/lib/billing/'))) {
       assert.doesNotMatch(read(file), /platform_billing_accounts|platform_subscriptions|platform_billing_events|from\s*['"][^'"]*\/billing\//, file)
     }
-    assert.deepEqual(files('src/lib/billing'), ['src/lib/billing/types.ts'])
+    assert.deepEqual(files('src/lib/billing').sort(), [
+      'provider.ts', 'reconcile.ts', 'reconcileTypes.ts', 'types.ts', 'webhook.ts',
+    ].map(file => `src/lib/billing/${file}`).sort())
     assert.doesNotMatch(read('src/lib/billing/types.ts'), /\b(import|function|const|class|process|fetch)\b/)
   })
   const pg = await loadPGlite()
