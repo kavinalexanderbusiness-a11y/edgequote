@@ -38,6 +38,7 @@
     "verify:season-end": "tsx scripts/verify-season-end.ts",
     "season:audit": "tsx scripts/season-end-audit.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
+    "verify:preview-deploys": "tsx scripts/verify-preview-deploys.ts",
     "verify:measure": "tsx scripts/verify-measure.ts",
     "verify:measure-price": "tsx scripts/verify-measure-price.ts",
     "verify:measurement-rpc": "tsx scripts/verify-measurement-rpc.ts",

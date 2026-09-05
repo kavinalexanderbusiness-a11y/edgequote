@@ -1,4 +1,10 @@
 {
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "session*/**": false
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/signals",
