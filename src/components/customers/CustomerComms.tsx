@@ -1,9 +1,10 @@
 'use client'
 
 import { confirm as confirmDialog } from '@/lib/confirm'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatDate, cn } from '@/lib/utils'
@@ -35,19 +36,42 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn, onChange }: {
   const [log, setLog] = useState<LogRow[]>([])
   const [consentLog, setConsentLog] = useState<ConsentRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [logFailed, setLogFailed] = useState(false)
+  const [consentFailed, setConsentFailed] = useState(false)
+  const loadGeneration = useRef(0)
 
   async function loadLog() {
-    const [msgRes, conRes] = await Promise.all([
-      supabase.from('notification_log').select('id, created_at, channel, template, status, detail')
-        .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(40),
-      supabase.from('consent_changes').select('id, created_at, channel, old_value, new_value, source, changed_by')
-        .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(20),
-    ])
-    setLog((msgRes.data as LogRow[]) || [])
-    setConsentLog((conRes.data as ConsentRow[]) || [])
-    setLoading(false)
+    const generation = ++loadGeneration.current
+    setLoading(true)
+    try {
+      const [msgRes, conRes] = await Promise.allSettled([
+        supabase.from('notification_log').select('id, created_at, channel, template, status, detail')
+          .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(40),
+        supabase.from('consent_changes').select('id, created_at, channel, old_value, new_value, source, changed_by')
+          .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(20),
+      ])
+      if (generation !== loadGeneration.current) return
+      // Each history can recover independently. A failed read keeps its last
+      // successful rows; it must never become an empty-history claim.
+      const messagesOk = msgRes.status === 'fulfilled' && !msgRes.value.error
+      const consentOk = conRes.status === 'fulfilled' && !conRes.value.error
+      setLogFailed(!messagesOk)
+      setConsentFailed(!consentOk)
+      if (messagesOk) setLog((msgRes.value.data as LogRow[]) || [])
+      if (consentOk) setConsentLog((conRes.value.data as ConsentRow[]) || [])
+    } catch {
+      if (generation !== loadGeneration.current) return
+      setLogFailed(true)
+      setConsentFailed(true)
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false)
+    }
   }
-  useEffect(() => { loadLog() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setLog([]); setConsentLog([]); setLogFailed(false); setConsentFailed(false)
+    void loadLog()
+    return () => { loadGeneration.current += 1 }
+  }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function toggle(channel: 'sms' | 'email', value: boolean) {
     // Enabling SMS requires explicit confirmation (carrier/Twilio/CASL).
@@ -91,10 +115,16 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn, onChange }: {
         {/* History */}
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">History</p>
-          {loading ? (
+          {logFailed && (
+            <div className="mb-2 space-y-1">
+              <p role="alert" className="text-xs text-amber-400">Could not load message history.{log.length > 0 ? ' Showing previously loaded messages.' : ''}</p>
+              <Button size="sm" variant="ghost" loading={loading} onClick={() => void loadLog()} aria-label="Retry message history">Try again</Button>
+            </div>
+          )}
+          {loading && log.length === 0 && !logFailed ? (
             <SkeletonRows count={3} />
           ) : log.length === 0 ? (
-            <InlineEmpty className="py-3">No messages sent yet.</InlineEmpty>
+            logFailed ? null : <InlineEmpty className="py-3">No messages sent yet.</InlineEmpty>
           ) : (
             <div className="space-y-1">
               {log.map(r => (
@@ -110,9 +140,15 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn, onChange }: {
         </div>
 
         {/* Consent history — who changed SMS/email opt-in, when, old → new */}
-        {consentLog.length > 0 && (
+        {(consentLog.length > 0 || consentFailed) && (
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Consent history</p>
+            {consentFailed && (
+              <div className="mb-2 space-y-1">
+                <p role="alert" className="text-xs text-amber-400">Could not load consent history.{consentLog.length > 0 ? ' Showing previously loaded changes.' : ''}</p>
+                <Button size="sm" variant="ghost" loading={loading} onClick={() => void loadLog()} aria-label="Retry consent history">Try again</Button>
+              </div>
+            )}
             <div className="space-y-1">
               {consentLog.map(r => (
                 <div key={r.id} className="flex items-center gap-2 text-xs py-1 border-b border-border/50 last:border-0">

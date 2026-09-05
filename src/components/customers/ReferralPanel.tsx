@@ -1,7 +1,7 @@
 'use client'
 import { toast } from '@/lib/toast'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
@@ -36,29 +36,56 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
   const [rows, setRows] = useState<Referral[]>([])
   const [names, setNames] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [namesFailed, setNamesFailed] = useState(false)
+  const loadGeneration = useRef(0)
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState({ name: '', contact: '', reward: '' })
 
   async function load() {
-    // Local session read — this panel renders on the customer profile; avoids a second
-    // GoTrue round-trip in parallel with the page's own load.
-    const { data: { session } } = await supabase.auth.getSession()
-    const user = session?.user
-    setUid(user?.id || null)
-    const { data } = await supabase.from('referrals').select('*').eq('referrer_customer_id', customer.id).order('created_at', { ascending: false })
-    const list = (data as Referral[]) || []
-    setRows(list)
-    const ids = list.map(r => r.referred_customer_id).filter(Boolean) as string[]
-    if (ids.length) {
-      const { data: cs } = await supabase.from('customers').select('id, name').in('id', ids)
-      const map: Record<string, string> = {}
-      for (const c of (cs as { id: string; name: string }[]) || []) map[c.id] = c.name
-      setNames(map)
+    const generation = ++loadGeneration.current
+    setLoading(true)
+    try {
+      // Local session read — no additional GoTrue round-trip.
+      const { data: { session } } = await supabase.auth.getSession()
+      if (generation !== loadGeneration.current) return
+      setUid(session?.user?.id || null)
+      const { data, error } = await supabase.from('referrals').select('*').eq('referrer_customer_id', customer.id).order('created_at', { ascending: false })
+      if (generation !== loadGeneration.current) return
+      if (error) { setLoadFailed(true); return }
+      const list = (data as Referral[]) || []
+      setRows(list)
+      setLoadFailed(false)
+      const ids = list.map(r => r.referred_customer_id).filter(Boolean) as string[]
+      if (ids.length) {
+        try {
+          const { data: cs, error: namesError } = await supabase.from('customers').select('id, name').in('id', ids)
+          if (generation !== loadGeneration.current) return
+          setNamesFailed(!!namesError)
+          if (!namesError) {
+            const map: Record<string, string> = {}
+            for (const c of (cs as { id: string; name: string }[]) || []) map[c.id] = c.name
+            setNames(map)
+          }
+        } catch {
+          if (generation === loadGeneration.current) setNamesFailed(true)
+        }
+      } else {
+        setNames({})
+        setNamesFailed(false)
+      }
+    } catch {
+      if (generation === loadGeneration.current) setLoadFailed(true)
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false)
     }
-    setLoading(false)
   }
-  useEffect(() => { load() }, [customer.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setRows([]); setNames({}); setLoadFailed(false); setNamesFailed(false); setUid(null)
+    void load()
+    return () => { loadGeneration.current += 1 }
+  }, [customer.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useRealtimeRefresh('referrals', `referrer_customer_id=eq.${customer.id}`, load)
 
   async function addReferral() {
@@ -102,13 +129,21 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
         <Gift className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">Referrals</h2>
         <span className="ml-auto text-xs text-ink-muted">
-          {joined} joined{referredRevenue > 0 ? <> · <span className="text-accent-text font-semibold">{formatCurrency(referredRevenue)}</span> generated</> : ''}
+          {loadFailed ? 'Count unavailable' : loading ? 'Loading…' : <>{joined} joined</>}{referredRevenue > 0 ? <> · <span className="text-accent-text font-semibold">{formatCurrency(referredRevenue)}</span> generated</> : ''}
         </span>
       </CardHeader>
       <CardBody className="space-y-3">
         {/* "Referred by {name}" lives on the identity card at the top of the profile —
             repeating it here showed the same fact twice on one page. */}
-        {loading ? (
+        {(loadFailed || namesFailed) && (
+          <div className="space-y-1">
+            <p role="alert" className="text-xs text-amber-400">
+              {loadFailed ? `Could not load referrals.${rows.length > 0 ? ' Showing previously loaded referrals.' : ''}` : 'Some customer names could not be refreshed.'}
+            </p>
+            <Button size="sm" variant="ghost" loading={loading} onClick={() => void load()} aria-label="Retry referrals">Try again</Button>
+          </div>
+        )}
+        {loading && rows.length === 0 && !loadFailed ? (
           <div className="space-y-3 py-1" aria-hidden="true">
             {[0, 1].map(i => (
               <div key={i} className="flex items-start gap-3">
@@ -118,7 +153,7 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <InlineEmpty icon={Gift}>No referrals tracked yet — record who {firstName} sends your way.</InlineEmpty>
+          loadFailed ? null : <InlineEmpty icon={Gift}>No referrals tracked yet — record who {firstName} sends your way.</InlineEmpty>
         ) : (
           <ul className="divide-y divide-border -my-1">
             {rows.map(r => {

@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval,
-  format, isSameMonth, isSameDay, addDays,
+  format, isSameMonth, addDays,
 } from 'date-fns'
 import { Job, JOB_STATUS_COLORS } from '@/types'
 import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
@@ -18,6 +18,8 @@ export type CalendarView = 'month' | 'week' | 'day'
 interface CalendarProps {
   view: CalendarView
   cursor: Date
+  /** The business's current date; null while its timezone is still loading. */
+  todayISO: string | null
   jobs: Job[]
   onSelectDay: (date: Date) => void
   onSelectJob: (job: Job) => void
@@ -150,7 +152,7 @@ function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelec
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem, dayStatusMap, onDayMenu, selectedDays, onToggleDaySelect, capacityForDate }: CalendarProps) {
+export function Calendar({ view, cursor, todayISO, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem, dayStatusMap, onDayMenu, selectedDays, onToggleDaySelect, capacityForDate }: CalendarProps) {
   const recurLabelFor = (job: Job) => job.recurrence_id ? recurrenceLabels?.[job.recurrence_id] : undefined
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const dragEnabled = !!(onMoveJob || onMoveItem)
@@ -360,11 +362,11 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const dayJobs = dayJobsFor(day)
             const dayItems = dayItemsFor(day)
             const inMonth = isSameMonth(day, cursor)
-            const today = isSameDay(day, new Date())
             const shownJobs = dayJobs.slice(0, 3)
             const shownItems = dayItems.slice(0, 2)
             const overflow = (dayJobs.length - shownJobs.length) + (dayItems.length - shownItems.length)
             const dateISO = format(day, 'yyyy-MM-dd')
+            const today = dateISO === todayISO
             // Only a real day STATUS shades/badges the cell. A bare capacity
             // override (Day Settings hours/crew) is an ordinary working day —
             // see showsDayStatus in lib/dayStatus.
@@ -378,6 +380,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 role="button"
                 tabIndex={0}
                 data-date={dateISO}
+                aria-current={today ? 'date' : undefined}
                 {...dayHandlers(dateISO, day)}
                 className={cn(
                   'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface-raised rounded-sm relative cursor-pointer',
@@ -429,8 +432,8 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
           {weekDays.map((day, i) => {
             const dayJobs = dayJobsFor(day)
             const dayItems = dayItemsFor(day)
-            const today = isSameDay(day, new Date())
             const dateISO = format(day, 'yyyy-MM-dd')
+            const today = dateISO === todayISO
             // Only a real day STATUS shades/badges the cell. A bare capacity
             // override (Day Settings hours/crew) is an ordinary working day —
             // see showsDayStatus in lib/dayStatus.
@@ -443,6 +446,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 role="button"
                 tabIndex={0}
                 data-date={dateISO}
+                aria-current={today ? 'date' : undefined}
                 {...dayHandlers(dateISO, day)}
                 className={cn(
                   'min-h-[320px] border-r border-border p-2 text-left align-top transition-colors hover:bg-surface-raised cursor-pointer',

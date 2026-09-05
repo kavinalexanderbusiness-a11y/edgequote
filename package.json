@@ -181,7 +181,8 @@
     "verify:day-view-tomorrow": "tsx scripts/verify-day-view-tomorrow.ts",
     "verify:client-cache-isolation": "tsx scripts/verify-client-cache-isolation.ts",
     "verify:shared-unread": "tsx scripts/verify-shared-unread.ts",
-    "verify:first-use-setup": "tsx scripts/verify-first-use-setup.ts"
+    "verify:first-use-setup": "tsx scripts/verify-first-use-setup.ts",
+    "verify:customer-card-recovery": "tsx scripts/verify-customer-card-recovery.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

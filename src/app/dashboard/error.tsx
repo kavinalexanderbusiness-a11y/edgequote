@@ -1,20 +1,16 @@
 'use client'
 
 import { useEffect } from 'react'
-import { AlertTriangle, RotateCw } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
+import { AlertTriangle, RotateCw, LayoutDashboard } from 'lucide-react'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { PageContainer } from '@/components/layout/PageContainer'
 import { Card } from '@/components/ui/Card'
 
-// Without this boundary any throw inside /dashboard fell through to Next's
-// built-in one: a bare, unstyled "Application error: a server-side exception has
-// occurred" — no sidebar, no nav, no way back. The dev overlay hides that, so it
-// would only ever have been seen in production.
-//
-// It matters most now that loadDashboard THROWS on a failed read instead of
-// rendering zeros: "we couldn't load your morning" has to be visible and
-// retryable, because the alternative — a calm $0 dashboard — is the one outcome
-// the owner must never be shown.
+// The boundary for every page under /dashboard. Without it a throw fell through
+// to Next's bare "Application error" page — no sidebar, no way back. It says only
+// what it knows: the page did not load. The thrown message is never rendered
+// (it may be a driver or provider string); the digest Next attaches to a
+// server-side throw is safe to quote and identifies the failure in the log.
 export default function DashboardError({
   error, reset,
 }: { error: Error & { digest?: string }; reset: () => void }) {
@@ -28,17 +24,19 @@ export default function DashboardError({
             <AlertTriangle className="w-4.5 h-4.5 text-amber-400" />
           </span>
           <div className="min-w-0">
-            <h1 className="text-base font-bold tracking-tight text-ink">Your dashboard didn&rsquo;t load</h1>
+            <h1 className="text-base font-bold tracking-tight text-ink">This page didn&rsquo;t load</h1>
             <p className="text-sm text-ink-muted mt-1">
-              Something went wrong fetching this morning&rsquo;s numbers, so we&rsquo;re not showing any —
-              a figure we couldn&rsquo;t read is worse than none. Nothing is wrong with your data.
+              We could not load this page. Try again, or return to your dashboard.
             </p>
-            {error.message && (
-              <p className="text-xs text-ink-faint mt-2.5 font-mono break-words">{error.message}</p>
-            )}
-            <div className="flex items-center gap-2 mt-4">
+            <div className="flex flex-wrap items-center gap-2 mt-4">
               <Button onClick={reset}><RotateCw className="w-4 h-4" /> Try again</Button>
+              <ButtonLink href="/dashboard" variant="secondary"><LayoutDashboard className="w-4 h-4" /> Go to your dashboard</ButtonLink>
             </div>
+            {error.digest && (
+              <p className="text-xs text-ink-faint mt-3">
+                If this keeps happening, quote reference <span className="font-mono">{error.digest}</span>.
+              </p>
+            )}
           </div>
         </div>
       </Card>
