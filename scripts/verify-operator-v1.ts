@@ -521,13 +521,16 @@ console.log('\n═══ Client request lifecycle: cancel, recovery and stalenes
 
   // A fetch that settles only when told, and rejects like the real one on abort.
   const netAbort = () => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })
-  const wire = () => {
+  // honourAbort=false models the real race the generation guard exists for: a
+  // response already on its way when Cancel is pressed. Aborting does not
+  // un-send it, so it can still resolve — late, into a surface that has moved on.
+  const wire = (honourAbort = true) => {
     let settle: { resolve: (v: unknown) => void; reject: (e: unknown) => void } | null = null
     let calls = 0
     const fetchImpl = (_u: string, init: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
       calls++
       settle = { resolve, reject }
-      init?.signal?.addEventListener('abort', () => reject(netAbort()))
+      if (honourAbort) init?.signal?.addEventListener('abort', () => reject(netAbort()))
     })
     return {
       fetchImpl,
@@ -565,20 +568,22 @@ console.log('\n═══ Client request lifecycle: cancel, recovery and stalenes
   // ── 2. a cancelled request that resolves LATE must not speak ──────────────
   {
     const c = mount()
-    const w1 = wire()
+    const w1 = wire(false)   // already on its way when Cancel was pressed
     const p1 = c.ask(w1.fetchImpl)('First question')
     await tick()
     c.cancel()
     const w2 = wire()
     const p2 = c.ask(w2.fetchImpl)('Second question')
     await tick()
-    w2.resolve(ok('Answer to the second.')); await p2; await tick()
-    // now the cancelled first request finally answers
+    // the cancelled request answers while the NEWER one is still pending
     w1.resolve(ok('Answer to the FIRST.')); await p1; await tick()
-    check('a cancelled request that resolves late cannot replace a later answer',
-      c.st.answer?.answer === 'Answer to the second.' && c.st.asked === 'Second question',
+    check('a cancelled request that resolves late cannot replace a newer one',
+      c.st.answer === null && c.st.asked === null,
       `answer=${JSON.stringify(c.st.answer?.answer)} caption=${JSON.stringify(c.st.asked)}`)
-    check('…and cannot clear a spinner it no longer owns', c.st.loading === false)
+    check('…and cannot clear the spinner the newer request owns', c.st.loading === true)
+    w2.resolve(ok('Answer to the second.')); await p2; await tick()
+    check('…and the newer request still answers normally',
+      c.st.answer?.answer === 'Answer to the second.' && c.st.asked === 'Second question' && c.st.loading === false)
   }
   {
     const c = mount()
