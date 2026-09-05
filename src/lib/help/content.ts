@@ -49,9 +49,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: 'Do these four things first',
         body: [
           '**1. Fill in Business Settings.** Your company name, phone and logo appear on every quote, invoice, receipt and email your customers receive. Until they’re set, those documents go out looking anonymous.',
-          '**2. Set your pricing.** Settings → Pricing is where your base charge, mow rate and travel rate live. Every quote is built from these, so getting them roughly right now saves re-pricing later.',
-          '**3. Add one real customer and quote them.** The whole app is downstream of a quote — jobs, invoices and payments all trace back to one. Doing it once end-to-end teaches you more than reading.',
-          '**4. Turn on payments.** Settings → Payments connects Stripe and sets your e-transfer address. Without it, customers can still be invoiced, but they can’t pay you from the portal.',
+          '**2. Review your services and pricing.** Check your service templates and Settings → Pricing & Fees, including any travel charges. Review the amount on your first quote before sending it.',
+          '**3. Add or import a customer and create your first quote.** Use Customers to enter someone, or import your existing customer list. Then create a quote for their work.',
+          '**4. Check payment availability.** Integrations shows whether online payments are available for your business. Set your e-transfer address in Settings → Pricing & Fees. You can still issue invoices when card payments are unavailable.',
         ],
       },
       {
@@ -329,13 +329,13 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: 'Card',
         body: [
-          'Fully automatic. The customer pays from their portal through Stripe’s hosted checkout, the invoice marks itself paid, and the receipt sends itself. You do nothing.',
+          'When online payments are enabled for your business, customers can pay through Stripe’s hosted checkout from their portal. Recorded payments update the invoice balance. The app attempts a receipt using the customer’s contact preferences; delivery is not guaranteed. Customers can also download receipts from the portal.',
         ],
       },
       {
         heading: 'E-transfer',
         body: [
-          'The customer sees your Interac address (set it in **Settings → Payments** — it’s the only address the portal will ever show, because a generic contact email usually isn’t registered for e-transfers) and is asked to include the invoice number.',
+          'The customer sees your Interac address (set it in **Settings → Pricing & Fees** — it’s the only address the portal will ever show, because a generic contact email usually isn’t registered for e-transfers) and is asked to include the invoice number.',
           'When it arrives, **you record it** on the invoice. The portal then shows it in their payment history with a downloadable receipt.',
         ],
       },

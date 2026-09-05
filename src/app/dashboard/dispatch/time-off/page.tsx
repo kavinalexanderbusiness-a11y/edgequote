@@ -397,7 +397,7 @@ export default function TimeOffPage() {
               <CardBody className="p-0">
                 {holidays.length === 0 ? (
                   <EmptyState icon={CalendarDays} className="py-10" title="No holidays yet"
-                    description="Add the days your business treats as holidays. EdgeQuote doesn't assume them — which days are paid, and who qualifies, differs by province."
+                    description="Add the days your business treats as holidays. EdgeHQ doesn't assume them — which days are paid, and who qualifies, differs by province."
                     action={{ label: 'Add holiday', onClick: () => setHolidayOpen(true) }} />
                 ) : (
                   <div className="divide-y divide-border">
@@ -435,7 +435,7 @@ export default function TimeOffPage() {
 
       <p className="text-[11px] text-ink-faint text-center">
         Time off is paid at the rate stamped when it was booked, so a raise never re-values a
-        vacation day someone already took. EdgeQuote doesn’t decide statutory holiday eligibility.
+        vacation day someone already took. EdgeHQ doesn’t decide statutory holiday eligibility.
       </p>
 
       {addOpen && uid && (
@@ -585,7 +585,7 @@ function AddHolidayDialog({ supabase, userId, onClose, onSaved }: {
         </div>
 
         <Banner tone="info" icon={Info}>
-          EdgeQuote doesn’t decide who qualifies for statutory holiday pay or how it’s calculated —
+          EdgeHQ doesn’t decide who qualifies for statutory holiday pay or how it’s calculated —
           the rules and the formula differ by province. You set the hours; adding a holiday here
           never pays anyone until you give it to them.
         </Banner>

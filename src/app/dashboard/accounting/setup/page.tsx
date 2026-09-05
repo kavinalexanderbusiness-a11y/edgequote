@@ -131,7 +131,7 @@ function OpeningPanel({ supabase, userId, settings, onSaved }: {
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
       <Banner tone="info" icon={Info}>
-        EdgeQuote knows every payment and expense since you started using it — but not what was
+        EdgeHQ knows every payment and expense since you started using it — but not what was
         in the bank the day before. Without that, cash is a <em>movement</em>, not a{' '}
         <em>balance</em>, and a balance sheet can&apos;t be worked out at all.
       </Banner>

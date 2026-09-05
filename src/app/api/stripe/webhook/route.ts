@@ -118,15 +118,13 @@ export async function POST(req: NextRequest) {
           stripe_session_id: `credit:${s.id}`, stripe_payment_intent: piId,
           status: 'paid', paid_at: now(), notes: 'Scheduling deposit — held as credit',
         }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
-        if (creditRes.error) {
-          console.error('[stripe] quote-deposit credit leg failed:', creditRes.error.message)
-          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
-        }
         const isNewPayment = (cashRes.data?.length ?? 0) > 0
         if (isNewPayment) {
-          const num = s.metadata?.quote_number || 'their quote'
-          await notifyOnce(userId, 'deposit_received', quoteId, 'Deposit received',
-            `${cad(amount)} received toward ${num} — check whether the booking is ready to schedule.`, customerId, 'quote')
+          if (!creditRes.error) {
+            const num = s.metadata?.quote_number || 'their quote'
+            await notifyOnce(userId, 'deposit_received', quoteId, 'Deposit received',
+              `${cad(amount)} received toward ${num} — check whether the booking is ready to schedule.`, customerId, 'quote')
+          }
           // The receipt template asserts only "received your payment of $X" —
           // partial-safe by design, so a deposit can reuse it. Best-effort +
           // time-boxed, and gated on THIS delivery inserting the row (a Stripe
@@ -137,6 +135,12 @@ export async function POST(req: NextRequest) {
               new Promise<void>(resolve => setTimeout(resolve, 6000)),
             ])
           }
+        }
+        // Cash really arrived even if its credit leg needs a retry. Attempt the
+        // receipt before returning 500: replay will not insert that cash again.
+        if (creditRes.error) {
+          console.error('[stripe] quote-deposit credit leg failed:', creditRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
       }
     }
@@ -171,10 +175,6 @@ export async function POST(req: NextRequest) {
         // Scoped to the owner from metadata (never touches someone else's invoice).
         const invRes = await sb.from('invoices').update({ payment_method: 'stripe' })
           .eq('id', invoiceId).eq('user_id', userId)
-        if (invRes.error) {
-          console.error('[stripe] invoice update failed:', invRes.error.message)
-          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
-        }
         // Receipt for ONE-TIME online payments too (AutoPay already sends one).
         // Gated on THIS delivery inserting the payment row (a Stripe re-delivery
         // ignores the duplicate → no second receipt); best-effort + time-boxed so
@@ -185,6 +185,12 @@ export async function POST(req: NextRequest) {
             sendPaymentReceipt(sb, { userId, customerId: receiptCustomer, amount: (s.amount_total ?? 0) / 100, origin }),
             new Promise<void>(resolve => setTimeout(resolve, 6000)),
           ])
+        }
+        // The payment insert owns receipt dedupe. A failed display-method stamp
+        // still needs a retry, but must not consume that once-only attempt.
+        if (invRes.error) {
+          console.error('[stripe] invoice update failed:', invRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
       }
     }
@@ -321,10 +327,6 @@ export async function POST(req: NextRequest) {
         // Stamp the payment method for display (the trigger owns status + paid_at).
         const invRes = await sb.from('invoices').update({ payment_method: 'stripe' })
           .eq('id', invoiceId).eq('user_id', userId)
-        if (invRes.error) {
-          console.error('[stripe] autopay invoice update failed:', invRes.error.message)
-          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
-        }
         if (isNewPayment) {
           // The payment is already recorded + the invoice flipped, so the receipt is
           // pure best-effort. Time-box it: a slow/hung SMS/email provider must never
@@ -333,6 +335,12 @@ export async function POST(req: NextRequest) {
             sendPaymentReceipt(sb, { userId, customerId, amount: (pi.amount ?? 0) / 100, origin }),
             new Promise<void>(resolve => setTimeout(resolve, 6000)),
           ])
+        }
+        // As with Checkout, do not lose the receipt attempt when only the
+        // invoice's display-method stamp failed after the payment was recorded.
+        if (invRes.error) {
+          console.error('[stripe] autopay invoice update failed:', invRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
       }
     }

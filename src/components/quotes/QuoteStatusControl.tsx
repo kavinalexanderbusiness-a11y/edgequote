@@ -113,8 +113,8 @@ export function QuoteStatusControl({ quoteId, status, sentAt, validUntil, custom
       const ok = await confirmDialog({
         title: `Set this quote to ${STATUS_LABELS[s]} by hand?`,
         message: s === 'paid'
-          ? 'EdgeQuote marks a quote Paid on its own when the invoice is paid. Setting it here does NOT record a payment, and it will not be corrected when real money arrives — the quote will simply say Paid. Only do this to fix a quote that is already wrong.'
-          : 'EdgeQuote marks a quote Completed on its own when the work is finished. Setting it here does NOT complete any visit, and it will not be corrected later. Only do this to fix a quote that is already wrong.',
+          ? 'EdgeHQ marks a quote Paid on its own when the invoice is paid. Setting it here does NOT record a payment, and it will not be corrected when real money arrives — the quote will simply say Paid. Only do this to fix a quote that is already wrong.'
+          : 'EdgeHQ marks a quote Completed on its own when the work is finished. Setting it here does NOT complete any visit, and it will not be corrected later. Only do this to fix a quote that is already wrong.',
         confirmLabel: `Set ${STATUS_LABELS[s]} anyway`,
         destructive: true,
       })

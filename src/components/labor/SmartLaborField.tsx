@@ -99,7 +99,7 @@ export function SmartLaborField({
           <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 border text-ink-muted border-border">Not enough {est.serviceLabel} data</span>
         </div>
         <p className="text-[11px] text-ink-muted">
-          No {est.serviceLabel.toLowerCase()} history yet — EdgeQuote won&apos;t guess. {readOnly ? 'Time a few' : 'Enter the duration manually and complete a few'} {est.serviceLabel.toLowerCase()} jobs and it&apos;ll start auto-filling a learned estimate.
+          No {est.serviceLabel.toLowerCase()} history yet — EdgeHQ won&apos;t guess. {readOnly ? 'Time a few' : 'Enter the duration manually and complete a few'} {est.serviceLabel.toLowerCase()} jobs and it&apos;ll start auto-filling a learned estimate.
         </p>
         {!readOnly && (
           <button type="button" onClick={recalc} className="text-[11px] font-semibold text-ink-faint hover:text-ink">

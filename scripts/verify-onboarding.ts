@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { seedPlan, seasonsForStorage, serviceRowsFor, type SeedState } from '../src/lib/onboarding/seed'
-import { deriveSetupHealth, type SetupSnapshot } from '../src/lib/onboarding/setupHealth'
+import { deriveSetupHealth, deriveSetupMilestones, type SetupSnapshot } from '../src/lib/onboarding/setupHealth'
 import { LAWN_PACK, NEUTRAL_PACK, tradePack } from '../src/lib/trades'
 import { SEASONAL_TEMPLATES } from '../src/lib/crm/campaigns'
 
@@ -117,8 +117,8 @@ H('6. SETUP HEALTH — derived from existing data, mirroring real consumer gates
 // deriveSetupHealth is pure; each item's `done` must mirror the exact gate its
 // consumer applies (portal e-transfer, review cron, geocode users…). These pin
 // the derivation. The loader's fail-closed contract (readError → the card
-// renders NOTHING, never a checklist of guesses) lives in SetupProgress, which
-// returns before deriving — the snapshot shape here is what makes that possible.
+// offers retry, never a checklist of guesses) lives in SetupProgress, which
+// rejects the failed snapshot before deriving progress.
 const FULL: SetupSnapshot = {
   companyName: 'Edge Property Services', phone: '403-555-0100', emailPrimary: 'kav@edge.ca',
   baseAddress: '123 Main St SW, Calgary', baseLat: 51.02, baseLng: -114.06,
@@ -144,6 +144,18 @@ const EMPTY_SNAP: SetupSnapshot = {
   activeTemplateCount: 0, unpricedActiveTemplateCount: 0,
 }
 check('a brand-new business → nothing done', deriveSetupHealth(EMPTY_SNAP).done, 0)
+check('new business has four suggested first steps with none complete',
+  deriveSetupMilestones(EMPTY_SNAP, { hasCustomers: false, hasQuotes: false })?.items.map(i => [i.key, i.done]),
+  [['business_info', false], ['services', false], ['customers', false], ['quote', false]])
+check('existing customers and drafts complete only their respective steps',
+  deriveSetupMilestones(EMPTY_SNAP, { hasCustomers: true, hasQuotes: true })?.items.filter(i => i.done).map(i => i.key), ['customers', 'quote'])
+check('business details and services do not imply a customer or quote exists',
+  deriveSetupMilestones(FULL, { hasCustomers: false, hasQuotes: false })?.done, 2)
+check('four milestones can finish while optional setup remains',
+  { first: deriveSetupMilestones({ ...FULL, logoUrl: null }, { hasCustomers: true, hasQuotes: true })?.complete, optional: deriveSetupHealth({ ...FULL, logoUrl: null }).complete },
+  { first: true, optional: false })
+check('unknown setup can never be marked complete from fallback values',
+  deriveSetupMilestones({ ...FULL, readError: 'unavailable' }, { hasCustomers: true, hasQuotes: true }), null)
 
 // The gates each item mirrors, driven one at a time:
 // home_base deliberately ignores lat/lng: the settings form NULLS them on every
@@ -217,11 +229,11 @@ check('the first-run card names the one first action',
 // ── Defaults. Any caller that doesn't pass `started` must get the ESTABLISHED
 // behaviour, never the first-run one — an omitted prop should be inert.
 check('TodaysPriorities defaults started = true', /started = true/.test(PRIORITIES_UI), true)
-check('SetupProgress defaults started = true', /started = true/.test(SETUP_UI), true)
-check('SetupProgress waits for a started business', /if \(!started\) return null/.test(SETUP_UI), true)
-check('the dashboard passes the derived flag to both cards',
+check('SetupProgress also guides a business before its first customer', !/if \(!started\) return null/.test(SETUP_UI), true)
+check('the dashboard passes existing full-history activity facts to setup',
   /<TodaysPriorities[\s\S]{0,400}?started=\{d\.started\}/.test(DASH_PAGE)
-  && /<SetupProgress started=\{d\.started\}/.test(DASH_PAGE), true)
+  && /<SetupProgress activity=\{d\.setupActivity\}/.test(DASH_PAGE)
+  && DATA.indexOf('setupActivity: { hasCustomers: customerRows.length > 0, hasQuotes: quotes.length > 0 }') > iThrow, true)
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('8. EVERY TRADE, NOT ONE — no lawn vocabulary on universal surfaces')

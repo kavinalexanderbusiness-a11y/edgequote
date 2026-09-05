@@ -80,7 +80,7 @@ export function FinalizePayRunDialog({ open, draft, supabase, userId, onClose, o
 
         <Banner tone="info" icon={Info}>
           Finalizing freezes these numbers. Editing a shift afterwards won’t change what this run
-          says you paid — EdgeQuote will flag the difference instead, so the record of the cheque
+          says you paid — EdgeHQ will flag the difference instead, so the record of the cheque
           you actually cut stays intact.
         </Banner>
       </div>

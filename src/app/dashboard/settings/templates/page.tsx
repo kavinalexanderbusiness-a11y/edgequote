@@ -373,7 +373,7 @@ export default function ServiceTemplatesPage() {
                 ]} {...register('recurrence')} />
                 <p className="text-xs text-ink-muted sm:pt-7">
                   {watch('recurrence') === 'one_time'
-                    ? 'EdgeQuote will never suggest making this service recurring.'
+                    ? 'EdgeHQ will never suggest making this service recurring.'
                     : watch('recurrence') === 'usually_recurring'
                       ? 'This service normally runs as a recurring plan.'
                       : watch('recurrence') === 'recurring_ok'

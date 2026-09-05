@@ -5,7 +5,7 @@ import { CrewSignOut } from '@/components/crew/CrewSignOut'
 import { localTodayISO } from '@/lib/utils'
 import { User, Users, Building2, Phone, CalendarOff, ChevronRight } from 'lucide-react'
 
-export const metadata = { title: 'Me — EdgeQuote' }
+export const metadata = { title: 'Me — EdgeHQ' }
 
 // ── Me ───────────────────────────────────────────────────────────────────────
 // Identity and the way out. No profile editing, no settings, no HR: a worker

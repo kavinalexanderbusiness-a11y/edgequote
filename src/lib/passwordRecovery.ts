@@ -187,7 +187,7 @@ export function classifyRecoverySend(status: number | null | undefined): Recover
  *  accepted. Never says "sent", never says "delivered", never repeats whether
  *  the address is known — and the address is echoed so a typo is visible. */
 export function acceptedMessage(email: string): string {
-  return `If ${email} has an EdgeQuote account, a link to choose a new password is on its way. It expires in an hour.`
+  return `If ${email} has an EdgeHQ account, a link to choose a new password is on its way. It expires in an hour.`
 }
 
 /** What we say when nothing was sent and we know it. No account is named. */

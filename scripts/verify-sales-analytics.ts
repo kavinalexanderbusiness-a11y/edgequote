@@ -342,7 +342,7 @@ check('the engine never reads updated_at (it moves on ANY edit)',
 check('the engine never invents an accepted_at',
   !/accepted_at|decided_at|declined_at|won_at/.test(engineSrc))
 check('the cohort note tells the owner what a date filter here MEANS',
-  R.cohortNote.includes('created in this period') && /never guessed|not.*guess/i.test(R.cohortNote),
+  R.cohortNote.includes('created in this period') && R.cohortNote.includes('Accepted quotes stay in their original creation period'),
   R.cohortNote)
 check('movement is ordered newest-first',
   R.movement.every((m, idx) => idx === 0 || R.movement[idx - 1].at >= m.at))

@@ -62,7 +62,7 @@ export default function IntegrationDocsPage() {
     <div className="max-w-4xl mx-auto space-y-8">
       <PageHeader
         title="API & webhook docs"
-        description="Everything a developer — or a Zapier/Make scenario — needs to talk to EdgeQuote."
+        description="Everything a developer — or a Zapier/Make scenario — needs to talk to EdgeHQ."
         crumb={{ label: 'Integrations', href: '/dashboard/integrations' }}
         action={
           <Link href="/dashboard/integrations">
@@ -163,7 +163,7 @@ export default function IntegrationDocsPage() {
 
       {/* Inbound */}
       <section id="inbound" className="space-y-3 animate-rise stagger-5">
-        <SectionHeading icon={ArrowDownToLine} title="Inbound webhooks" sub="POST JSON at EdgeQuote and get a customer or a full lead out." />
+        <SectionHeading icon={ArrowDownToLine} title="Inbound webhooks" sub="POST JSON at EdgeHQ and get a customer or a full lead out." />
         <Card>
           <CardBody className="space-y-3">
             <CodeBlock code={`curl -X POST ${base}/api/hooks/in/eqin_… \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name": "Jordan Miller",\n    "email": "jordan@example.com",\n    "phone": "403-555-0142",\n    "address": "128 Aspen Ridge Way SW",\n    "message": "Please quote weekly mowing."\n  }'`} />
@@ -178,13 +178,13 @@ export default function IntegrationDocsPage() {
 
       {/* Zapier */}
       <section id="zapier" className="space-y-3 animate-rise stagger-6">
-        <SectionHeading icon={Zap} title="Zapier recipe" sub="Works today with 'Webhooks by Zapier' — no EdgeQuote app install needed." />
+        <SectionHeading icon={Zap} title="Zapier recipe" sub="Works today with 'Webhooks by Zapier' — no EdgeHQ app install needed." />
         <Card>
           <CardBody className="space-y-2 text-[13px] text-ink-muted">
             <p><strong className="text-ink">Trigger (instant):</strong> Webhooks by Zapier → <em>Catch Hook</em>. Copy the hook URL Zapier gives you, then either add it under Integrations → Webhooks, or subscribe via the API:</p>
             <CodeBlock code={`curl -X POST ${base}/api/v1/hooks \\\n  -H "Authorization: Bearer eq_live_…" \\\n  -H "Content-Type: application/json" \\\n  -d '{"url": "https://hooks.zapier.com/hooks/catch/…", "events": ["invoice.paid", "quote.accepted"]}'`} />
             <p><strong className="text-ink">Trigger (polling / samples):</strong> point Zapier&apos;s GET at <code className="text-ink">{`${base}/api/v1/events?event=invoice.paid`}</code>.</p>
-            <p><strong className="text-ink">Action (create a lead in EdgeQuote):</strong> Webhooks by Zapier → <em>POST</em> to your inbound webhook URL with the JSON fields above.</p>
+            <p><strong className="text-ink">Action (create a lead in EdgeHQ):</strong> Webhooks by Zapier → <em>POST</em> to your inbound webhook URL with the JSON fields above.</p>
             <p><strong className="text-ink">Lookups:</strong> GET any REST resource (e.g. find a customer by listing with filters) using the API key in an Authorization header.</p>
           </CardBody>
         </Card>

@@ -6,6 +6,8 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
+import { useModules } from '@/hooks/useModules'
+import { modulesForNavigation } from '@/lib/modules'
 import {
   BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck,
   ArrowRight, TrendingUp, CloudRain, Ruler, FileText, ChevronDown, type LucideIcon,
@@ -114,6 +116,10 @@ function Drawer({ title, hint, tools }: { title: string; hint: string; tools: To
 }
 
 export default function GrowPage() {
+  const { visible } = useModules()
+  const reportingTools: Tool[] = modulesForNavigation(visible, 'grow').map(m => ({
+    label: m.label, href: m.href, icon: m.icon, blurb: m.description,
+  }))
   return (
     <PageContainer>
       {/* Plain words. The old subtitle ("Your AI advisor for pricing, growth and
@@ -143,7 +149,7 @@ export default function GrowPage() {
       <CustomerHealthPanel />
       <WinLossPanel />
 
-      <Drawer title="See what's working" hint="Reports and results, when you want to read rather than act" tools={LOOK} />
+      <Drawer title="See what's working" hint="Reports and results, when you want to read rather than act" tools={[...reportingTools, ...LOOK]} />
       <Drawer title="Other tools" hint="Housekeeping that keeps the numbers above honest" tools={HOUSEKEEPING} />
     </PageContainer>
   )

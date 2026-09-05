@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     // should know their next move without opening a dashboard to guess.
     return fail(
       'not-configured',
-      'Creating logins needs SUPABASE_SERVICE_ROLE_KEY set on the deployment. Until then, use “Join code” — it works for someone who already has an EdgeQuote login.',
+      'Creating logins needs SUPABASE_SERVICE_ROLE_KEY set on the deployment. Until then, use “Join code” — it works for someone who already has an EdgeHQ login.',
       503,
     )
   }
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
   // the Join code, which requires the person to sign in and consent themselves.
   if (existingId && existingId !== tech.auth_user_id) {
     return fail('email-taken',
-      'That email already has an EdgeQuote login. Ask them to sign in and enter a Join code instead — that way they accept the invite themselves.',
+      'That email already has an EdgeHQ login. Ask them to sign in and enter a Join code instead — that way they accept the invite themselves.',
       409)
   }
   if (tech.auth_user_id && tech.auth_user_id !== existingId) {

@@ -92,7 +92,7 @@ H('2. the verification email (pure)')
   check('the didn’t-sign-up line is present (anyone can type a stranger’s address)',
     /didn’t sign up/i.test(m.html) && /didn’t sign up/i.test(m.text))
   check('single-use is stated', /single-use/i.test(m.text))
-  check('subject names EdgeQuote', /EdgeQuote/.test(m.subject))
+  check('subject names EdgeHQ', /EdgeHQ/.test(m.subject))
   check('html-escaping still guards a hostile URL', betaVerifyEmail('https://x.example/a&b<c>').html.includes('href="https://x.example/a&amp;b&lt;c&gt;"'))
 }
 

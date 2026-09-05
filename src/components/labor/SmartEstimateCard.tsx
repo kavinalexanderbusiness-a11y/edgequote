@@ -122,7 +122,7 @@ export function SmartEstimateCard({
           <span className="font-normal text-ink-muted"> · {formatEstimatedDuration(est.observedElapsedMinutes, est.workdayMinutes)} on site</span>
         </p>
         {note(est.sampleSize === 1
-          ? `One job is an observation, not a pattern, so EdgeQuote will not suggest a duration from it. It starts suggesting at ${MIN_SERVICE_SAMPLE}.`
+          ? `One job is an observation, not a pattern, so EdgeHQ will not suggest a duration from it. It starts suggesting at ${MIN_SERVICE_SAMPLE}.`
           : `Too thin to suggest a duration from — enter an estimate manually. It firms up at ${MIN_SERVICE_SAMPLE} comparable jobs.`)}
       </>,
     )

@@ -27,7 +27,7 @@ export default function PortalAccessPage() {
           Enter the email associated with your account and we’ll send you a secure portal link.
         </p>
         <PortalAccessForm />
-        <p className="mt-8 text-center text-[11px] text-ink-faint">Powered by EdgeQuote</p>
+        <p className="mt-8 text-center text-[11px] text-ink-faint">Powered by EdgeHQ</p>
       </div>
     </main>
   )

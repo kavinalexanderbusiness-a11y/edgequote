@@ -45,9 +45,9 @@ export const GLOBAL_HOURLY = 20
 // opened AND a new password is chosen.
 export function passwordResetEmail(resetUrl: string): { subject: string; html: string; text: string } {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-  const subject = 'Reset your EdgeQuote password'
+  const subject = 'Reset your EdgeHQ password'
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;padding:28px 22px;color:#111827">
-  <p style="margin:0 0 14px;font-size:16px">Reset your EdgeQuote password</p>
+  <p style="margin:0 0 14px;font-size:16px">Reset your EdgeHQ password</p>
   <p style="margin:0;font-size:15px;line-height:1.55;color:#374151">Choose a new password using the link below. It works once and expires in an hour.</p>
   <p style="margin:24px 0 0">
     <a href="${esc(resetUrl)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:15px">Choose a new password</a>
@@ -58,10 +58,10 @@ export function passwordResetEmail(resetUrl: string): { subject: string; html: s
   <p style="margin:14px 0 0;font-size:13px;line-height:1.5;color:#6b7280">
     If you didn’t ask to reset your password, ignore this message — your password stays as it is and nothing happens without this link.
   </p>
-  <p style="margin:18px 0 0;font-size:13px;color:#9ca3af">— EdgeQuote</p>
+  <p style="margin:18px 0 0;font-size:13px;color:#9ca3af">— EdgeHQ</p>
 </div>`
   const text = [
-    'Reset your EdgeQuote password',
+    'Reset your EdgeHQ password',
     '',
     'Choose a new password using the link below. It works once and expires in an hour.',
     '',
@@ -71,7 +71,7 @@ export function passwordResetEmail(resetUrl: string): { subject: string; html: s
     '',
     'If you didn’t ask to reset your password, ignore this message — your password stays as it is and nothing happens without this link.',
     '',
-    '— EdgeQuote',
+    '— EdgeHQ',
   ].join('\n')
   return { subject, html, text }
 }

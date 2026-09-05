@@ -59,7 +59,7 @@ function urlBase64ToBuffer(base64: string): ArrayBuffer {
 export async function enablePush(): Promise<{ ok: boolean; state: PushState; reason?: string }> {
   if (!supported() || !VAPID_PUBLIC) return { ok: false, state: 'unsupported', reason: 'Push isn’t available on this browser.' }
   if (isIos() && !isStandalone()) {
-    return { ok: false, state: 'unsupported', reason: 'On iPhone/iPad, first add EdgeQuote to your Home Screen, open it from there, then enable notifications.' }
+    return { ok: false, state: 'unsupported', reason: 'On iPhone/iPad, first add EdgeHQ to your Home Screen, open it from there, then enable notifications.' }
   }
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') {

@@ -360,10 +360,10 @@ export const EXPORT_EXCLUSIONS: { what: string; why: string }[] = [
   { what: 'Customer portal links', why: 'A portal link is a password. Exporting one would put working logins to your customers\' records in a file.' },
   { what: 'Card processor reference ids', why: 'Stripe\'s own identifiers for customers, sessions and payments belong to the payment account, not to your records. The money itself is in payments.csv.' },
   { what: 'API keys, webhook secrets and connected social accounts', why: 'These are credentials.' },
-  { what: 'Your EdgeQuote account id', why: 'It appears on every row and says nothing about your business. Leaving it out means no account identifier appears anywhere in this archive.' },
+  { what: 'Your EdgeHQ account id', why: 'It appears on every row and says nothing about your business. Leaving it out means no account identifier appears anywhere in this archive.' },
   { what: 'Message and notification history', why: 'Not part of this first export — planned separately.' },
   { what: 'Staff, timesheets and payroll', why: 'Not part of this first export — planned separately.' },
-  { what: 'Settings, pricing configuration and templates', why: 'These describe how EdgeQuote is set up rather than what your business did.' },
+  { what: 'Settings, pricing configuration and templates', why: 'These describe how EdgeHQ is set up rather than what your business did.' },
 ]
 
 export const EXPORT_FORMAT_VERSION = 1

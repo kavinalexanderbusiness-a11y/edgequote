@@ -105,6 +105,7 @@ export interface DashboardData {
    *  has cleared its queue — the two look identical in the data and must not
    *  read identically on screen. */
   started: boolean
+  setupActivity: { hasCustomers: boolean; hasQuotes: boolean }
 }
 
 type SettingsRow = {
@@ -407,6 +408,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // customer added and nothing else — means this business has begun, so the
     // first-run framing stands down permanently and can never re-appear later.
     started: quotes.length > 0 || jobs.length > 0 || invoices.length > 0 || customerRows.length > 0,
+    setupActivity: { hasCustomers: customerRows.length > 0, hasQuotes: quotes.length > 0 },
   }
 }
 

@@ -19,7 +19,7 @@
 //     what exists and where it belongs.
 
 import {
-  FEATURE_MODULES, CATEGORY_ORDER, MODULE_CATEGORIES, visibleModules, moduleByKey,
+  FEATURE_MODULES, CATEGORY_ORDER, MODULE_CATEGORIES, visibleModules, moduleByKey, modulesForNavigation,
 } from '../src/lib/modules'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -80,6 +80,43 @@ check('Settings links Service templates',
   settings.includes('/dashboard/settings/templates'),
   'removing it from the sidebar without a home in Settings would orphan the page')
 
+// Moving a navigation door must not uninstall its module, remove it from search,
+// or strand it when another optional module (Grow) is disabled.
+const keys = (modules: ReturnType<typeof visibleModules>) => modules.map(m => m.key)
+const enabled = visibleModules(null)
+const enabledBefore = keys(enabled)
+const advancedKeys = ['activity', 'automation', 'integrations']
+const movedKeys = [...advancedKeys, 'sales']
+eq('daily navigation omits only the four tools that now have another home',
+  keys(modulesForNavigation(enabled, 'sidebar')), enabledBefore.filter(k => !movedKeys.includes(k)))
+eq('Settings carries every enabled advanced tool',
+  keys(modulesForNavigation(enabled, 'settings')), advancedKeys)
+eq('Grow carries Sales reporting', keys(modulesForNavigation(enabled, 'grow')), ['sales'])
+eq('grouping does not change the visible modules consumed by search', keys(enabled), enabledBefore)
+eq('all four moved modules remain in the enabled list', keys(enabled).filter(k => movedKeys.includes(k)),
+  ['activity', 'sales', 'automation', 'integrations'])
+eq('disabling optional modules leaves only core navigation',
+  keys(modulesForNavigation(visibleModules([]), 'sidebar')), FEATURE_MODULES.filter(m => m.core).map(m => m.key))
+for (const home of ['settings', 'grow'] as const) {
+  eq(`${home} does not display disabled modules`, keys(modulesForNavigation(visibleModules([]), home)), [])
+}
+eq('Advanced tools respects a partially enabled selection',
+  keys(modulesForNavigation(visibleModules(['activity', 'integrations']), 'settings')), ['activity', 'integrations'])
+check('Sales remains in the sidebar when Grow is off',
+  modulesForNavigation(visibleModules(['sales', 'quotes', 'customers']), 'sidebar').some(m => m.key === 'sales'))
+check('enabling Grow does not enable Sales reporting',
+  !modulesForNavigation(visibleModules(['grow']), 'grow').some(m => m.key === 'sales'))
+eq('Sales retains its real dependency on Quotes, with no new Grow dependency', moduleByKey('sales')?.requires, ['quotes'])
+eq('Sales keeps its stable report route', moduleByKey('sales')?.href, '/dashboard/sales')
+const commandPalette = read('src/components/command/CommandPalette.tsx')
+check('command palette still builds navigation from the full enabled module list',
+  commandPalette.includes('visible: moduleNav') && commandPalette.includes('moduleNav.map(') &&
+  !commandPalette.includes('modulesForNavigation'))
+const advanced = read('src/components/settings/AdvancedTools.tsx')
+check('Settings exposes the Advanced tools tab and renders its destinations',
+  settings.includes("key: 'advanced'") && settings.includes('<AdvancedTools />') &&
+  advanced.includes("modulesForNavigation(visible, 'settings')") && advanced.includes('href={href}'))
+
 // ── 3. No dead ends ──────────────────────────────────────────────────────────
 // Every top-level /dashboard route must be reachable without typing a URL:
 // from the registry (sidebar), a hub, the command palette, or as a redirect.
@@ -121,6 +158,8 @@ check('no dashboard page is a dead end', unreachable.length === 0,
 // The Grow hub is what keeps the sidebar short; it has to actually carry the
 // analytics leaves that are not in the nav.
 const grow = read('src/app/dashboard/grow/page.tsx')
+check('Grow renders its enabled reporting destinations',
+  grow.includes("modulesForNavigation(visible, 'grow')") && grow.includes('tools={[...reportingTools, ...LOOK]}'))
 const GROW_LEAVES = ['intelligence', 'revenue-intelligence', 'profitability', 'saturation',
                      'neighbors', 'reactivation', 'review', 'reports', 'pricing-recovery', 'data-quality']
 for (const leaf of GROW_LEAVES) {

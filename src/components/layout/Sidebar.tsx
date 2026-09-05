@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useModules } from '@/hooks/useModules'
-import { CATEGORY_ORDER, MODULE_CATEGORIES } from '@/lib/modules'
+import { CATEGORY_ORDER, MODULE_CATEGORIES, modulesForNavigation } from '@/lib/modules'
 import { useUnread } from '@/hooks/useUnread'
 import { clearOwnedCaches } from '@/lib/clientCache'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
@@ -19,12 +19,9 @@ import { Kbd } from '@/components/ui/Kbd'
 // per business by business_settings.enabled_modules (null = all), and the
 // analytics leaves live behind one "Grow" hub so this stays short.
 //
-// It is GROUPED by the registry's own `category`, in CATEGORY_ORDER: home, then
-// Operations → Customers → Money → Growth → Setup. Fifteen flat items read as a
-// pile of features and made the owner learn a list; the same fifteen under five
-// headings read as a business — run the day, look after customers, get paid,
-// grow, and the plumbing you set up once. Nothing was added or removed to
-// achieve that (Service Templates left for Settings, where it belongs).
+// Daily work is grouped by the registry's category. Advanced tools live in
+// Settings and Sales reporting lives in Grow; their modules remain installed
+// and searchable. Empty categories do not render a heading.
 //
 // ⚠️ The grouping MUST stay sourced from the registry. A hand-kept list here is
 // how the sidebar, the Marketplace and the Modules manager start disagreeing
@@ -101,7 +98,10 @@ export function Sidebar() {
   const unread = useUnread()
   // Per-business module composition — ONE loader (useModules) shared with the
   // command palette and the Modules settings surface; live-updates on change.
-  const { visible: navMain } = useModules()
+  const { visible } = useModules()
+  const navMain = modulesForNavigation(visible, 'sidebar')
+  const pageModule = visible.find(m => m.href !== '/dashboard' && (pathname === m.href || pathname.startsWith(m.href + '/')))
+  const settingsActive = pathname.startsWith('/dashboard/settings') || pageModule?.navigation === 'settings'
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
   useEffect(() => {
@@ -129,7 +129,7 @@ export function Sidebar() {
   }, [])
 
 
-  // Tab-title badge: "(3) EdgeQuote …" while messages wait — the one attention cue
+  // Tab-title badge: "(3) EdgeHQ …" while messages wait — the one attention cue
   // that works with the app open in a background tab, no permission needed.
   // Best-effort: a route change re-renders the title without the prefix, and the
   // next unread change re-applies it.
@@ -177,6 +177,7 @@ export function Sidebar() {
     const active = href === '/dashboard'
       ? pathname === '/dashboard'
       : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
+        || (href === '/dashboard/grow' && pageModule?.navigation === 'grow')
     const badge = label === 'Messages' && unread > 0 ? unread : 0
     return (
       <Link key={href} href={href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={linkClass(active)}>
@@ -208,18 +209,13 @@ export function Sidebar() {
           {/* Home first and ungrouped — it is not a category, it is where you land. */}
           {navMain.filter(m => m.href === '/dashboard').map(m => navLink(m, onNavigate))}
 
-          {/* …then the business, in the order you run it. Fifteen flat items read
-              as a pile of features; the same fifteen under headings read as
-              Operations / Customers / Money / Growth / Setup. The grouping is the
-              registry's own `category` (lib/modules) rather than a second list
-              here, so the sidebar and Settings → Features can never disagree
-              about where something belongs. */}
+          {/* Group the remaining daily destinations using the module registry. */}
           {CATEGORY_ORDER.map(cat => {
             const items = navMain.filter(m => m.category === cat && m.href !== '/dashboard')
             if (items.length === 0) return null      // a module can be uninstalled
             return (
               <div key={cat} className="mt-3 first:mt-1">
-                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+                <p className="px-3 pb-1 text-xs font-medium text-ink-faint">
                   {MODULE_CATEGORIES[cat]}
                 </p>
                 <div className="flex flex-col gap-0.5">{items.map(m => navLink(m, onNavigate))}</div>
@@ -237,8 +233,8 @@ export function Sidebar() {
             Help
           </Link>
           <Link href="/dashboard/settings" onClick={onNavigate}
-            aria-current={pathname === '/dashboard/settings' ? 'page' : undefined}
-            className={linkClass(pathname === '/dashboard/settings')}>
+            aria-current={settingsActive ? 'page' : undefined}
+            className={linkClass(settingsActive)}>
             <Settings className="w-4 h-4" aria-hidden="true" />
             Settings
           </Link>
@@ -268,7 +264,7 @@ export function Sidebar() {
         </div>
       )}
       <div className="min-w-0">
-        <p className="text-sm font-bold text-ink leading-none truncate">EdgeQuote</p>
+        <p className="text-sm font-bold text-ink leading-none truncate">EdgeHQ</p>
         {/* The OWNER's business name (Settings → Branding) — the platform never
             assumes whose business this is. Hidden until a name is set. */}
         {brand.name && <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">{brand.name}</p>}

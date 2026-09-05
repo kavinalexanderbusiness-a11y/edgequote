@@ -193,7 +193,7 @@ export function CrewAccessControl({ tech, access, onChanged }: {
             <Button size="sm" variant="ghost" type="button" onClick={() => setEmailing(false)}>Cancel</Button>
             {/* The fallback, named up front rather than only after a failure. */}
             <Button size="sm" variant="ghost" type="button" onClick={issueCode} loading={busy === 'code'} className="ml-auto"
-              title="For someone who already has an EdgeQuote login">
+              title="For someone who already has an EdgeHQ login">
               <KeyRound className="w-3.5 h-3.5" aria-hidden /> Join code instead
             </Button>
           </div>

@@ -765,7 +765,7 @@ export function computeSalesAnalytics(i: SalesAnalyticsInput): SalesAnalyticsRep
     cohortNote:
       'Every figure follows the quotes you created in this period. ' +
       'Money is counted in full whenever it arrived, even after the period ended — ' +
-      'EdgeQuote does not record the date a quote was accepted, so it is never guessed.',
+      'Accepted quotes stay in their original creation period.',
     snapshot,
     funnel,
     sources,

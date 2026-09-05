@@ -276,7 +276,7 @@ export function EmployeeEditor({
         {/* 6 — the app. Only once they exist: there is no row to attach a login
             to until the first save, and saying so beats a button that fails. */}
         <section className="border-t border-border pt-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">EdgeQuote app</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">EdgeHQ app</p>
           {isNew ? (
             <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
               Add them first, then you can invite them — they get their own login that shows only their

@@ -55,7 +55,7 @@ export function LostReasonHost() {
       title={customerName ? `Why did ${customerName} say no?` : 'Why was this lost?'}
     >
       <p className="text-xs text-ink-muted mb-3">
-        Optional. It’s the only way EdgeQuote can tell you where you keep losing on price —
+        Optional. It’s the only way EdgeHQ can tell you where you keep losing on price —
         and it never changes the quote.
       </p>
       <div className="flex flex-wrap gap-2">

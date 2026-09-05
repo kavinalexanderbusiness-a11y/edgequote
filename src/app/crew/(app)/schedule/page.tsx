@@ -3,7 +3,7 @@ import { loadCrewUpcoming } from '@/lib/crewAccess'
 import { CalendarDays, AlertTriangle } from 'lucide-react'
 import { CrewWeekDay } from '@/components/crew/CrewWeekDay'
 
-export const metadata = { title: 'Week — EdgeQuote' }
+export const metadata = { title: 'Week — EdgeHQ' }
 
 // ── The week ahead ───────────────────────────────────────────────────────────
 // Server-rendered and deliberately thin: a count per day, so "am I working

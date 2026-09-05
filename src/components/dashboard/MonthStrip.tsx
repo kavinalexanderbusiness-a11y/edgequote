@@ -92,7 +92,7 @@ export function MonthStrip({ collected, collectedLastMonthToDate, jobsDone, jobs
           className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <Card className="p-3 sm:p-4 h-full card-lift">
             <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">
-              <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-[0.14em] truncate">
+              <p className="text-xs font-medium text-ink-muted truncate">
                 <span className="sm:hidden">{short}</span>
                 <span className="hidden sm:inline">{label}</span>
               </p>

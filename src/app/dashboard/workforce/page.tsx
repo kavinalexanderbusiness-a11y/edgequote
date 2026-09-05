@@ -439,7 +439,7 @@ export default function WorkforcePage() {
               <div className="px-5 py-4">
                 <Banner tone="info" icon={Info}
                   action={<Link href="/dashboard/settings#payroll" className="shrink-0 text-xs font-semibold underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Set rules</Link>}>
-                  Overtime law differs by province, so EdgeQuote won’t guess a threshold for you.
+                  Overtime law differs by province, so EdgeHQ won’t guess a threshold for you.
                 </Banner>
               </div>
             ) : otInsight.watch.length === 0 ? (

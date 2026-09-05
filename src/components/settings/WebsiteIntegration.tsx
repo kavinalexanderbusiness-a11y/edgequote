@@ -143,7 +143,7 @@ export function WebsiteIntegration() {
     setTest({ status: 'sending' })
     const payload = {
       token,
-      name: 'EdgeQuote test submission',
+      name: 'EdgeHQ test submission',
       email: 'test@edgequote.example',
       phone: '5875550000',
       address: 'Test — sent from Settings → Online Booking',
@@ -231,7 +231,7 @@ export function WebsiteIntegration() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Globe className="w-4 h-4 text-accent-text" /> Online Booking & Website Integration</h2>
-              <p className="text-xs text-ink-faint mt-0.5">Connect any website — Netlify, WordPress, Wix, Squarespace — straight to EdgeQuote. One token, no code on our side to change.</p>
+              <p className="text-xs text-ink-faint mt-0.5">Connect any website — Netlify, WordPress, Wix, Squarespace — straight to EdgeHQ. One token, no code on our side to change.</p>
             </div>
             <StatusPill connected={connected} enabled={enabled} />
           </div>
@@ -269,7 +269,7 @@ export function WebsiteIntegration() {
 
                 {test.status === 'ok' && (
                   <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3 space-y-1.5">
-                    <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Submission reached EdgeQuote</p>
+                    <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Submission reached EdgeHQ</p>
                     <ResultLine ok={test.checks.lead} label="Lead created" />
                     <ResultLine ok={test.checks.customer} label="Customer created / matched" />
                     <ResultLine ok={test.checks.property} label="Property created" />
@@ -423,9 +423,9 @@ function CopyRow({ label, value, copied, onCopy, hint, icon: Icon, openHref }: {
 }
 
 const PLATFORMS = [
-  { name: 'Netlify', steps: 'Paste the snippet into your page’s HTML (or a custom-code block). If you used Netlify Forms or Formspree, remove that form handler so it posts to EdgeQuote instead. Your thank-you.html keeps working as the redirect.' },
+  { name: 'Netlify', steps: 'Paste the snippet into your page’s HTML (or a custom-code block). If you used Netlify Forms or Formspree, remove that form handler so it posts to EdgeHQ instead. Your thank-you.html keeps working as the redirect.' },
   { name: 'WordPress', steps: 'Add a “Custom HTML” block (or use a code-snippet plugin like WPCode) and paste the snippet. Don’t wrap it in a contact-form plugin that hijacks the submit.' },
-  { name: 'Wix', steps: 'Add → Embed Code → Custom Embed → “Embed HTML”, paste the snippet, and publish. The fetch still posts to EdgeQuote from inside the embed.' },
+  { name: 'Wix', steps: 'Add → Embed Code → Custom Embed → “Embed HTML”, paste the snippet, and publish. The fetch still posts to EdgeHQ from inside the embed.' },
   { name: 'Squarespace', steps: 'Add a “Code Block” (Business plan or higher allows custom code) and paste the snippet. Save and publish.' },
 ]
 
@@ -440,7 +440,7 @@ function buildCurl(endpoint: string, token: string): string {
 // posts JSON with the token in the body (the field people forget), drops honeypot
 // hits, and redirects to the site’s existing conversion page on success.
 function buildSnippet(endpoint: string, token: string): string {
-  return `<!-- EdgeQuote website form — posts leads straight into EdgeQuote -->
+  return `<!-- EdgeHQ website form — posts leads straight into EdgeHQ -->
 <form id="eq-quote-form">
   <input name="name" required placeholder="Your name">
   <input name="email" type="email" placeholder="Email">

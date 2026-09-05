@@ -24,6 +24,7 @@ import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEdit
 import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { ModuleManager } from '@/components/settings/ModuleManager'
+import { AdvancedTools } from '@/components/settings/AdvancedTools'
 import { PayrollSettings } from '@/components/settings/PayrollSettings'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
@@ -47,6 +48,7 @@ const SETTINGS_TABS: TabItem[] = [
   { key: 'booking', label: 'Booking', icon: LinkIcon },
   { key: 'payroll', label: 'Payroll', icon: Wallet },
   { key: 'modules', label: 'Features', icon: LayoutGrid },
+  { key: 'advanced', label: 'Advanced tools', icon: Zap },
   { key: 'custom-fields', label: 'Custom fields', icon: SlidersHorizontal },
   { key: 'data', label: 'Your data', icon: Download },
 ]
@@ -840,6 +842,11 @@ export default function SettingsPage() {
       <div className={cn('order-3 space-y-6', tab !== 'modules' && 'hidden')}>
         <SaveContract text="Changes on this tab save the moment you make them." />
         <ModuleManager />
+      </div>
+
+      {/* ADVANCED TOOLS — navigation only; each tool keeps its own permissions. */}
+      <div className={cn('order-3 space-y-6', tab !== 'advanced' && 'hidden')}>
+        <AdvancedTools />
       </div>
 
       {/* CUSTOM FIELDS — the owner's own attributes on customers, locations, visits. */}

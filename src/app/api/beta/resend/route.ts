@@ -55,7 +55,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (invErr) return fail('error', 'Couldn’t check that invite — try again.', 502)
   if (!invite) return fail('invalid', 'This invite link isn’t valid.', 404)
 
-  if (invite.revoked_at) return fail('revoked', 'This invite has been revoked. Contact EdgeQuote for a new one.', 410)
+  if (invite.revoked_at) return fail('revoked', 'This invite has been revoked. Contact EdgeHQ for a new one.', 410)
   if (invite.redeemed_at) return fail('used', 'This invite has already been used to create a business.', 410)
   if (!invite.reserved_by) return fail('not-started', 'No signup has been started for this invite yet — fill in the form first.', 409)
 
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   if (invite.send_count >= MAX_VERIFICATION_SENDS) {
-    return fail('send-limit', 'Too many emails have been sent for this invite. Contact EdgeQuote.', 429)
+    return fail('send-limit', 'Too many emails have been sent for this invite. Contact EdgeHQ.', 429)
   }
   if (invite.last_sent_at && Date.now() - new Date(invite.last_sent_at).getTime() < RESEND_MIN_INTERVAL_MS) {
     return fail('slow-down', 'A confirmation email just went out — give it a minute, and check spam.', 429)

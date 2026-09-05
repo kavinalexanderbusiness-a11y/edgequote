@@ -376,13 +376,11 @@ export default function ReportsPage() {
             {period.drafts} draft{period.drafts !== 1 ? 's' : ''} ({formatCurrency(period.draftTotal)}) not yet sent — excluded above. Send them to bill this period.
           </p>
         )}
-        {/* The honest limit of this page, stated on the page rather than discovered by
-            an accountant. EdgeQuote has no expense side, so no figure here can be
-            earnings — and none of them are labelled as if they were. */}
+        {/* This report excludes expenses, so its figures describe revenue. */}
         <p className="text-xs text-ink-faint flex items-start gap-1.5">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden />
           <span>
-            EdgeQuote doesn&rsquo;t track expenses, so this is a <span className="font-medium text-ink-muted">revenue summary</span> —
+            This report excludes expenses, so this is a <span className="font-medium text-ink-muted">revenue summary</span> —
             what you billed and collected. It is not a profit statement; your bookkeeper still needs your costs to work that out.
           </span>
         </p>

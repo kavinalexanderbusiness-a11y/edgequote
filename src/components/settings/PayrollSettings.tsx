@@ -163,7 +163,7 @@ export function PayrollSettings() {
 
         {payPeriod === 'biweekly' && (
           <Input label="A pay period start date" type="date" value={anchor} onChange={e => setAnchor(e.target.value)}
-            hint="Any past payday's start date — tells EdgeQuote which two weeks pair up." />
+            hint="Any past payday's start date — tells EdgeHQ which two weeks pair up." />
         )}
 
         {/* ── Overtime ── */}
@@ -193,7 +193,7 @@ export function PayrollSettings() {
         <Banner tone={otOff ? 'neutral' : 'accent'} icon={Info}>{summary}</Banner>
 
         <p className="text-[11px] text-ink-faint">
-          EdgeQuote doesn’t assume an overtime rule, because it differs by province — pick your
+          EdgeHQ doesn’t assume an overtime rule, because it differs by province — pick your
           province above or set your own. These rules apply when payroll is calculated; they never
           rewrite a shift someone already worked.
         </p>
