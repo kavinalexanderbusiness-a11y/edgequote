@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 // duplicated Studio/Campaigns and showed five dead "Soon" pills). Horizontal +
 // scrollable on mobile, matching the app's Tabs/FilterPill look.
 
-interface RailItem { label: string; href?: string; icon: LucideIcon; soon?: boolean }
+interface RailItem { label: string; href: string; icon: LucideIcon }
 
 const ITEMS: RailItem[] = [
   { label: 'Overview', href: '/dashboard/grow', icon: Sprout },
@@ -33,23 +33,14 @@ export function GrowNav() {
     <nav aria-label="Grow sections" className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1 [mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)] sm:[mask-image:none]">
       {ITEMS.map(item => {
         const Icon = item.icon
-        const active = item.href && (item.href === '/dashboard/grow'
+        const active = (item.href === '/dashboard/grow'
           ? pathname === '/dashboard/grow'
           : pathname.startsWith(item.href))
         const base = 'shrink-0 inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium border transition-colors whitespace-nowrap'
-        if (item.soon) {
-          return (
-            <span key={item.label} className={cn(base, 'bg-surface/50 text-ink-faint border-border cursor-default')} aria-disabled>
-              <Icon className="w-3.5 h-3.5" />
-              {item.label}
-              <span className="text-[10px] uppercase tracking-wide text-ink-faint/70 bg-ink-faint/10 rounded px-1 py-0.5">Soon</span>
-            </span>
-          )
-        }
         return (
           <Link
             key={item.label}
-            href={item.href!}
+            href={item.href}
             aria-current={active ? 'page' : undefined}
             className={cn(base, active ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong')}
           >
