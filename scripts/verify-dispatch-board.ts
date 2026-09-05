@@ -574,10 +574,10 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
   // ⚠️ This body carries TS (`pos.get(j.id)!`), so it needs the same transform
   // the race harness uses; a raw new Function() would throw on the `!`.
   const { transformSync } = await import('esbuild')
-  const funnel = async (scope: { date: string; loaded: string | null }) => {
+  const funnel = async (day: { date: string; loadedDate: string | null }) => {
     const wrote: string[] = []
     const deps: Record<string, unknown> = {
-      [REF]: { current: scope },
+      [REF]: { current: scopeVal(day) },   // both spellings of the loaded field
       notify: Object.assign(() => {}, { error: () => wrote.push('refused') }),
       setJobs: (fn: (c: { id: string; route_order: number }[]) => unknown) => {
         fn([{ id: 'J1', route_order: 9 }]) },
@@ -592,10 +592,10 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
     await new Promise(r => setTimeout(r, 0))
     return wrote
   }
-  { const w = await funnel({ date: B, loaded: A })
+  { const w = await funnel({ date: B, loadedDate: A })
     check('the route-order write funnel refuses when the day on hand is not the selected one',
       !w.some(x => x.startsWith('write:')), `it wrote ${JSON.stringify(w)}`) }
-  { const w = await funnel({ date: A, loaded: A })
+  { const w = await funnel({ date: A, loadedDate: A })
     check('…and still writes on the day that is loaded', w.some(x => x.startsWith('write:')),
       'the funnel must not disable ordinary reordering') }
 }
