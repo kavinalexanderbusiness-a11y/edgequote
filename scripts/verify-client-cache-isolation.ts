@@ -47,6 +47,7 @@ const check = (name: string, ok: boolean, detail = '') => {
 const info = (s: string) => console.log(`  ℹ ${s}`)
 const read = (p: string) => readFileSync(p, 'utf8')
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, '')
+const tick = () => new Promise<void>(r => setTimeout(r, 0))
 
 // ── synthetic browser ────────────────────────────────────────────────────────
 class FakeStorage {
@@ -90,8 +91,22 @@ console.log('\n── §1 one owner, leased writes, named first, cleared at sign
   const ownerCmp = strip(read('src/components/layout/CacheOwner.tsx'))
   const sidebar = strip(read('src/components/layout/Sidebar.tsx'))
   check('a write needs a lease that is still current: same owner AND same generation',
-    /if \(!lease \|\| !owner \|\| lease\.owner !== owner \|\| lease\.gen !== gen\) return/.test(cache))
-  check('every write is stamped with the LEASE\'s owner, never the current one', /JSON\.stringify\(\{ t: Date\.now\(\), data, o: lease\.owner \}/.test(cache) && !/o: owner \}/.test(cache))
+    /export function writeCache[\s\S]*?if \(!isCurrentLease\(lease\)\) return/.test(cache)
+    && /export function isCurrentLease[\s\S]*?return !!lease && !!owner && lease\.owner === owner && lease\.gen === gen/.test(cache))
+  {
+    // The in-memory business snapshot (hooks/useBusinessData) is read BEFORE
+    // the persistent cache, so it carries its own owner and serves only that one.
+    const bd = strip(read('src/hooks/useBusinessData.ts'))
+    check('useBusinessData: the memory snapshot carries its owner and is served only while the cache names that owner',
+      /let storeOwner: string \| null = null/.test(bd) && /function owned\(\): boolean \{ return store !== null && storeOwner === getCacheOwner\(\) \}/.test(bd)
+      && /useSyncExternalStore\(subscribe, peekBusinessData, \(\) => null\)/.test(bd))
+    check('useBusinessData: a foreign snapshot is dropped before any load or hydrate; the in-flight fetch is reused only under its own lease',
+      /function dropForeign\(\)/.test(bd) && /export function loadBusinessData[\s\S]*?dropForeign\(\)\s*if \(inFlight && !force && isCurrentLease\(inFlightLease\)\) return inFlight/.test(bd)
+      && /export function ensureBusinessData[\s\S]*?dropForeign\(\)/.test(bd))
+    check('useBusinessData: a completion whose lease is no longer current applies nothing, in memory or on disk',
+      /if \(!isCurrentLease\(lease\)\) return snap/.test(bd) && /storeOwner = lease!\.owner/.test(bd) && /writeCache\(CACHE_KEY, snap, \{ lease \}\)/.test(bd))
+  }
+  check('every write is stamped with the LEASE\'s owner, never the current one', /JSON\.stringify\(\{ t: Date\.now\(\), data, o: lease!?\.owner \}/.test(cache) && !/o: owner \}/.test(cache))
   check('cacheLease() snapshots owner + generation, null when no owner', /export function cacheLease\(\)[\s\S]*?return owner \? \{ owner, gen \} : null/.test(cache))
   check('the generation advances on every owner change: set, adopt, and the sign-out clear',
     (cache.match(/gen\+\+/g) || []).length === 3 && /export function clearOwnedCaches\(\): void \{\s*gen\+\+/.test(cache))
@@ -296,6 +311,90 @@ async function main() {
     check('adopt on the server does not throw and sets NO owner (a per-tab fact, never per-process)', !threw && m.getCacheOwner() === null && leaseNow() === null, `owner=${m.getCacheOwner()}`)
     check('…so a read answers "no cache" and a write writes nothing, without throwing', (() => { try { return readCache('revintel', CACHE_TTL.medium) === null && (mod.writeCache('revintel', REPORT, { lease: { owner: A, gen: 1 } }), true) } catch { return false } })())
     g.window = savedWindow; g.sessionStorage = savedS; g.localStorage = savedL
+  }
+
+  // ── §3 the in-memory business snapshot, through the REAL hook module ──────
+  // The hook module is loaded through require so its `@/lib/supabase/client`
+  // resolves to a stub (a fake session + three fake tables) and its
+  // `@/lib/clientCache` resolves to the SAME instance the guard drives.
+  if (!process.env.VERIFY_CLIENT_CACHE) {
+    console.log('\n── §3 useBusinessData: the memory snapshot belongs to one account (real hook module, stubbed client) ──')
+    const req = createRequire(resolve('package.json'))
+    const clientPath = req.resolve('./src/lib/supabase/client')
+    let fakeUser: string | null = null
+    let fetches = 0
+    let gate: (() => void) | null = null   // when set, the next session read waits for it
+    const rows: Record<string, Record<string, unknown>> = {
+      [A]: { company_name: 'A Co', owner_name: 'Alice', phone: '111' },
+      [B]: { company_name: 'B Co', owner_name: 'Bob', phone: '222' },
+    }
+    const builder = (result: unknown) => {
+      const b = { select: () => b, eq: () => b, order: () => Promise.resolve({ data: [] }), maybeSingle: () => Promise.resolve({ data: result }) }
+      return b
+    }
+    const fakeClient = {
+      auth: { getSession: async () => { fetches++; if (gate) await new Promise<void>(r => { gate = r }); return { data: { session: fakeUser ? { user: { id: fakeUser } } : null } } } },
+      from: (table: string) => builder(table === 'business_settings' && fakeUser ? rows[fakeUser] : null),
+    }
+    req.cache[clientPath] = { id: clientPath, filename: clientPath, loaded: true, exports: { createClient: () => fakeClient } } as unknown as NodeJS.Module
+    const cc = req('./src/lib/clientCache') as CacheModule
+    const bd = req('./src/hooks/useBusinessData') as typeof import('../src/hooks/useBusinessData')
+    check('§3 setup: the hook module and the guard share ONE clientCache instance', cc.getCacheOwner === (mod as CacheModule).getCacheOwner || cc.readCache === mod.readCache)
+    const CC = cc.getCacheOwner === (mod as CacheModule).getCacheOwner ? mod : cc  // drive whichever instance the hook sees
+    const drive = { adopt: (id: string) => CC.adoptCacheOwner(id), set: (id: string | null) => CC.setCacheOwner(id), clear: () => CC.clearOwnedCaches() }
+
+    ;({ s, l } = freshStores())
+    drive.set(null); drive.adopt(A); fakeUser = A
+    await bd.loadBusinessData(); await tick()
+    check('§3 A loads: the memory snapshot is A\'s and the persistent copy is stamped A',
+      (bd.peekBusinessData()?.settings as { company_name?: string } | null)?.company_name === 'A Co' && (s.getItem('eq:business-data') || '').includes(`"o":"${A}"`),
+      JSON.stringify(bd.peekBusinessData()?.settings))
+    const fetchesAfterA = fetches
+    bd.ensureBusinessData(); await tick()
+    check('§3 the same account\'s fresh snapshot short-circuits the fetch (stale-while-revalidate kept)', fetches === fetchesAfterA)
+
+    // S123's chain: A → B in one tab, no sign-out; B's first read happens BEFORE any fetch.
+    drive.adopt(B); fakeUser = B
+    check('§3 B\'s FIRST read after the owner changed is null — never A\'s settings (the reviewed 2-minute window is closed)', bd.peekBusinessData() === null, JSON.stringify(bd.peekBusinessData()?.settings))
+    bd.ensureBusinessData()
+    check('§3 …and B\'s mount does fetch (the freshness gate is per-account): +1 fetch', fetches === fetchesAfterA + 1)
+    await tick(); await tick()
+    check('§3 B\'s own snapshot lands', (bd.peekBusinessData()?.settings as { company_name?: string } | null)?.company_name === 'B Co')
+
+    // A late completion: A's fetch is in flight when B adopts.
+    ;({ s, l } = freshStores())
+    drive.set(null); drive.adopt(A); fakeUser = A
+    gate = () => {} // arm: the next session read blocks
+    const pendingA = bd.loadBusinessData()
+    await tick()
+    const releaseA = gate as (() => void) | null
+    drive.adopt(B); fakeUser = B
+    check('§3 with A\'s fetch in flight, B reads null', bd.peekBusinessData() === null)
+    const fetchesBeforeB = fetches
+    const pendingB = bd.loadBusinessData()
+    check('§3 B does not reuse A\'s in-flight fetch: a new one starts', fetches === fetchesBeforeB + 1)
+    gate = null; releaseA?.()
+    await pendingA; await tick()
+    check('§3 A\'s late completion applies nothing: memory is not A\'s and nothing is stamped', (bd.peekBusinessData()?.settings as { company_name?: string } | null)?.company_name !== 'A Co' && !(s.getItem('eq:business-data') || '').includes(`"o":"${A}"`))
+    await pendingB; await tick()
+    check('§3 B\'s completion lands (memory and persistent copy stamped B)', (bd.peekBusinessData()?.settings as { company_name?: string } | null)?.company_name === 'B Co' && (s.getItem('eq:business-data') || '').includes(`"o":"${B}"`))
+    const fetchesBefore2 = fetches
+    const p1 = bd.loadBusinessData(); const p2 = bd.loadBusinessData()
+    check('§3 two loads for the same account share one fetch (dedupe kept)', p1 === p2 && fetches === fetchesBefore2 + 1)
+    await p1; await tick()
+
+    // Hydration from the persistent cache is owner-checked and re-tags memory.
+    ;({ s, l } = freshStores())
+    drive.set(null); drive.adopt(A); fakeUser = A
+    await bd.loadBusinessData(); await tick()
+    drive.set(null)                           // layout unmount (sign-out without the clear, or a route outside)
+    check('§3 with no owner named, the snapshot is not served', bd.peekBusinessData() === null)
+    drive.adopt(A)
+    bd.ensureBusinessData()
+    check('§3 the same account back: served again (memory re-owned or rehydrated from its own persistent copy)', (bd.peekBusinessData()?.settings as { company_name?: string } | null)?.company_name === 'A Co')
+    await tick(); await tick()
+    drive.set(null)
+    fakeUser = null
   }
 
   console.log('\n── §2 legacy, unknown owner, TTL, throwing store ──')

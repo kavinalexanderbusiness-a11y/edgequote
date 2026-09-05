@@ -76,6 +76,12 @@ export function cacheLease(): CacheLease | null {
   return owner ? { owner, gen } : null
 }
 
+/** Is this lease still the current one — same owner AND same generation? A
+ *  missing lease is never current. The one test every late completion asks. */
+export function isCurrentLease(lease: CacheLease | null | undefined): boolean {
+  return !!lease && !!owner && lease.owner === owner && lease.gen === gen
+}
+
 // The last account this DEVICE rendered the dashboard for. Kept outside the
 // `eq:` namespace (so a sign-out clear does not erase it) and compared on every
 // adoption: a different id means the account changed since the last write —
@@ -135,8 +141,8 @@ export function readCache<T>(key: string, maxAgeMs: number, opts?: CacheOpts): T
  *  current (same owner, same generation). Stamped with the LEASE's owner. */
 export function writeCache<T>(key: string, data: T, opts?: WriteOpts): void {
   const lease = opts?.lease
-  if (!lease || !owner || lease.owner !== owner || lease.gen !== gen) return
-  try { store(opts).setItem(PREFIX + key, JSON.stringify({ t: Date.now(), data, o: lease.owner } satisfies Cached<T>)) } catch { /* quota / private mode */ }
+  if (!isCurrentLease(lease)) return
+  try { store(opts).setItem(PREFIX + key, JSON.stringify({ t: Date.now(), data, o: lease!.owner } satisfies Cached<T>)) } catch { /* quota / private mode */ }
 }
 
 export function clearCache(key: string, opts?: CacheOpts): void {
