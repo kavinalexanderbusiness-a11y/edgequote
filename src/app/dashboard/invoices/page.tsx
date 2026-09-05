@@ -639,12 +639,19 @@ export default function InvoicesPage() {
           </div>
           {/* Says what the list is showing WITHOUT making you count rows, and gives
               the one-tap way back. Only while searching — silence when it's just the list. */}
-          {searching && (
+          {/* ⛔ ONLY WHEN THERE ARE MATCHES. This used to render whenever a search
+              was active, so a search that found nothing printed "No matches ·
+              Clear search" here AND, a few pixels below, "Nothing matches “x”.
+              Clear search or search all invoices" — the same state explained
+              twice and the same escape offered twice, stacked.
+              The empty state below says strictly more (it names what was typed,
+              and when a filter is on it offers the wider search too), so the
+              count line stands down and lets it speak. With matches, this line is
+              still the thing that saves you counting rows. */}
+          {searching && visible.length > 0 && (
             <p className="text-[11px] text-ink-faint flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <span>
-                {visible.length === 0
-                  ? 'No matches'
-                  : `${visible.length} of ${byStatus.length} ${byStatus.length === 1 ? 'invoice' : 'invoices'}`}
+                {`${visible.length} of ${byStatus.length} ${byStatus.length === 1 ? 'invoice' : 'invoices'}`}
                 {filter ? ` in ${filter === 'deposit' ? 'deposit due' : filter}` : ''}
               </span>
               <button type="button" onClick={() => setQuery('')} className="font-semibold text-accent-text hover:underline">
