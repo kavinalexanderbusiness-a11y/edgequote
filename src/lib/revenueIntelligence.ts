@@ -701,20 +701,67 @@ function addDaysISO(iso: string, n: number): string {
 export type FeedbackStatus = 'acted' | 'dismissed' | 'won' | 'lost'
 export interface FeedbackRow { opportunity_key: string; kind: string; status: string; expected_value: number | null; result_value: number | null }
 
+/** A save either happened, or it did not, or nobody can tell yet. */
+export type SaveOutcome = { ok: true } | { ok: false; definite: boolean; error: string }
+
 export async function recordRecommendation(
   supabase: SupabaseClient,
   o: { key: string; kind: OppKind; customerId: string; expectedValue: number },
   status: FeedbackStatus,
   resultValue?: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<SaveOutcome> {
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'Not signed in' }
-  const { error } = await supabase.from('revenue_recommendations').upsert({
+  // Nothing has been sent yet, so this one really is definite.
+  if (!user) return { ok: false, definite: true, error: 'Not signed in' }
+  // ⚠️ `status` is already this function's FeedbackStatus parameter — the HTTP
+  // status must be renamed or the check below silently tests the wrong value.
+  const { error, status: httpStatus } = await supabase.from('revenue_recommendations').upsert({
     user_id: user.id, opportunity_key: o.key, kind: o.kind, customer_id: o.customerId,
     expected_value: o.expectedValue, status, result_value: resultValue ?? null,
     acted_at: new Date().toISOString(),
   }, { onConflict: 'user_id,opportunity_key' })
-  return error ? { ok: false, error: error.message } : { ok: true }
+  if (!error) return { ok: true }
+  // ⛔⛔ DEFINITE ONLY ON VERIFIED STRUCTURED REJECTION EVIDENCE. Two things have
+  // to be true together, and neither is enough alone:
+  //
+  //   • a 4xx status. A 5xx is NOT a refusal — a 502/503/504 comes from the edge
+  //     in front of PostgREST, which may already have forwarded the request; the
+  //     gateway gave up waiting for the answer, while Postgres finished the
+  //     transaction and committed. `status: 0` never reached anyone at all.
+  //   • a body PostgREST itself produced. processResponse JSON-parses the error
+  //     body and falls back to `{ message: body }` when it cannot — so an HTML
+  //     error page from a proxy arrives with NO `code`. A `code` present and
+  //     non-empty is the evidence that the database answered; the transport path
+  //     sets `code: ''`, so emptiness is not evidence of anything.
+  //
+  // Everything else is `definite: false` and goes to the read-back. An unknown
+  // outcome stated truthfully beats a guessed one.
+  const code = (error as { code?: unknown }).code
+  const structured = typeof code === 'string' && code.length > 0
+  const answered = typeof httpStatus === 'number' && httpStatus >= 400 && httpStatus < 500 && structured
+  return { ok: false, definite: answered, error: error.message }
+}
+
+/**
+ * Read back ONE recommendation row — the reconciliation step after a save whose
+ * answer was lost on the wire (a thrown request may still have committed).
+ * Never writes. `ok: false` means the read itself could not be made.
+ */
+export async function readRecommendation(
+  supabase: SupabaseClient,
+  key: string,
+): Promise<{ ok: true; row: FeedbackRow | null } | { ok: false; error: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) return { ok: false, error: 'Not signed in' }
+    const { data, error } = await supabase.from('revenue_recommendations')
+      .select('opportunity_key, kind, status, expected_value, result_value')
+      .eq('user_id', session.user.id).eq('opportunity_key', key).limit(1)
+    if (error) return { ok: false, error: error.message }
+    return { ok: true, row: (data as FeedbackRow[] | null)?.[0] ?? null }
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) }
+  }
 }
 
 // ── loader ──────────────────────────────────────────────────────────────────────

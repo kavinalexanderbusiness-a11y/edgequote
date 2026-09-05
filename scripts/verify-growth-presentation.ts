@@ -37,8 +37,12 @@ const eq = (n: string, a: unknown, b: unknown) =>
 const ROOT = process.cwd()
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n\r]*/g, ' ')
-const SRC = { page: read('src/app/dashboard/revenue-intelligence/page.tsx') }
-const CODE = { page: strip(SRC.page) }
+const SRC = {
+  page: read('src/app/dashboard/revenue-intelligence/page.tsx'),
+  // The tap handler — and with it the optimistic row's data path — lives here.
+  actions: read('src/lib/growthActions.ts'),
+}
+const CODE = { page: strip(SRC.page), actions: strip(SRC.actions) }
 
 console.log('\n── 1. THE SCORE IS A PRIORITY, NEVER A PROBABILITY ──')
 {
@@ -113,8 +117,8 @@ console.log('\n── 3. MARKED WON IS NOT COLLECTED REVENUE ──')
 {
   // The actual data path, not a description of it: result_value passed to
   // recordRecommendation is EXACTLY the forecast expectedValue on 'won'.
-  check('result_value is EXACTLY the forecast expectedValue on won, nothing else',
-    /result_value:\s*status === 'won' \? o\.expectedValue : null/.test(CODE.page), '')
+  check('result_value is EXACTLY the forecast expectedValue on won, nothing else (built by the tap handler the page delegates to)',
+    /result_value:\s*status === 'won' \? o\.expectedValue : null/.test(CODE.actions) && /controller\(\)\.act\(o, status\)/.test(CODE.page), '')
 
   // The visible label: no "Revenue" claim, and the old mislabel is gone.
   const tileLine = CODE.page.split('\n').find(l => l.includes('formatCurrency(wonValue)')) || ''
