@@ -721,6 +721,25 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
      * door refuses is a worse failure than no button at all.
      */
     payable: boolean
+    /**
+     * ⛔⛔ MAY THIS CARD STATE A DOLLAR FIGURE AT ALL?
+     *
+     * False when the acceptance behind the quote is not current. `required` and
+     * `outstanding` are computed from `moneyQuote`, which still carries the
+     * evidenced snapshot — the very basis the card's own sentence says is no
+     * longer settled. So a superseded quote printed "$700 deposit to secure
+     * scheduling" directly above "we'll agree the deposit with you before
+     * anything is due": a figure asserted as owed, on an authority the same card
+     * had just disclaimed.
+     *
+     * ⭐ Same rule the PDF already follows — an amount and its authority travel
+     * together. Keep the rule, drop the figure.
+     *
+     * ⚠️ `collected` is NOT covered by this: money that arrived is a ledger fact,
+     * not a demand derived from a stale basis, and hiding it would imply the
+     * payment vanished. Only the ASK is withheld.
+     */
+    demandSettled: boolean
   }
   /** Why the online deposit is withheld, in the customer's words. Present exactly
    *  when a deposit is owed and `schedulingDeposit.payable` is false. */
@@ -1004,6 +1023,12 @@ export function buildDocItems(opts: {
       // cannot establish is one we must not draw — and the disagreement runs in
       // the safe direction, an affordance withheld rather than a refusal charged.
       payable: facing.depositChargeBlock === null && acceptanceCurrentness === 'current',
+      // ⛔ The figures are only quotable while the basis behind them still stands.
+      // ⚠️ Deliberately NOT `payable`: a quote blocked for want of NAMED evidence
+      // still has a settled basis — `customerFacingQuote` stripped the unproven
+      // snapshot, so the gate ran on the live total and the ask is honest. It is
+      // drift that makes the number unquotable, not the missing name.
+      demandSettled: acceptanceCurrentness === 'current',
     } : undefined
     // The evidence KIND is the stronger objection, so it speaks first; otherwise
     // the acceptance's currentness explains itself. Either way the customer gets
@@ -1075,7 +1100,11 @@ export function buildDocItems(opts: {
       // override case: the owner booked the visit anyway and the money is still
       // owed — telling that customer a deposit "secures your booking" would
       // describe a gate that was waived.
-      depositTimingLine: gate && gate.required > 0
+      // ⛔ Not emitted at all once the basis is unsettled: approvedTimingLine
+      // states `gate.outstanding` in words, so leaving it in place would put the
+      // stale figure back on the card by another route. `depositBlockedLine`
+      // carries the whole message there — rule and next step, no number.
+      depositTimingLine: gate && gate.required > 0 && acceptanceCurrentness === 'current'
         ? approvedTimingLine(timing, gate, qq.status === 'scheduled')
         : undefined,
       // Identity, not decoration: the address tells a landlord which of their six

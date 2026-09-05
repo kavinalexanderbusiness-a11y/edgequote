@@ -570,22 +570,40 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
         <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3.5 py-3">
           <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
             <Wallet className="w-4 h-4 text-amber-400 shrink-0" />
-            {formatCurrency(d.schedulingDeposit.outstanding)} deposit to secure scheduling
+            {/* ⛔ The figure only while its basis stands. On a superseded quote
+                `outstanding` comes from the evidenced snapshot the sentence below
+                has just disclaimed, so naming it here asserted an amount as owed
+                on an authority the same card withdrew. Rule kept, figure dropped —
+                and NOT re-derived from the current total, which would be the same
+                substitution in the other direction. */}
+            {d.schedulingDeposit.demandSettled
+              ? `${formatCurrency(d.schedulingDeposit.outstanding)} deposit to secure scheduling`
+              : 'Deposit to secure scheduling'}
           </p>
           {/* Partial honesty: what arrived, what's still required — a $1,000
-              payment against $2,700 is progress, never satisfaction. */}
+              payment against $2,700 is progress, never satisfaction.
+              ⚠️ What ARRIVED is always said. It is a ledger fact, not a demand
+              derived from a stale basis, and dropping it with the ask would read
+              as though the payment had vanished. Only the "of X — Y still
+              required" half depends on a basis that may no longer stand. */}
           {d.schedulingDeposit.collected > 0 && (
             <p className="text-[11px] text-ink-muted mt-1 tabular-nums">
-              {formatCurrency(d.schedulingDeposit.collected)} of {formatCurrency(d.schedulingDeposit.required)} received — {formatCurrency(d.schedulingDeposit.outstanding)} still required.
+              {d.schedulingDeposit.demandSettled
+                ? <>{formatCurrency(d.schedulingDeposit.collected)} of {formatCurrency(d.schedulingDeposit.required)} received — {formatCurrency(d.schedulingDeposit.outstanding)} still required.</>
+                : <>{formatCurrency(d.schedulingDeposit.collected)} received so far — it stays on your account.</>}
             </p>
           )}
           {/* ⭐ The model's ONE gate-aware timing sentence. This panel used to
               write its own, which meant the quote card three inches above could
               promise "an invoice once the work is done" while this one asked for
               money now. Both strings now come out of lib/payments/paymentTiming. */}
-          <p className="text-[11px] text-ink-muted mt-1">
-            Your quote is approved. {d.depositTimingLine}
-          </p>
+          {/* Absent once the basis is unsettled — the model stops emitting it,
+              because approvedTimingLine states the outstanding figure in words. */}
+          {d.depositTimingLine && (
+            <p className="text-[11px] text-ink-muted mt-1">
+              Your quote is approved. {d.depositTimingLine}
+            </p>
+          )}
           {/* ⛔⛔ NO PAY BUTTON WITHOUT AN ACTOR-NAMED ACCEPTANCE. The charge route
               asks lib/quoteAcceptance the same question and refuses when nobody is
               named on the record, so rendering the button here would send this

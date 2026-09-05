@@ -206,6 +206,115 @@ async function main() {
   check('⛔ exactly the allowed checkouts were asked for, and no others',
     charged.length === 3, `${charged.length} checkout ask(s) — expected 3 (the two CURRENT cases and the UNKNOWN one the door allows)`)
 
+  console.log('\n■ 6. ⭐⭐ THE CARD ITSELF — a withheld ask may not name a figure')
+  {
+    // Rendered through the SHIPPING BillingTab, because the finding was about
+    // what the card SAYS, and a model assertion is not a card.
+    const React = (await import('react')).default
+    ;(globalThis as unknown as { React: typeof React }).React = React
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const { BillingTab } = await import('../src/app/portal/[token]/components/BillingTab')
+
+    const actions = new Proxy(
+      { paymentsEnabled: true, paymentPending: false, payingQuoteId: null, accepting: null, payingId: null, decidingChangeId: null, token: TOKEN } as Record<string, unknown>,
+      { get: (t, k) => (k in t ? t[k as string] : () => {}) },
+    ) as never
+
+    /** One card, rendered from the real model, in a named acceptance state. */
+    const card = (over: Record<string, unknown>, payments: Record<string, unknown>[] = []) => {
+      const pq = {
+        id: 'zz1', quote_number: 'ZZ-CARD', service_type: 'ZZ Service', address: '1 Test St',
+        property_id: null, total: 500, initial_price: 500, subtotal: null,
+        weekly_price: null, biweekly_price: null, monthly_price: null, notes: null,
+        status: 'accepted', created_at: '2026-09-04', issued_date: '2026-09-04',
+        valid_until: '2026-12-31', crew_size: 1, hours: 2, travel_fee: 0,
+        accepted_price: 1400, acceptance_kind: 'customer',
+        deposit_type: 'percent', deposit_value: 50, ...over,
+      }
+      const data = {
+        customer: { id: CUSTOMER, name: 'ZZ Customer', email: null, phone: null, address: null, city: null },
+        business: { gst_percent: 0 }, property: null, properties: [],
+        quotes: [pq], invoices: [], jobs: [], recurrences: [], photos: [], payments,
+      }
+      const view = buildPortalView(data as never, '2026-09-04',
+        { quote: async () => new Blob(), invoice: async () => new Blob() } as never)
+      const row = view.docItems.find(d => d.kind === 'quote')!
+      const html = renderToStaticMarkup(React.createElement(BillingTab, { view, actions }))
+      const text = html.replace(/<[^>]*>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
+      return { row, text }
+    }
+    /**
+     * A recorded cash deposit against the quote — the ledger fact `collected` reads.
+     * ⚠️ `kind: 'payment'` and `status: 'paid'` are not decoration: `isCashRow`
+     * counts exactly that shape, and my first attempt used 'deposit'/'succeeded'
+     * and silently collected nothing — a fixture that proves the absence of a
+     * figure by failing to create one proves nothing at all.
+     */
+    const cash = (amount: number) => [{
+      id: 'p1', amount, status: 'paid', paid_at: '2026-09-04', provider: 'manual',
+      invoice_id: null, quote_id: 'zz1', created_at: '2026-09-04', kind: 'payment',
+    } as Record<string, unknown>]
+
+    // ── CURRENT · unchanged, and the control that keeps the rest honest ───────
+    {
+      const { row, text } = card({ acceptance_is_current: true })
+      check('current · the card still names the ask', /\$700\.00 deposit to secure scheduling/.test(text), text.slice(0, 240))
+      check('current · …and the Pay button is offered', row.schedulingDeposit?.payable === true && /Pay \$700\.00 deposit/.test(text))
+      check('current · …and the demand is marked settled', row.schedulingDeposit?.demandSettled === true)
+    }
+
+    // ── STALE · the finding ──────────────────────────────────────────────────
+    {
+      const { row, text } = card({ acceptance_is_current: false })
+      check('⭐ stale · NO figure is named anywhere on the card',
+        !/700/.test(text) && !/\$350/.test(text), text.slice(0, 300))
+      check('⛔ stale · …and none was re-derived from the current total',
+        !/\$250\.00/.test(text))
+      check('stale · the rule survives — the card still says a deposit secures scheduling',
+        /Deposit to secure scheduling/.test(text))
+      check('stale · …and the next step is there',
+        /agree the deposit with you before anything is due/.test(text), row.depositBlockedLine)
+      check('stale · no Pay button', !/Pay \$/.test(text))
+      check('stale · the demand is marked unsettled', row.schedulingDeposit?.demandSettled === false)
+      check('stale · ⛔ and the timing line, which states the figure in words, is gone',
+        row.depositTimingLine === undefined && !/secures your booking/.test(text))
+    }
+
+    // ── STALE + PARTIALLY COLLECTED · money that arrived must not vanish ──────
+    {
+      const { row, text } = card({ acceptance_is_current: false }, cash(200))
+      check('⭐ stale+partial · the collected $200.00 is STILL shown',
+        /\$200\.00 received/.test(text), text.slice(0, 320))
+      check('…and says where it sits, rather than implying it vanished',
+        /stays on your account/.test(text))
+      check('⛔ stale+partial · but not "of $700" nor "$500 still required"',
+        !/700/.test(text) && !/still required/.test(text))
+      check('stale+partial · the ledger figure is intact in the model',
+        row.schedulingDeposit?.collected === 200)
+    }
+
+    // ── UNKNOWN + PARTIALLY COLLECTED ────────────────────────────────────────
+    {
+      const { row, text } = card({}, cash(200))   // kind present, currentness absent
+      check('⭐ unknown · no ask figure', !/700/.test(text) && !/still required/.test(text))
+      check('unknown · the collected money is still shown', /\$200\.00 received/.test(text))
+      check('unknown · …and it does not claim a revision',
+        !/revised since/.test(text) && /still being confirmed/.test(text), row.depositBlockedLine)
+      check('unknown · demand unsettled', row.schedulingDeposit?.demandSettled === false)
+    }
+
+    // ── ZERO OUTSTANDING · a settled deposit says nothing about being due ─────
+    {
+      const { row, text } = card({ acceptance_is_current: false }, cash(700))
+      check('zero outstanding · the gate is satisfied', row.schedulingDeposit?.satisfied === true)
+      check('⭐ …so the whole ask card is gone, on a stale quote too',
+        !/deposit to secure scheduling/i.test(text) && !/before anything is due/.test(text),
+        text.slice(0, 240))
+      check('…and the receipt line still says the money is held as credit',
+        /Deposit received/.test(text) && /\$700\.00/.test(text))
+    }
+  }
+
   await db.close()
   console.log(fail > 0 ? `\n✗ ${fail} FAILURE(S) — ${pass} passed` : `\n✓ affordance: ${pass} checks passed`)
   process.exit(fail > 0 ? 1 : 0)
