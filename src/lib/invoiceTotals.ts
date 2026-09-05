@@ -16,6 +16,8 @@ export interface FeeSettings {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100
+// Draft creation and editing use this same currency precision before storage.
+export { round2 as roundInvoiceAmount }
 
 // ── GST/HST registration number ──────────────────────────────────────────────
 // The supplier's registration number is what lets the CUSTOMER claim an input tax
