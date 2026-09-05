@@ -232,7 +232,8 @@ async function raceChecks() {
   const raw = PAGE.slice(PAGE.indexOf('{', s0 + 40) + 1, PAGE.lastIndexOf('}', e0))
   const expr = transformSync(`(async () => {${raw}})`, { loader: 'ts' }).code.replace(/;\s*$/, '')
   type St = { jobs: { id: string }[]; notes: { day: string }[] | null; loadError: string | null; loading: boolean }
-  const defer = () => { let r!: (v: unknown) => void; const p = new Promise<unknown>(res => { r = res }); return { p, r } }
+  const defer = () => { let r!: (v: unknown) => void; let rj!: (e: unknown) => void
+    const p = new Promise<unknown>((res, rej) => { r = res; rj = rej }); p.catch(() => {}); return { p, r, rj } }
   const harness = () => {
     const st: St = { jobs: [], notes: null, loadError: null, loading: true }
     const gate = { current: createRequestGate() }
@@ -286,11 +287,11 @@ async function raceChecks() {
   // A stale request that THROWS takes the CATCH branch, not the read-error
   // branch — a different guard, and one a resolved { error } never reaches.
   { const { st, run } = harness(), o = defer(), n = defer(), sA = defer()
-    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>, true)
+    const pO = run('2026-06-01', o.p as Promise<unknown>, sA.p as Promise<unknown>)
     sA.r(null); await new Promise(r => setTimeout(r, 0))
     const pN = run('2026-06-02', n.p as Promise<unknown>)
     n.r({ data: [{ id: 'JOB-NEW' }], error: null }); await pN
-    o.r({ data: [{ id: 'JOB-OLD' }], error: null }); await pO
+    o.rj(new Error('notes read failed')); await pO
     check('a stale THROW cannot banner over a good day', st.loadError === null, 'banner said ' + JSON.stringify(st.loadError))
     check('…and the newer day survives it', st.jobs[0]?.id === 'JOB-NEW') }
   { const { st, run } = harness(), o = defer()
