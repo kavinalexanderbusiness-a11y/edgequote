@@ -471,6 +471,10 @@ function BookTimeOffDialog({ supabase, userId, technicians, onClose, onSaved }: 
 
   async function save() {
     if (invalid) return
+    // The Button is disabled while saving, but Modal fires this on Cmd/Ctrl+Enter
+    // too — a key that can be held down. The in-flight guard belongs HERE, at the
+    // one entry point both doors share.
+    if (saving) return
     setSaving(true)
     const { error } = await supabase.from('pto_entries').insert({
       user_id: userId, technician_id: techId, date, hours: h, kind, is_paid: paid,
@@ -541,6 +545,10 @@ function AddHolidayDialog({ supabase, userId, onClose, onSaved }: {
 
   async function save() {
     if (invalid) return
+    // The Button is disabled while saving, but Modal fires this on Cmd/Ctrl+Enter
+    // too — a key that can be held down. The in-flight guard belongs HERE, at the
+    // one entry point both doors share.
+    if (saving) return
     setSaving(true)
     const { error } = await supabase.from('holidays').insert({
       user_id: userId, date, name: name.trim(), is_paid: paid, default_hours: Number(hours) || 8,
