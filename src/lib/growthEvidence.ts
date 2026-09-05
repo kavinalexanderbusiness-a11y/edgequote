@@ -32,6 +32,7 @@
 // pure leaf with no imports of its own, so this module stays as cheap to import
 // as it was — which matters, because every Growth surface pulls it in.
 import { isAnyFixtureName } from '@/lib/fixtureData'
+import type { PriceState } from '@/lib/pricingState'
 
 // ── 1. What may be counted ───────────────────────────────────────────────────
 /**
@@ -40,41 +41,55 @@ import { isAnyFixtureName } from '@/lib/fixtureData'
  */
 export type ExclusionReason =
   | 'unpriced'
-  | 'zero_price'
+  | 'no_charge'
   | 'fixture'
   | 'not_completed'
   | 'outlier'
 
 export const EXCLUSION_COPY: Record<ExclusionReason, string> = {
   unpriced: 'no price recorded',
-  zero_price: 'priced at $0',
+  // ⭐ Was 'priced at $0', inferred from `price === 0`. `no_charge` is the
+  // owner's DECLARED write-off — reason and author recorded, CHECK-constrained —
+  // so the sentence credits the paperwork instead of implying it is missing.
+  no_charge: 'recorded as no charge',
   fixture: 'looks like test data',
   not_completed: 'not completed',
   outlier: 'far outside the normal range',
 }
 
 /**
- * ⭐⭐ UNPRICED IS NOT $0 AND $0 IS NOT A PRICE.
+ * ⭐⭐ THE SEAM IS CLOSED. `lib/pricingState` ANSWERS THIS NOW.
  *
- * `lib/visitValue.jobVisitValue` returns 0 when nothing is known, which makes an
- * unknown indistinguishable from free work. Both are refused as EVIDENCE here,
- * and they are kept as separate reasons because they are separate facts: one is
- * a gap in the record, the other is a deliberate write-off. Neither is a price a
- * projection may be built on.
+ * This module used to carry `priceEvidence(rawPrice, derivedValue)`, which
+ * decided `'ok' | 'unpriced' | 'zero_price'` by looking at the numbers itself.
+ * Its own comment promised to delegate to Session 114's `lib/pricingState` the
+ * day that landed. It landed (main `344e0670`, migration `20260830120000`
+ * applied), so the promise is kept here: the question is not asked twice, and
+ * this module no longer answers it AT ALL — callers pass the canonical verdict
+ * in.
  *
- * ⭐ THE SEAM. Session 114 (`session114/unpriced-work-integrity`, `lib/pricingState`)
- * is the engine that will own "is this priced?" for the whole product. It is not
- * on main yet. When it lands, THIS FUNCTION delegates to it and stops deciding —
- * it is deliberately the only place in this module that answers the question, so
- * there is exactly one line to change and no second answer to hunt down.
+ * ⭐ AND THE CANONICAL ANSWER IS BETTER, NOT MERELY SHARED. The old rule inferred
+ * a decision from `price === 0`. `PriceState` distinguishes a THIRD case backed
+ * by real columns and a CHECK constraint:
+ *
+ *     unpriced    nobody recorded a price          — a gap in the record
+ *     no_charge   the owner declared it free, WITH a reason and an author
+ *     priced      a real amount
+ *
+ * Both of the first two are refused as EVIDENCE — neither can set a per-visit
+ * statistic, and free work earns nothing — but they are refused for different
+ * stated reasons, which is the whole point of showing the owner what was
+ * excluded. Telling someone who correctly recorded a write-off that their visit
+ * had "no price recorded" is an accusation of sloppy bookkeeping.
  */
-export function priceEvidence(rawPrice: number | null | undefined, derivedValue: number): 'ok' | 'unpriced' | 'zero_price' {
-  const raw = Number(rawPrice)
-  // An explicit 0 the owner typed is a real decision, and a real refusal.
-  if (rawPrice != null && Number.isFinite(raw) && raw === 0) return 'zero_price'
-  // Nothing on the job and nothing derivable from its quote.
-  if (!(Number(derivedValue) > 0)) return 'unpriced'
-  return 'ok'
+export type { PriceState }
+
+/** How a canonical PriceState is reported when a visit is refused as evidence.
+ *  ⛔ `priced` never reaches this — it is not an exclusion. */
+export function exclusionForPriceState(s: PriceState): ExclusionReason | null {
+  if (s === 'no_charge') return 'no_charge'
+  if (s === 'unpriced') return 'unpriced'
+  return null
 }
 
 /**
@@ -272,10 +287,12 @@ export interface Evidence {
 export interface EvidenceInput {
   /** One entry per candidate record. */
   visits: Array<{
-    /** The job's own price column, so an explicit $0 is distinguishable. */
-    rawPrice: number | null | undefined
-    /** What lib/visitValue derived. 0 means "nothing known", not "free". */
-    derivedValue: number
+    /** ⭐ THE CANONICAL VERDICT, from lib/pricingState.jobPriceState(). This
+     *  module does not re-derive it and has no opinion about prices. */
+    priceState: PriceState
+    /** lib/pricingState.jobAmountOrNull() — null is UNKNOWN, and a declared
+     *  no-charge resolves to a known 0. ⛔ Never coerce either to a number here. */
+    amount: number | null
     completed: boolean
     /** Any text that could betray a fixture — customer name, service, title. */
     labels?: Array<string | null | undefined>
@@ -298,9 +315,16 @@ export function assessEvidence(inp: EvidenceInput): Evidence {
   for (const v of inp.visits) {
     if (!v.completed) { drop('not_completed'); continue }
     if (looksLikeFixture(...(v.labels ?? []))) { drop('fixture'); continue }
-    const p = priceEvidence(v.rawPrice, v.derivedValue)
-    if (p !== 'ok') { drop(p); continue }
-    values.push(Number(v.derivedValue))
+    // ⭐ The canonical verdict arrives already decided. `no_charge` and
+    // `unpriced` are both refused as evidence — free work earns nothing and an
+    // unknown is not a number — but they are counted under DIFFERENT reasons,
+    // because what the owner is told about the exclusion is the point.
+    const excludeAs = exclusionForPriceState(v.priceState)
+    if (excludeAs) { drop(excludeAs); continue }
+    // Belt as well as braces: `priced` should always carry an amount, but a
+    // null here must never become a 0 in the sample.
+    if (v.amount == null || !(v.amount > 0)) { drop('unpriced'); continue }
+    values.push(v.amount)
   }
 
   const excluded = [...counts.entries()].map(([reason, count]) => ({ reason, count }))

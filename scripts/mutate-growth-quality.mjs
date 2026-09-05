@@ -85,21 +85,40 @@ const MUTATIONS = [
   {
     file: 'src/lib/growthEvidence.ts',
     name: 'unknown price included (unpriced work counted as evidence)',
-    from: "  if (!(Number(derivedValue) > 0)) return 'unpriced'",
-    to: "  if (false) return 'unpriced'",
-  },
-  // ── 3. ZERO TREATED AS A REAL PRICE ────────────────────────────────────────
-  {
-    file: 'src/lib/growthEvidence.ts',
-    name: 'zero included as a real price',
-    from: "  if (rawPrice != null && Number.isFinite(raw) && raw === 0) return 'zero_price'",
-    to: "  if (false) return 'zero_price'",
+    from: "  if (s === 'unpriced') return 'unpriced'",
+    to: '  if (false) return null',
   },
   {
     file: 'src/lib/growthEvidence.ts',
-    name: 'unpriced and $0 are collapsed into one indistinguishable reason',
-    from: "    if (p !== 'ok') { drop(p); continue }",
-    to: "    if (p !== 'ok') { drop('unpriced'); continue }",
+    name: 'a null amount is coerced into the sample as zero',
+    from: "    if (v.amount == null || !(v.amount > 0)) { drop('unpriced'); continue }\n    values.push(v.amount)",
+    to: '    values.push(Number(v.amount) || 0)',
+  },
+  // ── 3. A DECLARED NO-CHARGE TREATED AS A REAL PRICE ────────────────────────
+  {
+    file: 'src/lib/growthEvidence.ts',
+    name: 'no-charge counted as a real price (free work sets the statistic)',
+    from: "  if (s === 'no_charge') return 'no_charge'",
+    to: '  if (false) return null',
+  },
+  {
+    file: 'src/lib/growthEvidence.ts',
+    name: 'unpriced and no-charge collapse into one indistinguishable reason',
+    from: '    const excludeAs = exclusionForPriceState(v.priceState)\n    if (excludeAs) { drop(excludeAs); continue }',
+    to: "    const excludeAs = exclusionForPriceState(v.priceState)\n    if (excludeAs) { drop('unpriced'); continue }",
+  },
+  // ⛔ THE SEAM ITSELF: growthEvidence must not start deciding price state again.
+  {
+    file: 'src/lib/revenueIntelligence.ts',
+    name: 'the engine stops feeding the canonical verdict and infers one',
+    from: '          priceState: jobPriceState(j, quote, freq),\n          amount: jobAmountOrNull(j, quote, freq),',
+    to: "          priceState: (Number(j.price) > 0 ? 'priced' : 'unpriced'),\n          amount: Number(j.price) || null,",
+  },
+  {
+    file: 'src/lib/revenueIntelligence.ts',
+    name: 'the no_charge columns stop being selected, so a write-off reads as sloppy bookkeeping',
+    from: 'no_charge_at, no_charge_reason, no_charge_by, ',
+    to: '',
   },
 
   // ── 4. ONE-OFF WORK ANNUALIZED ─────────────────────────────────────────────
