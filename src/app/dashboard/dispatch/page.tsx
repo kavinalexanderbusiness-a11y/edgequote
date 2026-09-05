@@ -163,10 +163,24 @@ export default function DispatchPage() {
   // previous day's, and were rendered under the new date — yesterday's visits,
   // a blocked-day banner for a day that is not blocked, and day-wide actions
   // (balance, print, bulk) running over the wrong day. While `staleDay` is
-  // true the day-scoped content is not shown and those actions are refused.
-  // A same-day refresh that failed keeps the board — it IS this day — with the
-  // banner saying it may be out of date.
-  const staleDay = loadError !== null && loadedDate !== date
+  // true the day-scoped content is not shown. A same-day refresh that failed
+  // keeps the board — it IS this day — with the banner saying it may be out of
+  // date.
+  //
+  // ⭐ Two predicates, because rendering and ACTING ask different questions.
+  // Rendering asks "did the selected day FAIL?" (`staleDay`) — `loading` already
+  // shows the skeleton. An action asks "is the state on hand this day AT ALL?"
+  // (`dayNotLoaded`): a day still LOADING has no error yet and is equally not
+  // this day, and the skeleton does not stop the `p` key or the command
+  // palette. (S110's review of 22041f49: the action guard missed that window.)
+  // Same-day stale stays actionable — `loadedDate === date` there.
+  const dayNotLoaded = loadedDate !== date
+  const staleDay = loadError !== null && dayNotLoaded
+  // The same truth readable AFTER an await, where a closure's flag describes
+  // the day the call STARTED on. Read by the route_order write funnel and the
+  // optimizer's commit step.
+  const dayScopeRef = useRef<{ date: string; loaded: string | null }>({ date, loaded: null })
+  dayScopeRef.current = { date, loaded: loadedDate }
   const [jobs, setJobs] = useState<Job[]>([])
   const [crews, setCrews] = useState<Crew[]>([])
   const [technicians, setTechnicians] = useState<Technician[]>([])
@@ -194,7 +208,7 @@ export default function DispatchPage() {
     if (typeof window === 'undefined') return false
     return new URLSearchParams(window.location.search).get('roster') === '1'
   })
-  const [balancePlan, setBalancePlan] = useState<BalancePlan | null>(null)
+  const [balancePlan, setBalancePlan] = useState<(BalancePlan & { forDate: string }) | null>(null)
   const [applyingBalance, setApplyingBalance] = useState(false)
   const [optimizingLane, setOptimizingLane] = useState<string | null>(null)
   const [filter, setFilter] = useState<DispatchFilterState>(EMPTY_DISPATCH_FILTER)
@@ -591,6 +605,13 @@ export default function DispatchPage() {
   // ── Actions ──
   // Write a lane's visit order as route_order 1..n (serialized, optimistic).
   const applyLaneOrder = useCallback((laneJobIds: string[]) => {
+    // THE route_order write funnel (drag, nudge, move-with-slot, optimizer).
+    // Ownership is checked HERE, at write time, through the ref: the optimizer
+    // arrives after awaits, when its closure's flags still describe the day it
+    // started on. If the state on hand is not the selected day, nothing is
+    // written — the ids would be another day's visits.
+    const scope = dayScopeRef.current
+    if (scope.loaded !== scope.date) { notify.error('This day has not loaded — nothing was reordered.'); return }
     setJobs(cur => {
       const pos = new Map(laneJobIds.map((id, i) => [id, i + 1]))
       return cur.map(j => pos.has(j.id) ? { ...j, route_order: pos.get(j.id)! } : j)
@@ -671,6 +692,11 @@ export default function DispatchPage() {
   // Per-lane route optimization: the SAME optimizeRoute (real-road first,
   // haversine fallback) the schedule uses, persisted as this lane's order.
   const bestOrderLane = useCallback(async (laneId: string, opts?: { quiet?: boolean }) => {
+    // A palette door ("Dispatch: Optimize <crew>") that survives the skeleton:
+    // `laneRoutesRef` still holds the LAST LOADED day's lanes. Refuse at entry,
+    // before geocoding writes coordinates for stops that are not this day's.
+    if (dayNotLoaded) { if (!opts?.quiet) notify.error('This day has not loaded — retry, then optimize.'); return }
+    const startedFor = date
     const route = laneRoutesRef.current[laneId]
     if (!route || !settings.base) return
     setOptimizingLane(laneId)
@@ -688,6 +714,12 @@ export default function DispatchPage() {
       // route_order onto it, injecting it mid-sequence over there. Jobs that LEFT
       // are dropped; jobs that ARRIVED during the optimize keep their slot (nulls
       // sort last, so they land at the end until the next optimize).
+      // Commit ownership, re-read AFTER the awaits: the owner may have moved to
+      // another day meanwhile — and it may even have loaded, so the write
+      // funnel alone would let this through. The order was computed for
+      // `startedFor`; it is applied only if that is still the day on hand.
+      const scope = dayScopeRef.current
+      if (scope.date !== startedFor || scope.loaded !== startedFor) { if (!opts?.quiet) notify('The day changed while ordering — nothing applied.'); return }
       const nowInLane = new Set((laneRoutesRef.current[laneId]?.seq ?? []).map(j => j.id))
       const idsAfter = [...orderedIds, ...rest].filter(id => nowInLane.has(id))
       if (idsAfter.length === 0) { if (!opts?.quiet) notify('This lane changed while ordering — nothing to apply.'); return }
@@ -710,7 +742,7 @@ export default function DispatchPage() {
     } finally {
       setOptimizingLane(null)
     }
-  }, [settings.base, supabase, applyLaneOrder])
+  }, [settings.base, supabase, applyLaneOrder, dayNotLoaded, date])
 
   // What Balance is allowed to see. Balancing is a CREW capacity tool: person
   // lanes never enter it, and a visit given to somebody by name never leaves —
@@ -726,11 +758,26 @@ export default function DispatchPage() {
     })), [lanes, laneRoutes])
 
   const openBalance = useCallback(() => {
-    setBalancePlan(balanceDay(balanceLanes()))
-  }, [balanceLanes])
+    // A WRITE door with a palette entrance: `disabled` on the Button guards the
+    // Button, and the modal renders outside every day-scope gate. Refuse here,
+    // before a plan is even computed over another day's lanes.
+    if (dayNotLoaded) { notify.error('This day has not loaded — retry, then balance.'); return }
+    // Stamp the plan with the day it was computed for; apply checks it.
+    setBalancePlan({ ...balanceDay(balanceLanes()), forDate: date })
+  }, [balanceLanes, dayNotLoaded, date])
 
   const applyBalance = useCallback(async () => {
     if (!balancePlan || balancePlan.moves.length === 0) { setBalancePlan(null); return }
+    // Commit ownership. The plan was computed for one day's lanes and its undo
+    // snapshot is read from `jobs` below. If the selected day moved under the
+    // open dialog (palette "Go to today", a history jump) or the day on hand is
+    // not the selected one, apply nothing and say so — the writes would move
+    // another day's visits and snapshot the wrong rows for Undo.
+    if (balancePlan.forDate !== date || dayNotLoaded) {
+      setBalancePlan(null)
+      notify.error(`The day changed — that plan was for ${format(parseISO(balancePlan.forDate + 'T00:00:00'), 'EEE, MMM d')}; nothing was moved.`)
+      return
+    }
     setApplyingBalance(true)
     const snapshot = balancePlan.moves.map(m => {
       const j = jobs.find(x => x.id === m.jobId)
@@ -753,7 +800,11 @@ export default function DispatchPage() {
         fetchAll()
       },
     })
-  }, [balancePlan, jobs, supabase, fetchAll])
+  }, [balancePlan, jobs, supabase, fetchAll, date, dayNotLoaded])
+
+  // An open plan belongs to the day it was computed for: close it when the
+  // selected day changes rather than leave it standing over another day.
+  useEffect(() => { setBalancePlan(null) }, [date])
 
   // ── Bulk actions (act on the current selection, then say what happened) ──
   const bulkAssign = useCallback(async (to: Assignee) => {
@@ -875,24 +926,25 @@ export default function DispatchPage() {
     }
   }, [lanes, laneRoutes, technicians, equipment, notes, date])
 
-  // Both build from `lanes` and stamp the sheet with `date`: on a day that did
-  // not load they would print or export ANOTHER day's visits under this date.
-  // Reachable past the hidden board via the keyboard ('p') and the command
-  // palette, so the refusal lives here, not only on the buttons.
+  // Both build from `lanes` and stamp the sheet with `date`: on a day that has
+  // not loaded — failed OR still loading — they would print or export ANOTHER
+  // day's visits under this date. Reachable past the hidden board and past the
+  // skeleton via the keyboard ('p') and the command palette, so the refusal
+  // lives here, on `dayNotLoaded`, not only on the buttons.
   const printDay = useCallback(() => {
-    if (staleDay) { notify.error('This day has not loaded — retry, then print.'); return }
+    if (dayNotLoaded) { notify.error('This day has not loaded — wait or retry, then print.'); return }
     const sheet = buildSheet()
     if (sheet.lanes.length === 0) { notify('Nothing scheduled to print.'); return }
     if (!openPrintSheet(sheet)) notify.error('The print window was blocked — allow pop-ups for this site.')
-  }, [buildSheet, staleDay])
+  }, [buildSheet, dayNotLoaded])
 
   const exportDayCsv = useCallback((onlyIds?: Set<string>) => {
-    if (staleDay) { notify.error('This day has not loaded — retry, then export.'); return }
+    if (dayNotLoaded) { notify.error('This day has not loaded — wait or retry, then export.'); return }
     const sheet = buildSheet(onlyIds)
     const rows = sheetCsvRows(sheet)
     if (rows.length === 0) { notify('Nothing to export.'); return }
     exportRowsToCsv(`dispatch-${date}`, rows, SHEET_CSV_COLUMNS)
-  }, [buildSheet, date, staleDay])
+  }, [buildSheet, date, dayNotLoaded])
 
   // ── Cross-lane drag (pointer events — the Calendar's touch-safe engine) ──
   // The ghost follows the pointer via a direct style write on an always-mounted
@@ -1600,8 +1652,8 @@ export default function DispatchPage() {
               </Button>
             )}
           </Menu>
-          <Button variant="secondary" size="sm" onClick={openBalance} disabled={staleDay || activeCrewCount < 1 || activeJobs.length === 0}
-            title={staleDay ? 'This day has not loaded' : "Even out the day's booked minutes across crews"}>
+          <Button variant="secondary" size="sm" onClick={openBalance} disabled={dayNotLoaded || activeCrewCount < 1 || activeJobs.length === 0}
+            title={dayNotLoaded ? 'This day has not loaded' : "Even out the day's booked minutes across crews"}>
             <Scale className="w-3.5 h-3.5" /> Balance
           </Button>
         </div>
