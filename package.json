@@ -46,6 +46,7 @@
     "verify:growth-concentration": "tsx scripts/verify-growth-concentration.ts",
     "verify:growth-presentation": "tsx scripts/verify-growth-presentation.ts",
     "verify:growth-refresh": "tsx scripts/verify-growth-refresh.ts",
+    "verify:growth-action-contract": "tsx scripts/verify-growth-action-contract.ts",
     "verify:growth-actions": "tsx scripts/verify-growth-actions.ts",
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:advanced-setup": "tsx scripts/verify-advanced-setup.ts",
