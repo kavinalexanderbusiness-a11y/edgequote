@@ -117,6 +117,9 @@ const BARE_QUOTE_DOORS: Record<string, string> = {
   // while the business has no customer, quote, job or invoice at all, and the
   // builder it opens creates the customer and property as it saves.
   'components/dashboard/TodaysPriorities.tsx': 'the first-run card — it only renders when the business has NO customers yet',
+  // Same species: the end of first-run setup, reached before the business has
+  // a single customer to carry. Its door is the first-run card's, by name.
+  'app/setup/page.tsx':                    'the setup done screen — a brand-new business has no customer yet',
   // ⛔ NO ENTRY for the mobile +. It used to be listed here as
   // 'components/layout/BottomNav.tsx — global, so it cannot know a customer'.
   // That excuse expired in Session 54: the door moved into lib/quickAdd, which

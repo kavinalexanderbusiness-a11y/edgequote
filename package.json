@@ -180,7 +180,8 @@
     "verify:customer-load-ordering": "tsx scripts/verify-customer-load-ordering.ts",
     "verify:day-view-tomorrow": "tsx scripts/verify-day-view-tomorrow.ts",
     "verify:client-cache-isolation": "tsx scripts/verify-client-cache-isolation.ts",
-    "verify:shared-unread": "tsx scripts/verify-shared-unread.ts"
+    "verify:shared-unread": "tsx scripts/verify-shared-unread.ts",
+    "verify:first-use-setup": "tsx scripts/verify-first-use-setup.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
