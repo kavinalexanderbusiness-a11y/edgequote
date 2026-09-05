@@ -19,6 +19,7 @@ import {
   laborTrend, forecastNextPeriod, ptoAnalytics, wageTrends, payRunStats,
 } from '@/lib/workforce'
 import { TeamPanel } from '@/components/workforce/TeamPanel'
+import { WorkerIdentityWarnings } from '@/components/workforce/WorkerIdentityWarnings'
 import { TeamAvailabilityWeek } from '@/components/workforce/TeamAvailabilityWeek'
 import { EmployeeEditor } from '@/components/workforce/EmployeeEditor'
 import { CrewsPanel, type CrewRowData } from '@/components/workforce/CrewsPanel'
@@ -237,14 +238,28 @@ export default function WorkforcePage() {
       )}
     </>
   )
+  // ⭐ The warning sits ABOVE the roster and renders nothing when there is
+  // nothing to say. It reads the SAME `techs` array the panel does — archived
+  // included, which is the half that matters, because a rehire is exactly one
+  // archived row beside one active one. No extra fetch: the scan is pure, and
+  // history counts load only if somebody expands a warning.
+  // ⛔ `onOpen` is the roster's EXISTING door. Review means open the worker; the
+  // card offers no other action, because the rows underneath carry statutory
+  // payroll history.
   const teamPanel = (
-    <TeamPanel
-      technicians={techs}
-      crews={crews}
-      accessById={accessById}
-      onAdd={() => { setEditing(null); setEditorOpen(true) }}
-      onOpen={t => { setEditing(t); setEditorOpen(true) }}
-    />
+    <>
+      <WorkerIdentityWarnings
+        technicians={techs}
+        onOpen={t => { setEditing(t); setEditorOpen(true) }}
+      />
+      <TeamPanel
+        technicians={techs}
+        crews={crews}
+        accessById={accessById}
+        onAdd={() => { setEditing(null); setEditorOpen(true) }}
+        onOpen={t => { setEditing(t); setEditorOpen(true) }}
+      />
+    </>
   )
 
   // Crews sit under Team because they are the same subject — who works here, and
