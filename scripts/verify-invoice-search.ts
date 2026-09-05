@@ -108,6 +108,40 @@ check('the invoice page still renders nothing (not "no invoices") while loadErro
   /loadError\s*\?\s*null\s*:/.test(page))
 check('… and still shows a retry banner for that error', /loadError\s*&&/.test(page) && /Retry/.test(page))
 
+// ⭐ A fruitless search says so ONCE. Both of these were gated on `searching`
+// alone, so a search that matched nothing rendered the count line AND the empty
+// state a few pixels apart — "No matches · Clear search" above "Nothing matches
+// “abc”. Clear search or search all invoices": the same state explained twice and
+// the same escape offered twice. The empty state says strictly more, so the count
+// line now stands down when there is nothing to count.
+// ⚠️ Comments are stripped first: the page's own comment quotes the old copy to
+// explain the change, and matching that would be matching the documentation.
+const pageCode = page.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+check('the match-count line requires a positive match count',
+  pageCode.includes('{searching && visible.length > 0 && ('))
+check('⛔ "No matches" can no longer render beside the empty state', !/No matches/.test(pageCode))
+check('the empty state still names what was typed',
+  /Nothing matches/.test(pageCode) && /\{query\.trim\(\)\}/.test(pageCode))
+check('… still offers Clear search', /Clear search/.test(pageCode))
+check('… and still offers the wider search when a filter is on', /search all invoices/.test(pageCode))
+check('the three distinct nothings stay distinct',
+  /No invoices yet/.test(pageCode) && /No deposits are waiting/.test(pageCode) && /Nothing matches/.test(pageCode))
+// The two conditions, as the page declares them, over every state they can be in.
+const countLine = (searching: boolean, visible: number) => searching && visible > 0
+const emptyState = (searching: boolean, visible: number, invoices: number) => invoices > 0 && visible === 0 && searching
+for (const [sr, vis, inv, label] of [
+  [true, 3, 12, 'search WITH matches'],
+  [true, 0, 12, 'search with NO matches'],
+  [false, 12, 12, 'not searching'],
+  [false, 0, 0, 'empty book'],
+] as [boolean, number, number, string][]) {
+  check(`${label}: at most one "Clear search" is offered`, !(countLine(sr, vis) && emptyState(sr, vis, inv)))
+}
+check('⭐ a no-match search is served by the empty state alone',
+  !countLine(true, 0) && emptyState(true, 0, 12))
+check('⭐ a matching search still gets its count line',
+  countLine(true, 3) && !emptyState(true, 3, 12))
+
 H('10. the index is reusable across keystrokes (what the page relies on)')
 const index = buildInvoiceSearchIndex(INVOICES)
 check('index has one entry per invoice', index.length === INVOICES.length)
