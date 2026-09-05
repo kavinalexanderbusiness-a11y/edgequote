@@ -110,7 +110,12 @@ async function main() {
     p.reads[0].d.resolve({ ok: true, row: loaded }); await flush()
     eq('the card shows what the read returned', p.state.feedback.A, loaded)
     check('…and the notice says it is not ON RECORD — it never says "was not recorded" or "nothing was recorded"',
-      p.state.notice?.tone === 'reconciled' && /isn't on record/.test(p.state.notice.text) && !/was not recorded|nothing was recorded/.test(p.state.notice.text), JSON.stringify(p.state.notice))
+      p.state.notice?.tone === 'reconciled'
+      // ⭐ Qualified as OBSERVED state — a write the wire lost can still land after
+      // the read, so the copy must say what was seen and when, never deliver a
+      // verdict on the row.
+      && /as of this check it is not on record/.test(p.state.notice.text)
+      && !/was not recorded|nothing was recorded/.test(p.state.notice.text), JSON.stringify(p.state.notice))
   }
   {
     // (c) the read fails too → unconfirmed: last confirmed state shown, refresh advised, no repeat encouraged
@@ -204,6 +209,44 @@ async function main() {
       client({ data: null, error: { message: 'new row violates row-level security policy', code: '42501' }, status: 403, statusText: 'Forbidden' }) as never,
       tgt, 'won', 1960)
     check('a real refusal (HTTP 403) IS definite', refused.ok === false && refused.definite === true, JSON.stringify(refused))
+
+    // ⛔ GATEWAY CLASS. A 504 comes from the edge in FRONT of PostgREST: it gave up
+    // waiting for a response to a request it had already forwarded, so Postgres may
+    // well have committed. Its body is an HTML error page, which processResponse
+    // cannot JSON-parse, so the error arrives as `{ message: '<html>…' }` with no
+    // `code` — no structured rejection evidence at all.
+    const gatewayHtml = '<html><head><title>504 Gateway Time-out</title></head><body><h1>504 Gateway Time-out</h1></body></html>'
+    for (const [label, st] of [['504 gateway timeout', 504], ['503 unavailable', 503], ['502 bad gateway', 502], ['500 upstream', 500]] as [string, number][]) {
+      const r = await recordRecommendation(
+        client({ data: null, error: { message: gatewayHtml }, status: st, statusText: 'Gateway Time-out' }) as never,
+        tgt, 'won', 1960)
+      check(`⛔ a ${label} is NOT definite — it may have been forwarded and committed`,
+        r.ok === false && r.definite === false, JSON.stringify(r))
+    }
+    // A 4xx from something in front of PostgREST also has no structured body.
+    const edge4xx = await recordRecommendation(
+      client({ data: null, error: { message: gatewayHtml }, status: 403, statusText: 'Forbidden' }) as never,
+      tgt, 'won', 1960)
+    check('a 4xx with a non-JSON body carries no rejection evidence, so it is not definite',
+      edge4xx.ok === false && edge4xx.definite === false, JSON.stringify(edge4xx))
+
+    // …and the shipped controller must take the read-back path for a 504.
+    const sbGw = client({ data: null, error: { message: gatewayHtml }, status: 504, statusText: 'Gateway Time-out' }, null)
+    const gwSeen: ActionNotice[] = []
+    const gwCtl = createActionController({
+      record: (o, st, v) => recordRecommendation(sbGw as never, o, st, v),
+      read: key => readRecommendation(sbGw as never, key),
+      setRow: () => {}, setBusy: () => {},
+      setNotice: (_k, n) => { if (n) gwSeen.push(n) },
+    })
+    gwCtl.act(tgt, 'won')
+    await new Promise(r => setTimeout(r, 10))
+    check('⛔ a 504 reads back instead of claiming a refusal',
+      gwSeen.length === 1 && gwSeen[0].tone !== 'refused', JSON.stringify(gwSeen))
+    check('…and never tells the owner it was not recorded',
+      !gwSeen.some(n => /not recorded/i.test(n.text)), JSON.stringify(gwSeen.map(n => n.text)))
+    check('…and what it does say is qualified as observed, not categorical',
+      gwSeen.every(n => !/it isn't on record\b/.test(n.text)), JSON.stringify(gwSeen.map(n => n.text)))
 
     const saved = await recordRecommendation(
       client({ data: null, error: null, status: 201, statusText: 'Created' }) as never, tgt, 'won', 1960)

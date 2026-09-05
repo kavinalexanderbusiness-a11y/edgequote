@@ -128,7 +128,12 @@ export function createActionController(deps: ActionDeps, initialFeedback: Record
       confirm(o.key, onRecord)
       deps.setRow(o.key, onRecord)
       if (onRecord?.status === status) return          // it did save; the badge already says so
-      deps.setNotice(o.key, { key: o.key, tone: 'reconciled', text: `The connection dropped while saving ${label} — it isn't on record. Tap it again if you still want it.` })
+      // ⚠️ OBSERVED STATE, NOT A VERDICT. The read-back is one look at one moment;
+      // a write the wire lost can still land after it. So this says what was seen
+      // and when, and never that the save did not happen. Re-tapping is safe
+      // either way — the writer upserts on the same key, so a late arrival is
+      // replaced, not duplicated.
+      deps.setNotice(o.key, { key: o.key, tone: 'reconciled', text: `The connection dropped while saving ${label} — as of this check it is not on record. Tap it again if you still want it.` })
       return
     }
     deps.setRow(o.key, confirmed.get(o.key))

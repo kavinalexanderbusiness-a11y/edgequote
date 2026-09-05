@@ -721,14 +721,24 @@ export async function recordRecommendation(
     acted_at: new Date().toISOString(),
   }, { onConflict: 'user_id,opportunity_key' })
   if (!error) return { ok: true }
-  // ⛔ AN ERROR OBJECT IS NOT PROOF THE SERVER REFUSED. postgrest-js resolves a
-  // failed request instead of throwing, and its constructed error carries
-  // `status: 0, statusText: ''` because no response was ever received; a real
-  // refusal comes back through processResponse with the actual HTTP status. So
-  // the status — not the presence of `code`, which is '' on both paths — is what
-  // says whether the server answered. Anything we cannot place is `definite:
-  // false`, because an unknown outcome is truthful and a guessed one is not.
-  const answered = typeof httpStatus === 'number' && httpStatus >= 400
+  // ⛔⛔ DEFINITE ONLY ON VERIFIED STRUCTURED REJECTION EVIDENCE. Two things have
+  // to be true together, and neither is enough alone:
+  //
+  //   • a 4xx status. A 5xx is NOT a refusal — a 502/503/504 comes from the edge
+  //     in front of PostgREST, which may already have forwarded the request; the
+  //     gateway gave up waiting for the answer, while Postgres finished the
+  //     transaction and committed. `status: 0` never reached anyone at all.
+  //   • a body PostgREST itself produced. processResponse JSON-parses the error
+  //     body and falls back to `{ message: body }` when it cannot — so an HTML
+  //     error page from a proxy arrives with NO `code`. A `code` present and
+  //     non-empty is the evidence that the database answered; the transport path
+  //     sets `code: ''`, so emptiness is not evidence of anything.
+  //
+  // Everything else is `definite: false` and goes to the read-back. An unknown
+  // outcome stated truthfully beats a guessed one.
+  const code = (error as { code?: unknown }).code
+  const structured = typeof code === 'string' && code.length > 0
+  const answered = typeof httpStatus === 'number' && httpStatus >= 400 && httpStatus < 500 && structured
   return { ok: false, definite: answered, error: error.message }
 }
 
