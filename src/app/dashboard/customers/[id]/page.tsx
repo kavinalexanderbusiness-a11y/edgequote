@@ -1320,14 +1320,21 @@ export default function CustomerDetailPage() {
                 return (
                   <span key={r.id} className="text-xs flex items-center gap-1 text-accent-text border border-accent/20 bg-accent/10 rounded-lg px-2.5 py-1">
                     <Repeat className="w-3 h-3" /> {recurrenceLabel(r.interval_unit, r.interval_count, r.freq)}
-                    {r.end_date ? ` until ${formatDate(r.end_date)}` : r.end_count ? ` · ${remaining} of ${r.end_count} left` : ' · ongoing'}
-                    {!r.end_date && !r.end_count && remaining > 0 ? ` · ${remaining} upcoming` : ''}
+                    {/* "left" and "upcoming" are counted from the jobs slice; when it
+                        did not load, say that instead of "0 left". */}
+                    {r.end_date ? ` until ${formatDate(r.end_date)}` : r.end_count ? (jobsUnknown ? ` · ${r.end_count} planned · visits not loaded` : ` · ${remaining} of ${r.end_count} left`) : ' · ongoing'}
+                    {!r.end_date && !r.end_count && (jobsUnknown ? ' · visits not loaded' : remaining > 0 ? ` · ${remaining} upcoming` : '')}
                   </span>
                 )
               })}
             </div>
           )}
-          {upcoming.length === 0 ? (
+          {jobsUnknown ? (
+            // Not "none": the jobs slice did not load, so nothing is known about
+            // upcoming work. The banner under the header says so; this keeps the
+            // card from contradicting it with a confident empty.
+            <p className="text-sm text-ink-muted">Upcoming visits could not be loaded — use Try again above.</p>
+          ) : upcoming.length === 0 ? (
             // Empty state leads to the fix, not just the fact (the warning banner
             // above already states it).
             <p className="text-sm text-ink-muted">
@@ -1371,21 +1378,44 @@ export default function CustomerDetailPage() {
           </Button>
         </CardHeader>
         <CardBody className="space-y-3">
-          {/* The roll-up: what this customer's whole portfolio is doing, before the
-              per-address detail. Summed from the rows already on the page, so it
-              cannot disagree with the figures elsewhere on this profile. Hidden for
-              a one-property customer — "1 property · 1 active service" is just their
-              only property, restated. */}
+          {/* The roll-up: what this customer's ADDRESSES are doing, before the
+              per-address detail. Summed from the rows already on the page — but
+              only the rows tied to a CURRENT address (propRollup skips a quote or
+              invoice with no property, or whose property was removed). Those rows
+              are in the customer-wide figures above and not here, so "Outstanding"
+              and "Open quotes" here can be LESS than the card and the header chip.
+              Same engines on both sides (invoiceBalance; the sent/draft rule), so
+              scope is the only way they differ: the line above the grid says the
+              scope, and the caption below names the difference whenever there is
+              one. Hidden for a one-property customer — "1 property · 1 active
+              service" is just their only property, restated. */}
           {properties.length > 1 && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
-              {/* Each stat stands on one slice; a slice that did not load is "—". */}
-              <RollupStat icon={Repeat} label="Active services" value={jobsUnknown ? '—' : String(rollupTotals.activeServices)} />
-              <RollupStat icon={CalendarClock} label="Upcoming visits" value={jobsUnknown ? '—' : String(rollupTotals.upcoming)} />
-              <RollupStat icon={FileText} label="Open quotes" value={quotesUnknown ? '—' : String(rollupTotals.openQuotes)} />
-              {(moneyUnknown || rollupTotals.outstanding > 0.01) && (
-                <RollupStat icon={DollarSign} label="Outstanding" value={moneyUnknown ? '—' : formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
-              )}
+            <div className="space-y-2">
+              <p className="text-[11px] text-ink-faint">Across these addresses only</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
+                {/* Each stat stands on one slice; a slice that did not load is "—". */}
+                <RollupStat icon={Repeat} label="Active services" value={jobsUnknown ? '—' : String(rollupTotals.activeServices)} />
+                <RollupStat icon={CalendarClock} label="Upcoming visits" value={jobsUnknown ? '—' : String(rollupTotals.upcoming)} />
+                <RollupStat icon={FileText} label="Open quotes" value={quotesUnknown ? '—' : String(rollupTotals.openQuotes)} />
+                {(moneyUnknown || rollupTotals.outstanding > 0.01) && (
+                  <RollupStat icon={DollarSign} label="Outstanding" value={moneyUnknown ? '—' : formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
+                )}
+              </div>
+              {(() => {
+                const owedElsewhere = moneyUnknown ? 0 : outstandingRevenue - rollupTotals.outstanding
+                const quotesElsewhere = quotesUnknown ? 0 : openQuotesAll.length - rollupTotals.openQuotes
+                const parts = [
+                  owedElsewhere > 0.01 ? `${formatCurrency(owedElsewhere)} outstanding` : '',
+                  quotesElsewhere > 0 ? `${quotesElsewhere} open quote${quotesElsewhere !== 1 ? 's' : ''}` : '',
+                ].filter(Boolean)
+                if (!parts.length) return null
+                return (
+                  <p className="text-[11px] text-ink-faint">
+                    Not tied to a current address, so counted in the totals above only: {parts.join(' and ')}.
+                  </p>
+                )
+              })()}
             </div>
           )}
           {addingProperty && (
@@ -1460,21 +1490,26 @@ export default function CustomerDetailPage() {
                         two "100 Main St" in different towns must not read as one. */}
                     {propertyLabel(p, { primaryTag: true })}
                   </Link>
-                  <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
+                  <span className="text-xs text-ink-muted shrink-0">{jobsUnknown ? 'jobs not loaded' : `${jobCount} job${jobCount !== 1 ? 's' : ''}`}</span>
                 </div>
                 {/* What this ADDRESS is doing — the roll-up's per-property half. A job
                     count alone says how busy it's been, never whether it's earning,
                     booked, or owing. Each figure is omitted when it's zero: a quiet
-                    property should read as quiet, not as a row of noughts. */}
+                    property should read as quiet, not as a row of noughts — but a
+                    slice that did not LOAD is named, because silence there would
+                    read as quiet too, and that is the one claim we cannot make. */}
                 {(() => {
                   const r = propRollup[p.id]
                   if (!r) return null
                   const facts = [
-                    r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
-                    r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
-                    r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
-                    r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
-                    !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                    !jobsUnknown && r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
+                    !jobsUnknown && r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
+                    !quotesUnknown && r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
+                    !moneyUnknown && r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
+                    !jobsUnknown && !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                    jobsUnknown && { icon: CalendarClock, text: 'visits not loaded', tone: 'text-ink-faint' },
+                    quotesUnknown && { icon: FileText, text: 'quotes not loaded', tone: 'text-ink-faint' },
+                    moneyUnknown && { icon: DollarSign, text: 'balance not loaded', tone: 'text-ink-faint' },
                   ].filter(Boolean) as { icon: typeof Repeat; text: string; tone: string }[]
                   if (!facts.length) return null
                   return (
