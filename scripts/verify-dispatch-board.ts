@@ -444,6 +444,23 @@ async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
     run(A, a.p as Promise<unknown>)
     check('the very first load refuses print before anything has loaded',
       st.loadedDate === null && act('printDay', st, A).refused) }
+
+  // (5) ⛔ Balance is a WRITE door, and the command palette calls openBalance
+  // DIRECTLY — `disabled` on the Button guards the Button, not the verb. The
+  // modal it opens renders outside every day-scope gate, and applying it calls
+  // assignJob() on whatever jobs are in state. So the refusal has to be in the
+  // function, exactly as it is for print and export.
+  { let planned = false
+    const deps: Record<string, unknown> = {
+      loadError: null, loadedDate: A, date: B,
+      setBalancePlan: () => { planned = true },
+      balanceDay: (x: unknown) => x, balanceLanes: () => [],
+      notify: Object.assign(() => {}, { error: () => {} }),
+    }
+    const src = `${flagLines.join('\n')}\n${bodyOf('openBalance')}`
+    new Function(...Object.keys(deps), src)(...Object.values(deps))
+    check('Balance refuses at the function too — the palette calls it past the button',
+      !planned, `openBalance planned a rebalance of ${A}’s lanes while the owner is on ${B}`) }
 }
 
 // ── The harness may not pass by failing to finish ───────────────────────────
