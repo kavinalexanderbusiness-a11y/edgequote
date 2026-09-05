@@ -3,9 +3,10 @@ import { createServerClient } from '@supabase/ssr'
 import { sessionCookieOptions } from '@/lib/supabase/cookieSecurity'
 import { appOrigin } from '@/lib/appOrigin'
 import { BETA_TOKEN_RE } from '@/lib/betaInvite'
+import { INTENT_PARAM, REGISTER_INTENT } from '@/lib/registration'
 import {
   GOOGLE_PROVIDER, GOOGLE_SCOPES, AUTH_ERROR_PARAM,
-  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH,
+  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH, OAUTH_REGISTER_COOKIE,
   buildCallbackUrl, safeReturnPath,
 } from '@/lib/googleAuth'
 
@@ -46,6 +47,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const next = safeReturnPath(req.nextUrl.searchParams.get('next'))
   const rawInvite = req.nextUrl.searchParams.get('invite') ?? ''
   const invite = BETA_TOKEN_RE.test(rawInvite) ? rawInvite : null
+  // The sign-up page's stated intent to register. Shape-checked only, like the
+  // invite: it authorizes nothing — the callback still asks the database.
+  const registerIntent = req.nextUrl.searchParams.get(INTENT_PARAM) === REGISTER_INTENT
 
   const failure = (code: string) =>
     NextResponse.redirect(`${origin}/login?${AUTH_ERROR_PARAM}=${code}`, {
@@ -134,6 +138,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   for (const c of jar) res.cookies.set(c.name, c.value, c.options)
   if (invite) {
     res.cookies.set(OAUTH_INVITE_COOKIE, invite, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: origin.startsWith('https://'),
+      path: '/',
+      maxAge: OAUTH_INVITE_TTL_SECONDS,
+    })
+  }
+  if (registerIntent) {
+    res.cookies.set(OAUTH_REGISTER_COOKIE, '1', {
       httpOnly: true,
       sameSite: 'lax',
       secure: origin.startsWith('https://'),

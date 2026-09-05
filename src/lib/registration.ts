@@ -60,6 +60,29 @@ export const REGISTER_STATUS_PATH = '/api/register/status'
  *  window; the button counts it down so the refusal is never met. */
 export const RESEND_COOLDOWN_SECONDS = 60
 
+/** The explicit "I am here to create a business" marker (S110 §4.1). A licence
+ *  from the database is not consent: a verified stranger who merely signs in
+ *  must never be walked into /setup and have a tenant made by a button that
+ *  says "Skip". So the public path carries its intent: ?intent=register on
+ *  /setup (set by /signup/confirm and by the OAuth callback), and — for the
+ *  Google round trip, which starts on a different origin and ends in a server
+ *  route — an httpOnly cookie the start route sets and the callback reads,
+ *  exactly as the beta invite travels. An invite IS intent (the person opened
+ *  the link they were sent); only the self-service licence needs the marker.
+ *  Never an authorization: the database still licenses the write. */
+export const REGISTER_INTENT = 'register'
+export const INTENT_PARAM = 'intent'
+export const SETUP_REGISTER_PATH = `/setup?${INTENT_PARAM}=${REGISTER_INTENT}`
+export function hasRegisterIntent(search: string | null | undefined): boolean {
+  if (!search) return false
+  try { return new URLSearchParams(search).get(INTENT_PARAM) === REGISTER_INTENT } catch { return false }
+}
+
+/** What the resend button says after ANY outcome that is not "slow down" or
+ *  "closed": the same sentence for a pending address, a confirmed one and an
+ *  unknown one, so the button cannot be used to learn which it was. */
+export const RESENT_NOTE = 'Sent — if this address can receive a confirmation link, a fresh one is on its way and replaces any earlier one.'
+
 export type SignUpOutcome =
   | { kind: 'sent' }
   | { kind: 'closed' }
@@ -89,4 +112,23 @@ export function signUpOutcome(res: {
     return { kind: 'error', reason: 'rate-limited', message: 'Too many attempts for now — wait a minute and try again.' }
   }
   return { kind: 'error', reason: 'error', message: 'Couldn’t create the account right now — please try again.' }
+}
+
+export type ResendOutcome =
+  | { kind: 'sent' }
+  | { kind: 'closed' }
+  | { kind: 'error'; reason: 'rate-limited'; message: string }
+
+/** Resend is where enumeration would leak (S110 §4.7): GoTrue answers an
+ *  already-confirmed address differently from a pending one. Every answer that
+ *  is not a rate limit or a closed provider is therefore SENT — the confirmed
+ *  case, the pending case and the unknown case read as one. */
+export function resendOutcome(error: { message?: string; status?: number; code?: string } | null | undefined): ResendOutcome {
+  if (!error) return { kind: 'sent' }
+  const code = error.code ?? ''
+  if (code === 'signup_disabled' || code === 'email_provider_disabled') return { kind: 'closed' }
+  if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit' || error.status === 429) {
+    return { kind: 'error', reason: 'rate-limited', message: 'Too many attempts for now — wait a minute and try again.' }
+  }
+  return { kind: 'sent' }
 }

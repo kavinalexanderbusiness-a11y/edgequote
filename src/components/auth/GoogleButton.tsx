@@ -50,12 +50,17 @@ export interface GoogleButtonProps {
   /** An in-flight private-beta invite, passed straight through to the start
    *  route, which moves it into an httpOnly cookie. */
   invite?: string | null
+  /** 'register' from the public sign-up page only: the start route turns it
+   *  into the httpOnly intent cookie the callback requires before it will
+   *  land a self-service account on /setup. Absent from /login on purpose. */
+  intent?: 'register' | null
 }
 
-export function GoogleButton({ label, next, invite }: GoogleButtonProps) {
+export function GoogleButton({ label, next, invite, intent }: GoogleButtonProps) {
   const q = new URLSearchParams()
   if (next) q.set('next', next)
   if (invite) q.set('invite', invite)
+  if (intent) q.set('intent', intent)
   const href = q.toString() ? `${OAUTH_START_PATH}?${q}` : OAUTH_START_PATH
 
   return (

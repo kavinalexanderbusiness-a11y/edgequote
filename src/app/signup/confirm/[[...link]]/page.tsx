@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { MailX, ShieldCheck, TriangleAlert } from 'lucide-react'
 import type { BetaClaimStatus } from '@/lib/betaInvite'
-import { REGISTRATION_CLOSED, parseProvisioningStatus, registrationNextStep } from '@/lib/registration'
+import { REGISTRATION_CLOSED, SETUP_REGISTER_PATH, parseProvisioningStatus, registrationNextStep } from '@/lib/registration'
 
 // ── /signup/confirm — where the emailed link lands ───────────────────────────
 // verifyOtp with the token_hash proves the email and mints the session (the
@@ -108,7 +108,7 @@ function ConfirmFlow() {
       const { data: st, error: stErr } = await supabase.rpc('provisioning_status')
       if (stErr) { setPhase('error'); return }
       const step = registrationNextStep(parseProvisioningStatus(st))
-      if (step === 'setup') { router.replace('/setup'); router.refresh(); return }
+      if (step === 'setup') { router.replace(SETUP_REGISTER_PATH); router.refresh(); return }
       if (step === 'crew') { setPhase('crew'); return }
       if (step === 'closed') { setPhase('closed'); return }
       setPhase('error')

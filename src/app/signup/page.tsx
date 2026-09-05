@@ -9,7 +9,7 @@ import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Zap, MailCheck, ShieldCheck, KeyRound } from 'lucide-react'
 import { BETA_TOKEN_RE, MIN_PASSWORD, SIGNUP_CONFIRM_PATH, type BetaInviteState, type BetaSignupResponse } from '@/lib/betaInvite'
-import { REGISTER_STATUS_PATH, REGISTRATION_CLOSED, RESEND_COOLDOWN_SECONDS, signUpOutcome } from '@/lib/registration'
+import { REGISTER_INTENT, REGISTER_STATUS_PATH, REGISTRATION_CLOSED, RESEND_COOLDOWN_SECONDS, RESENT_NOTE, resendOutcome, signUpOutcome } from '@/lib/registration'
 import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
 
 // ── /signup — two front doors, one gate ──────────────────────────────────────
@@ -155,8 +155,9 @@ function SignupFlow() {
         type: 'signup', email: sentTo,
         options: { emailRedirectTo: `${window.location.origin}${SIGNUP_CONFIRM_PATH}` },
       })
-      const out = resendErr ? signUpOutcome({ error: resendErr }) : { kind: 'sent' as const }
-      setResendNote(out.kind === 'sent' ? 'Sent — the new link replaces any earlier one.' : out.kind === 'closed' ? REGISTRATION_CLOSED.body : out.message)
+      // One sentence for pending, confirmed and unknown addresses alike.
+      const out = resendOutcome(resendErr)
+      setResendNote(out.kind === 'sent' ? RESENT_NOTE : out.kind === 'closed' ? REGISTRATION_CLOSED.body : out.message)
       if (out.kind === 'sent') startCooldown(RESEND_COOLDOWN_SECONDS)
       return
     }
@@ -197,7 +198,7 @@ function SignupFlow() {
                 the start route, which moves it into an httpOnly cookie for the
                 Google round trip; it is re-checked against the row, atomically,
                 at binding time. Nothing here is the authority on it. */}
-            <GoogleButton label="Continue with Google" invite={token} />
+            <GoogleButton label="Continue with Google" invite={token} intent={selfService ? REGISTER_INTENT : null} />
             <AuthDivider />
 
             <form onSubmit={submit} className="space-y-4">
