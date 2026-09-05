@@ -7976,6 +7976,54 @@
   "force_rls": false
  },
  {
+  "acl": "{postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres}",
+  "rls": true,
+  "cols": [
+   {
+    "name": "id",
+    "type": "boolean",
+    "default": "true",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "self_service_open",
+    "type": "boolean",
+    "default": "false",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "opened_at",
+    "type": "timestamp with time zone",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "note",
+    "type": "text",
+    "default": null,
+    "notnull": false,
+    "identity": "",
+    "generated": ""
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone",
+    "default": "now()",
+    "notnull": true,
+    "identity": "",
+    "generated": ""
+   }
+  ],
+  "relname": "platform_registration",
+  "force_rls": false
+ },
+ {
   "acl": "{postgres=arwdDxtm/postgres,anon=arwdm/postgres,authenticated=arwdm/postgres,service_role=arwdDxtm/postgres}",
   "rls": true,
   "cols": [

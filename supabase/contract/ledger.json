@@ -1174,5 +1174,12 @@
   "sql_md5": "60773aacc273664282d9bf3741447c93",
   "version": "20260830150000",
   "stmt_count": 1
+ },
+ {
+  "name": "self_service_registration",
+  "sql_len": 8201,
+  "sql_md5": "f9b75a627b8d16c512bb93896b4b8e39",
+  "version": "20260905205937",
+  "stmt_count": 1
  }
 ]

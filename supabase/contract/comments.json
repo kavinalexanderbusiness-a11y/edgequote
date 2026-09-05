@@ -51,6 +51,11 @@
    "comment": "THE writer of a customer's scheduling preference. Token proves the customer; quote must be theirs and 'accepted'. A preference is a request — it never creates, moves, or implies a visit. All-null clears it."
   },
   {
+   "fn": "provisioning_status",
+   "args": "",
+   "comment": "Why this signed-in account may or may not create a business: not-signed-in | already-owner | crew-account | invited | email-unverified | self-service | closed. Read-only; can_provision_business() and the app both derive from it."
+  },
+  {
    "fn": "public_services",
    "args": "p_token text",
    "comment": "The public website catalogue. ANONYMOUS + edge-cached. Returns PUBLISHED services only (is_active AND published_at is not null) — see the boundary note in the body. ⛔ Never widen this to is_active alone."
@@ -159,6 +164,10 @@
   {
    "tbl": "platform_operators",
    "comment": "Who may issue beta invites. NOT a role system: one row today (the founding account). No client access of any kind."
+  },
+  {
+   "tbl": "platform_registration",
+   "comment": "The public sign-up switch. One row. self_service_open=false means a verified email alone does not license a business. Service-role only (RLS on, zero policies): the operator opens it with an UPDATE; the app never writes it."
   },
   {
    "tbl": "portal_access_requests",

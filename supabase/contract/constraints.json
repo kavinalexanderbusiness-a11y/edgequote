@@ -2654,6 +2654,20 @@
  },
  {
   "def": "PRIMARY KEY (id)",
+  "tbl": "platform_registration",
+  "conname": "platform_registration_pkey",
+  "contype": "p",
+  "convalidated": true
+ },
+ {
+  "def": "CHECK (id)",
+  "tbl": "platform_registration",
+  "conname": "platform_registration_single_row",
+  "contype": "c",
+  "convalidated": true
+ },
+ {
+  "def": "PRIMARY KEY (id)",
   "tbl": "portal_access_requests",
   "conname": "portal_access_requests_pkey",
   "contype": "p",

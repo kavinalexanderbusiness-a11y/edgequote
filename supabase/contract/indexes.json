@@ -1692,6 +1692,12 @@
   "backs_constraint": true
  },
  {
+  "tbl": "platform_registration",
+  "indexdef": "CREATE UNIQUE INDEX platform_registration_pkey ON public.platform_registration USING btree (id)",
+  "indexname": "platform_registration_pkey",
+  "backs_constraint": true
+ },
+ {
   "tbl": "portal_access_requests",
   "indexdef": "CREATE INDEX portal_access_requests_key_time_idx ON public.portal_access_requests USING btree (email_key, created_at DESC)",
   "indexname": "portal_access_requests_key_time_idx",

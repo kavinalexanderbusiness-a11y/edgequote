@@ -148,7 +148,7 @@
  },
  {
   "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
-  "def": "CREATE OR REPLACE FUNCTION public.can_provision_business()\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\n  select public.current_app_role() = 'owner'\n      or exists (select 1 from public.beta_invites i where i.redeemed_by = auth.uid())\n$function$\n",
+  "def": "CREATE OR REPLACE FUNCTION public.can_provision_business()\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\n  select public.provisioning_status() in ('already-owner', 'invited', 'self-service')\n$function$\n",
   "args": "",
   "owner": "postgres",
   "proname": "can_provision_business"
@@ -985,6 +985,13 @@
   "args": "",
   "owner": "postgres",
   "proname": "pricing_config_versions_immutable"
+ },
+ {
+  "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+  "def": "CREATE OR REPLACE FUNCTION public.provisioning_status()\n RETURNS text\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\ndeclare\n  v_uid       uuid := auth.uid();\n  v_confirmed timestamptz;\nbegin\n  if v_uid is null then\n    return 'not-signed-in';\n  end if;\n  -- Owner already: the grandfather licence every settings UPSERT relies on.\n  if exists (select 1 from public.business_settings b where b.user_id = v_uid) then\n    return 'already-owner';\n  end if;\n  -- Mirrors guard_business_settings_owner() exactly — ANY technician link,\n  -- active or not — so the answer here is the answer the INSERT trigger gives.\n  if exists (select 1 from public.technicians t where t.auth_user_id = v_uid) then\n    return 'crew-account';\n  end if;\n  -- The invite licence, unchanged: redemption already required a verified email.\n  if exists (select 1 from public.beta_invites i where i.redeemed_by = v_uid) then\n    return 'invited';\n  end if;\n  -- The only identity fact this function reads.\n  select u.email_confirmed_at into v_confirmed from auth.users u where u.id = v_uid;\n  if v_confirmed is null then\n    return 'email-unverified';\n  end if;\n  -- A missing switch row reads as closed.\n  if coalesce((select r.self_service_open from public.platform_registration r where r.id), false) then\n    return 'self-service';\n  end if;\n  return 'closed';\nend\n$function$\n",
+  "args": "",
+  "owner": "postgres",
+  "proname": "provisioning_status"
  },
  {
   "acl": "{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
