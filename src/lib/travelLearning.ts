@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { haversineKm } from '@/lib/geo'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { clamp } from '@/lib/utils'
 
 // ── Drive-time learning ──────────────────────────────────────────────────────
@@ -85,6 +85,7 @@ export function estimateLegMinutes(km: number, model: TravelModel = DEFAULT_TRAV
 const CACHE_KEY = 'travel-model'
 
 export async function loadTravelModel(supabase: SupabaseClient, opts?: { force?: boolean }): Promise<TravelModel> {
+  const lease = cacheLease()
   if (!opts?.force) {
     const cached = readCache<TravelModel>(CACHE_KEY, CACHE_TTL.medium)
     if (cached) return cached
@@ -120,6 +121,6 @@ export async function loadTravelModel(supabase: SupabaseClient, opts?: { force?:
     }
   }
   const model = learnTravelModel(legs)
-  writeCache(CACHE_KEY, model)
+  writeCache(CACHE_KEY, model, { lease })
   return model
 }

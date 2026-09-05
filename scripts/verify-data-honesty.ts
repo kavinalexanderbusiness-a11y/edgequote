@@ -150,7 +150,7 @@ H('The advisor says "couldn\'t check" instead of "all caught up"')
   check('…and does not cache an answer it never got',
     /if \(next == null\) \{ setFailed\(true\); return \}/.test(SUGG_UI), true)
   const nullGuard = SUGG_UI.indexOf('if (next == null)')
-  const cacheWrite = SUGG_UI.indexOf("writeCache('suggestions', next)")
+  const cacheWrite = SUGG_UI.indexOf("writeCache('suggestions', next, { lease })")
   check('…because writeCache sits AFTER the null guard', nullGuard > 0 && cacheWrite > nullGuard, true)
   check('the failed state says it is not an all-clear',
     /Couldn’t check your business/.test(SUGG_UI) && /not a clean bill of health/.test(SUGG_UI), true)

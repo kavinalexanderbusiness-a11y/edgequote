@@ -7,7 +7,7 @@ import { recommendedForCadence, type Cadence } from '@/lib/priceGuardrails'
 import { isWon, isLost } from '@/lib/winLoss'
 import { serviceKey, serviceLabel, laborEconomics, type Confidence } from '@/lib/labor'
 import { crewCostPerHour } from '@/lib/economics'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { clamp } from '@/lib/utils'
 
 // ── Quote win-rate learning — the self-learning pricing intelligence layer ───────
@@ -458,6 +458,7 @@ export async function loadQuotePricingModel(
   opts?: { force?: boolean },
 ): Promise<LoadedQuoteModel | null> {
   const cacheKey = 'quote-pricing-model'
+  const lease = cacheLease()
   if (!opts?.force) {
     const cached = readCache<LoadedQuoteModel>(cacheKey, CACHE_TTL.medium)
     if (cached) return cached
@@ -478,7 +479,7 @@ export async function loadQuotePricingModel(
   const crewCost = crewCostPerHour(s?.crew_cost_per_hour)
 
   const result: LoadedQuoteModel = { model: learnQuoteModel(quotes, cfg, priceLossByQuote), cfg, crewCost }
-  writeCache(cacheKey, result)
+  writeCache(cacheKey, result, { lease })
   return result
 }
 

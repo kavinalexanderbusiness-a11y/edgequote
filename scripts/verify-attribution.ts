@@ -410,7 +410,7 @@ check('the page distinguishes "loading" from "could not check"',
   PAGE.includes('acquisition === undefined') && PAGE.includes('acquisition === null'))
 check('…and says so in words rather than rendering an empty board',
   /Couldn&apos;t check where your customers came from/.test(PAGE))
-check('the page only caches a successful result', /if \(r\) writeCache\('acquisition', r\)/.test(PAGE))
+check('the page only caches a successful result', /if \(r\) writeCache\('acquisition', r, \{ lease \}\)/.test(PAGE))
 check('a thrown loader lands as null, not as silence', /catch \{ setAcquisition\(null\) \}/.test(PAGE))
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { readCache, writeCache, clearCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, clearCache, CACHE_TTL } from '@/lib/clientCache'
 
 // ── Shared analytics dataset ─────────────────────────────────────────────────
 // Profitability, Saturation, Neighbors, Weekly Review, Routes, Data Quality… each
@@ -53,8 +53,9 @@ export async function loadAnalyticsCore(supabase: SupabaseClient, opts?: { force
     if (cached) return cached
     if (inFlight) return inFlight
   }
+  const lease = cacheLease()
   const p = fetchCore(supabase)
-    .then(core => { if (core) writeCache(CACHE_KEY, core); return core })
+    .then(core => { if (core) writeCache(CACHE_KEY, core, { lease }); return core })
     .finally(() => { if (inFlight === p) inFlight = null })
   if (!opts?.force) inFlight = p
   return p

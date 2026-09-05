@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { pageAll } from '@/lib/supabase/pageAll'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
-import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment } from '@/types'
 import { InvoiceDetail } from '@/components/payments/InvoiceDetail'
 import { financiallyLocked } from '@/lib/payments/invoiceActions'
@@ -146,6 +146,7 @@ export default function InvoicesPage() {
   const [paymentsByInvoice, setPaymentsByInvoice] = useState<Record<string, Payment[]>>({}) // ledger rows per invoice (receipts + revert)
 
   async function fetchInvoices() {
+    const lease = cacheLease()
     try {
       // Local session read — no auth round-trip before the RLS-scoped fetch batch.
       const { data: { session } } = await supabase.auth.getSession()
@@ -182,7 +183,7 @@ export default function InvoicesPage() {
       // join, so serializing all 15k on every fetch (incl. each realtime tick) would blow
       // the sessionStorage quota and block the main thread. First screen paints instantly;
       // the full list follows from the query above.
-      writeCache('invoices-list', iRes.rows.slice(0, 60))
+      writeCache('invoices-list', iRes.rows.slice(0, 60), { lease })
       setSettings(sRes.data as BusinessSettings | null)
       setCardCustomers(new Set(((pmRes.data as { customer_id: string }[] | null) || []).map(r => r.customer_id)))
       const credit: Record<string, number> = {}
