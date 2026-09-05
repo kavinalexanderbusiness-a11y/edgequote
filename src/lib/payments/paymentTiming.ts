@@ -229,10 +229,13 @@ export function quoteTimingLine(t: PaymentTiming): string {
   // requirement itself — inventing a percentage for it would be arithmetic
   // nobody wrote.
   const rule = t.depositPercent != null ? `A ${t.depositPercent}% deposit` : 'A deposit'
+  // ⭐ Three parts, and no fourth: the RULE, the one fact that is known, and ONE
+  // next step. "…so the amount previously agreed no longer applies" was a third
+  // clause restating the second, and a customer reading a deposit notice is
+  // owed brevity as much as accuracy.
   if (t.basisUnsettledReason === 'superseded_acceptance') {
     return `${rule} is required before we schedule your visit. `
-      + 'This quote has been revised since it was accepted, so the amount previously agreed no longer applies — '
-      + 'we’ll confirm the deposit on the updated quote before anything is due.'
+      + 'This quote has been revised since you accepted it, so we’ll agree the amount with you before anything is due.'
   }
   // ⛔⛔ SAY ONLY WHAT IS KNOWN. Both states withhold the figure, and it would be
   // easy to reuse the sentence above — an independent review caught exactly that:
@@ -245,8 +248,7 @@ export function quoteTimingLine(t: PaymentTiming): string {
   // confirmed — and that nothing is due until it has been.
   if (t.basisUnsettledReason === 'unverified_acceptance') {
     return `${rule} is required before we schedule your visit. `
-      + 'We’re confirming the acceptance we have on file for this quote, so we can’t state the amount here yet — '
-      + 'we’ll confirm it with you before anything is due.'
+      + 'The acceptance on file for this quote is still being confirmed, so we’ll agree the amount with you before anything is due.'
   }
   const ask = t.depositAmount == null
     ? `A ${t.depositPercent}% deposit of the option you choose`

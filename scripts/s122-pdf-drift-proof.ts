@@ -103,7 +103,7 @@ async function main() {
     check('the page prints the CURRENT total $500.00', /Quote Total \$500\.00/.test(t))
     check('…and a deposit derived from the SUPERSEDED $1,400', /50% deposit \(\$700\.00\)/.test(t))
     check('⛔ with nothing on the page reconciling them',
-      !/revised since it was accepted/i.test(t))
+      !/revised since you accepted it/i.test(t))
   }
 
   console.log('\n■ 2. AFTER — the rule kept, the figure withheld')
@@ -115,9 +115,9 @@ async function main() {
       're-deriving from the current total would put a demand on paper nobody agreed to')
     check('the RULE survives — the percentage is still stated', /50% deposit is required/.test(t))
     check('⭐ and the document says WHY the amount is missing',
-      /revised since it was accepted, so the amount previously agreed no longer applies/i.test(t))
+      /revised since you accepted it/i.test(t))
     check('…and that a figure is coming, not that the deposit is waived',
-      /confirm the deposit on the updated quote/i.test(t))
+      /agree the amount with you before anything is due/i.test(t))
     check('⛔ no historical line item was invented — the scope table is the current one',
       /Landscaping/.test(t) && !/1,400/.test(t))
   }
@@ -128,7 +128,7 @@ async function main() {
     const current = { ...drifted, accepted_price: 500 } as Quote
     const t = await text('CONTROL-current-acceptance', current, { acceptanceCurrentness: 'current' })
     check('an acceptance that still matches prints its figure', /50% deposit \(\$250\.00\)/.test(t))
-    check('…and says nothing about a revision', !/revised since it was accepted/i.test(t))
+    check('…and says nothing about a revision', !/revised since you accepted it/i.test(t))
 
     // An un-accepted quote never had an authority to supersede.
     const sent = { ...drifted, status: 'sent', accepted_price: null } as Quote
@@ -146,7 +146,7 @@ async function main() {
     check('⭐ a FIXED deposit ALSO drops its figure under drift', !/\$700\.00/.test(t3), t3.slice(0, 300))
     check('…and says a deposit is required without inventing a percentage',
       /A deposit is required before we schedule your visit/.test(t3) && !/%/.test(t3))
-    check('…and still explains the revision', /previously agreed no longer applies/.test(t3))
+    check('…and still explains the revision', /revised since you accepted it/.test(t3))
     const fixedOk = await text('CONTROL-fixed-rule-current', fixed, { acceptanceCurrentness: 'current' })
     check('…while an un-drifted fixed rule still states its dollars', /\$700\.00 deposit/.test(fixedOk))
   }
@@ -181,7 +181,7 @@ async function main() {
     // "not superseded" here and printed the figure anyway.
     const sameTotalDrift = line({ acceptance_is_current: false })
     check('same-total drift IS caught — the figure is dropped',
-      !/\$250\.00/.test(sameTotalDrift) && /previously agreed no longer applies/.test(sameTotalDrift),
+      !/\$250\.00/.test(sameTotalDrift) && /revised since you accepted it/.test(sameTotalDrift),
       sameTotalDrift)
     const current = line({ acceptance_is_current: true })
     check('…while a current acceptance still prints its figure',
@@ -214,10 +214,10 @@ async function main() {
     check('⭐ OLD-C · a usable snapshot with UNKNOWN currentness withholds the figure',
       !/\$700\.00/.test(oldC), oldC)
     check('⛔ OLD-C · …and does NOT claim the quote was revised',
-      !/revised since it was accepted/.test(oldC) && !/previously agreed no longer applies/.test(oldC), oldC)
+      !/revised since you accepted it/.test(oldC) && !/revised since you accepted it/.test(oldC), oldC)
     check('⭐ OLD-C · …it says the acceptance is being confirmed',
-      /confirming the acceptance we have on file/.test(oldC)
-      && /confirm it with you before anything is due/.test(oldC), oldC)
+      /acceptance on file for this quote is still being confirmed/.test(oldC)
+      && /agree the amount with you before anything is due/.test(oldC), oldC)
     check('…and keeps the RULE, which the revision never touched', /50% deposit is required/.test(oldC))
     const oldCNull = line({ acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 })
     check('⭐ OLD-C · a NULL currentness behaves identically to a missing one',
@@ -227,10 +227,10 @@ async function main() {
     // has collapsed back into one.
     const knownStale = line({ acceptance_kind: 'customer', acceptance_is_current: false, accepted_price: 1400 })
     check('⭐ KNOWN-STALE · keeps the accurate revised wording',
-      /revised since it was accepted/.test(knownStale)
-      && /previously agreed no longer applies/.test(knownStale), knownStale)
+      /revised since you accepted it/.test(knownStale)
+      && /revised since you accepted it/.test(knownStale), knownStale)
     check('⛔ …and the two sentences are genuinely different',
-      knownStale !== oldC && !/confirming the acceptance we have on file/.test(knownStale))
+      knownStale !== oldC && !/acceptance on file for this quote is still being confirmed/.test(knownStale))
     const v2true = line({ acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 })
     check('v2 · an explicitly CURRENT acceptance still prints its authoritative figure',
       /\$700\.00/.test(v2true), v2true)
@@ -281,22 +281,22 @@ async function main() {
       !/700/.test(oldCDoc), oldCDoc.slice(0, 300))
     check('…it still shows the current $500.00 total', /Quote Total \$500\.00/.test(oldCDoc))
     check('⛔ REAL PDF · …and the paper does NOT claim the quote was revised',
-      !/revised since it was accepted/.test(oldCDoc) && !/previously agreed no longer applies/.test(oldCDoc),
+      !/revised since you accepted it/.test(oldCDoc) && !/revised since you accepted it/.test(oldCDoc),
       oldCDoc.slice(0, 300))
     check('⭐ REAL PDF · …it says the acceptance is being confirmed',
-      /confirming the acceptance we have on file/.test(oldCDoc))
+      /acceptance on file for this quote is still being confirmed/.test(oldCDoc))
     const oldCNullDoc = await realDoc('OLDC-currentness-null', { acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 })
     check('⭐ REAL PDF · a NULL currentness document behaves identically',
-      !/700/.test(oldCNullDoc) && /confirming the acceptance we have on file/.test(oldCNullDoc)
-      && !/revised since it was accepted/.test(oldCNullDoc))
+      !/700/.test(oldCNullDoc) && /acceptance on file for this quote is still being confirmed/.test(oldCNullDoc)
+      && !/revised since you accepted it/.test(oldCNullDoc))
     // ⛔ THE CONTROL, as a document: known-stale must still say the accurate thing
     // on paper. Two PDFs, two sentences — if they ever converge the split is gone.
     const staleDoc = await realDoc('KNOWN-STALE-current-false', { acceptance_kind: 'customer', acceptance_is_current: false, accepted_price: 1400 })
     check('⭐ REAL PDF · known-stale keeps the revised wording',
-      /revised since it was accepted/.test(staleDoc) && /previously agreed no longer applies/.test(staleDoc),
+      /revised since you accepted it/.test(staleDoc) && /revised since you accepted it/.test(staleDoc),
       staleDoc.slice(0, 300))
     check('⛔ REAL PDF · …and never borrows the confirmation sentence',
-      !/confirming the acceptance we have on file/.test(staleDoc))
+      !/acceptance on file for this quote is still being confirmed/.test(staleDoc))
     check('⛔ REAL PDF · neither document names a dollar deposit',
       !/700/.test(staleDoc) && !/\$250\.00/.test(staleDoc) && !/\$250\.00/.test(oldCDoc))
     const v2Doc = await realDoc('V2-current-true', { acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 })

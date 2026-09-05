@@ -294,7 +294,7 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
   // ⛔ The document must not be able to say "revised" off its own bat: the
   // wording lives in the copy engine and is chosen by the caller's state.
   check('⛔ …and the document holds no revision wording of its own',
-    !/revised since it was accepted|previously agreed no longer applies|confirming the acceptance/.test(pdf))
+    !/revised since you accepted it|revised since you accepted it|acceptance on file for this quote is still being confirmed/.test(pdf))
   check('Quote PDF contains no payment arithmetic (the deposit-documents rule)',
     !/deposit_value\s*[/*]|\*\s*0?\.\d/.test(pdf))
   // Ours is the statement of record; the owner's free text sits BELOW it.

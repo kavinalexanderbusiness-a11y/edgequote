@@ -351,7 +351,7 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
     + 'rule and drops the figure',
     !/\$700\.00/.test(drifted.paymentTimingLine ?? '')
     && /50% deposit is required/.test(drifted.paymentTimingLine ?? '')
-    && /previously agreed no longer applies/.test(drifted.paymentTimingLine ?? ''),
+    && /revised since you accepted it/.test(drifted.paymentTimingLine ?? ''),
     drifted.paymentTimingLine)
   check('⛔ …and does NOT substitute a figure from the current total instead',
     !/\$250\.00/.test(drifted.paymentTimingLine ?? ''), drifted.paymentTimingLine)
@@ -359,7 +359,7 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
   const sameTotal = row({ acceptance_kind: 'customer', accepted_price: 500, acceptance_is_current: false })
   check('⭐ same-total drift is caught too — the figure is dropped',
     !/\$250\.00/.test(sameTotal.paymentTimingLine ?? '')
-    && /previously agreed no longer applies/.test(sameTotal.paymentTimingLine ?? ''),
+    && /revised since you accepted it/.test(sameTotal.paymentTimingLine ?? ''),
     sameTotal.paymentTimingLine)
   {
     // Read locally — §4's `model` is out of scope here, and a guard that reaches
