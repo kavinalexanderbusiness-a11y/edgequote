@@ -153,6 +153,20 @@ export default function DispatchPage() {
   const [date, setDate] = useState<string>(todayISO)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // ⭐ WHICH DAY the day-scoped state below (jobs, dayRow, notes) belongs to. Set
+  // only by a successful read. `date` is the picker: the two differ after a date
+  // change until that day's read lands — and stay different if it fails.
+  const [loadedDate, setLoadedDate] = useState<string | null>(null)
+  // ⛔ A FAILED LOAD FOR THE SELECTED DAY MUST NOT PRESENT ANOTHER DAY AS IT.
+  // Every read is scoped by `date` on the server, but the state is not: after a
+  // date change whose read failed, `jobs`/`dayRow`/`notes` are still the
+  // previous day's, and were rendered under the new date — yesterday's visits,
+  // a blocked-day banner for a day that is not blocked, and day-wide actions
+  // (balance, print, bulk) running over the wrong day. While `staleDay` is
+  // true the day-scoped content is not shown and those actions are refused.
+  // A same-day refresh that failed keeps the board — it IS this day — with the
+  // banner saying it may be out of date.
+  const staleDay = loadError !== null && loadedDate !== date
   const [jobs, setJobs] = useState<Job[]>([])
   const [crews, setCrews] = useState<Crew[]>([])
   const [technicians, setTechnicians] = useState<Technician[]>([])
@@ -262,6 +276,9 @@ export default function DispatchPage() {
         dailyHours: Number(s?.daily_capacity_hours) > 0 ? Number(s?.daily_capacity_hours) : 8,
       })
       setNotes(nRes)
+      // The board below is now this day's. (`date` here is the closure's — the
+      // day this read was for — and the gate above proved it is still selected.)
+      setLoadedDate(date)
     } catch (e) {
       if (!gate.current.isCurrent(token)) return
       setLoadError(e instanceof Error ? e.message : 'Could not load the day.')
@@ -293,7 +310,9 @@ export default function DispatchPage() {
   // located (and written back to its property by the shared helper), then the
   // local jobs pick up the coords so routes/ETAs/map sharpen in place.
   useEffect(() => {
-    if (loading || geocodedFor.current === date) return
+    // Not while the jobs on hand are another day's: geocoding them would also
+    // mark THIS date as done and skip it once it really loads.
+    if (loading || staleDay || geocodedFor.current === date) return
     const missing = jobs.filter(j => j.status !== 'cancelled' && j.properties?.address && (j.properties?.lat == null || j.properties?.lng == null))
     if (missing.length === 0) { geocodedFor.current = date; return }
     geocodedFor.current = date
@@ -308,7 +327,7 @@ export default function DispatchPage() {
           : j
       }))
     })
-  }, [loading, jobs, date, supabase])
+  }, [loading, staleDay, jobs, date, supabase])
 
   // ── Lanes + per-lane routes (pure derivations of the shared engines) ──
   const lanes = useMemo(() => partitionByCrew(jobs, crews, technicians), [jobs, crews, technicians])
@@ -856,18 +875,24 @@ export default function DispatchPage() {
     }
   }, [lanes, laneRoutes, technicians, equipment, notes, date])
 
+  // Both build from `lanes` and stamp the sheet with `date`: on a day that did
+  // not load they would print or export ANOTHER day's visits under this date.
+  // Reachable past the hidden board via the keyboard ('p') and the command
+  // palette, so the refusal lives here, not only on the buttons.
   const printDay = useCallback(() => {
+    if (staleDay) { notify.error('This day has not loaded — retry, then print.'); return }
     const sheet = buildSheet()
     if (sheet.lanes.length === 0) { notify('Nothing scheduled to print.'); return }
     if (!openPrintSheet(sheet)) notify.error('The print window was blocked — allow pop-ups for this site.')
-  }, [buildSheet])
+  }, [buildSheet, staleDay])
 
   const exportDayCsv = useCallback((onlyIds?: Set<string>) => {
+    if (staleDay) { notify.error('This day has not loaded — retry, then export.'); return }
     const sheet = buildSheet(onlyIds)
     const rows = sheetCsvRows(sheet)
     if (rows.length === 0) { notify('Nothing to export.'); return }
     exportRowsToCsv(`dispatch-${date}`, rows, SHEET_CSV_COLUMNS)
-  }, [buildSheet, date])
+  }, [buildSheet, date, staleDay])
 
   // ── Cross-lane drag (pointer events — the Calendar's touch-safe engine) ──
   // The ghost follows the pointer via a direct style write on an always-mounted
@@ -1493,7 +1518,7 @@ export default function DispatchPage() {
 
       <PageHeader
         title="Dispatch"
-        description={`${dateLabel} · ${activeJobs.length} visit${activeJobs.length !== 1 ? 's' : ''}`}
+        description={staleDay ? `${dateLabel} · not loaded` : `${dateLabel} · ${activeJobs.length} visit${activeJobs.length !== 1 ? 's' : ''}`}
         action={
           <div className="flex items-center gap-2">
             <Link href="/dashboard/dispatch/time">
@@ -1510,7 +1535,10 @@ export default function DispatchPage() {
 
       {loadError && (
         <Banner tone="danger" action={<Button size="sm" variant="secondary" onClick={() => { setLoading(true); fetchAll() }}>Retry</Button>}>
-          {loadError}
+          {loadError}{' '}
+          {staleDay
+            ? `${dateLabel} is not shown until it loads${loadedDate ? ` — the last day that loaded was ${format(parseISO(loadedDate + 'T00:00:00'), 'EEEE, MMM d')}` : ''}.`
+            : `Showing the last loaded board for ${dateLabel} — it may be out of date.`}
         </Banner>
       )}
 
@@ -1520,7 +1548,7 @@ export default function DispatchPage() {
           now IS the door: select everything still standing, open the same
           dialog. Deliberately clobbers any in-progress selection — on a blocked
           day, moving the day is the task. */}
-      {dayRow?.blocks && (
+      {!staleDay && dayRow?.blocks && (
         <Banner tone="warn"
           action={activeJobs.some(j => j.status === 'scheduled') ? (
             <Button size="sm" variant="secondary"
@@ -1572,15 +1600,16 @@ export default function DispatchPage() {
               </Button>
             )}
           </Menu>
-          <Button variant="secondary" size="sm" onClick={openBalance} disabled={activeCrewCount < 1 || activeJobs.length === 0}
-            title="Even out the day's booked minutes across crews">
+          <Button variant="secondary" size="sm" onClick={openBalance} disabled={staleDay || activeCrewCount < 1 || activeJobs.length === 0}
+            title={staleDay ? 'This day has not loaded' : "Even out the day's booked minutes across crews"}>
             <Scale className="w-3.5 h-3.5" /> Balance
           </Button>
         </div>
       </div>
 
-      {/* Day pulse — every number an aggregate of what the lanes already computed */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 animate-rise">
+      {/* Day pulse — every number an aggregate of what the lanes already computed.
+          Not for a day that did not load: these would be another day's numbers. */}
+      {!staleDay && <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 animate-rise">
         <StatTile label="Visits" value={kpis.total} icon={Radio}
           sub={kpis.done > 0 || kpis.running > 0
             ? `${kpis.done} done${kpis.running > 0 ? ` · ${kpis.running} running` : ''}`
@@ -1598,18 +1627,24 @@ export default function DispatchPage() {
           sub={settings.base
             ? (kpis.driveSharePct != null ? `${kpis.driveSharePct}% of the day · straight-line est.` : 'all crews, straight-line est.')
             : 'Set a base address in Settings'} />
-      </div>
+      </div>}
 
-      {activeCrewCount === 0 && activeJobs.length > 0 && (
+      {!staleDay && activeCrewCount === 0 && activeJobs.length > 0 && (
         <Banner tone="accent" icon={Users}
           action={<Button size="sm" onClick={() => setManagerOpen(true)}>Create a crew</Button>}>
           The whole day is one route today. Create crews to dispatch it across teams.
         </Banner>
       )}
 
-      <ConflictPanel conflicts={panelConflicts} onJump={jumpTo} fixFor={conflictFix} />
+      {!staleDay && <ConflictPanel conflicts={panelConflicts} onJump={jumpTo} fixFor={conflictFix} />}
 
-      {view === 'map' ? (
+      {staleDay ? (
+        // Nothing day-scoped renders for a day that did not load — not the map,
+        // not the lanes, not the notes — so nothing can be read as, or written
+        // against, that day. Retry is on the banner above; the date controls stay.
+        <EmptyState icon={Radio} title={`${dateLabel} has not loaded`}
+          description="Retry above, or pick another day. Nothing here is that day's plan until it loads." />
+      ) : view === 'map' ? (
         <div className="animate-rise">
           <DispatchMap base={settings.base} lanes={mapLanes} height={560} onSelectStop={mapSelectStop} />
           {!settings.base && (
