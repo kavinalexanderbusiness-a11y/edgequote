@@ -25,13 +25,14 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
-  assessEvidence, declaredCadence, robustPerVisit, looksLikeFixture, priceEvidence,
+  assessEvidence, declaredCadence, robustPerVisit, looksLikeFixture, exclusionForPriceState,
   median, quantile, skewNote, annualize, evidenceSummary, insufficientReason,
   mayShowAnnual, mayShowPerVisit, INSUFFICIENT_LABEL, EXCLUSION_COPY,
   MIN_VISITS_FOR_VALUE, MIN_VISITS_FOR_CONFIDENT,
   type Evidence,
 } from '../src/lib/growthEvidence'
 import { computeRevenueIntel } from '../src/lib/revenueIntelligence'
+import { jobPriceState, jobAmountOrNull, type PriceState } from '../src/lib/pricingState'
 import { SEASON_VISITS } from '../src/lib/pricing'
 import { DEFAULT_SEASONS } from '../src/lib/seasons'
 
@@ -58,23 +59,80 @@ const SRC = {
 const CODE = Object.fromEntries(Object.entries(SRC).map(([k, v]) => [k, strip(v)])) as Record<keyof typeof SRC, string>
 
 const vps = (c: 'weekly' | 'biweekly' | 'monthly') => SEASON_VISITS[c]
+
+/**
+ * One candidate record, in the shape the gate now takes: a CANONICAL verdict
+ * from lib/pricingState plus the amount it resolved to.
+ *   n > 0  → priced
+ *   n = 0  → no_charge (the owner declared it free)
+ *   null   → unpriced (nobody recorded anything)
+ * ⭐ §1 below proves this mapping against the REAL jobPriceState rather than
+ * trusting it, so the fixtures cannot drift away from the engine they stand in for.
+ */
 const visit = (v: number | null, extra: Partial<{ completed: boolean; labels: (string | null | undefined)[] }> = {}) => ({
-  rawPrice: v, derivedValue: v == null ? 0 : v, completed: true, ...extra,
+  priceState: (v == null ? 'unpriced' : v > 0 ? 'priced' : 'no_charge') as PriceState,
+  amount: v,
+  completed: true, ...extra,
 })
 
-console.log('\n── 1. ⭐⭐ UNPRICED ≠ $0 ≠ A PRICE ──')
+console.log('\n── 1. ⭐⭐ UNPRICED ≠ NO-CHARGE ≠ A PRICE ──')
 {
-  eq('a null price is UNPRICED', priceEvidence(null, 0), 'unpriced')
-  eq('an owner-entered 0 is a ZERO PRICE, a different fact', priceEvidence(0, 0), 'zero_price')
-  eq('a real price is admissible', priceEvidence(70, 70), 'ok')
-  // The bug in lib/visitValue this gate exists to contain: it returns 0 for an
-  // unknown, making a gap in the record indistinguishable from free work.
-  eq('a job with no price but a derived value is admissible', priceEvidence(null, 70), 'ok')
+  // ⭐⭐ ONE ENGINE. growthEvidence no longer decides this — lib/pricingState
+  // does, and these assertions run the REAL jobPriceState so the gate and the
+  // rest of the product cannot answer "is this priced?" differently.
+  const declaredFree = { price: null, no_charge_at: '2026-08-01T00:00:00Z', no_charge_reason: 'Goodwill — storm damage', no_charge_by: 'owner-uuid' }
+  eq('a declared no-charge is NO_CHARGE, not unpriced', jobPriceState(declaredFree, null, null), 'no_charge')
+  eq('…and resolves to a KNOWN zero, not an unknown', jobAmountOrNull(declaredFree, null, null), 0)
+  eq('a job with nothing recorded is UNPRICED', jobPriceState({ price: null }, null, null), 'unpriced')
+  eq('…and its amount is UNKNOWN, never 0', jobAmountOrNull({ price: null }, null, null), null)
+  eq('a real price is PRICED', jobPriceState({ price: 70 }, null, null), 'priced')
+
+  // ⛔ The half-declared row the CHECK constraint refuses: a date with no reason
+  // is not an accountable write-off, so it must NOT read as free work.
+  eq('a half-declared no-charge is not a no-charge',
+    jobPriceState({ price: null, no_charge_at: '2026-08-01T00:00:00Z' }, null, null), 'unpriced')
+
+  // The gate maps those verdicts to owner-facing exclusion reasons, and refuses
+  // to invent a third opinion about prices.
+  eq('no_charge is excluded, and named as such', exclusionForPriceState('no_charge'), 'no_charge')
+  eq('unpriced is excluded, and named as such', exclusionForPriceState('unpriced'), 'unpriced')
+  eq('priced is not an exclusion at all', exclusionForPriceState('priced'), null)
+  check('growthEvidence no longer decides price state itself',
+    !/function priceEvidence/.test(CODE.evidence) && !/zero_price/.test(CODE.evidence),
+    'the seam is closed: lib/pricingState owns this question')
+  check('and the engine feeds it the canonical verdict',
+    /jobPriceState\(/.test(CODE.engine) && /jobAmountOrNull\(/.test(CODE.engine), '')
+  // ⭐⭐ THE COLUMNS MUST ACTUALLY BE SELECTED. Without them `isNoCharge()` is
+  // always false, every declared write-off silently reads as "no price
+  // recorded", and nothing fails — the distinction just quietly stops existing.
+  // Mutation testing caught this: deleting them from the query broke nothing.
+  for (const col of ['no_charge_at', 'no_charge_reason', 'no_charge_by']) {
+    check(`the jobs query selects ${col}`,
+      new RegExp(`from\\('jobs'\\)[\\s\\S]{0,400}${col}`).test(CODE.engine),
+      'a column that is never selected cannot be reasoned about')
+  }
+
+  // ⛔ AN INCONSISTENT INPUT MUST NOT BECOME A ZERO IN THE SAMPLE.
+  // `priced` with a null amount should be impossible, but "impossible" is what a
+  // future caller bug looks like from in here — and `Number(null) || 0` is one
+  // keystroke away. Asserted with the malformed record the belt-and-braces
+  // clause exists for, so the clause is reachable rather than decorative.
+  const malformed = assessEvidence({
+    visits: [visit(70), visit(70), visit(70), { priceState: 'priced' as PriceState, amount: null, completed: true }],
+    declaredFreq: 'weekly', visitsPerSeason: vps,
+  })
+  eq('a priced record with no amount is excluded, not counted as $0', malformed.sampleSize, 3)
+  eq('…and reported as unpriced, which is what it actually is',
+    malformed.excluded.find(x => x.reason === 'unpriced')?.count, 1)
+  eq('so the statistic is untouched by it', malformed.perVisit, 70)
 
   const e = assessEvidence({ visits: [visit(70), visit(80), visit(90), visit(null), visit(0)], declaredFreq: 'weekly', visitsPerSeason: vps })
-  eq('unpriced and $0 visits are BOTH excluded from the statistic', e.sampleSize, 3)
+  eq('unpriced and no-charge visits are BOTH excluded from the statistic', e.sampleSize, 3)
   const reasons = e.excluded.map(x => x.reason).sort()
-  eq('and both are reported, separately', reasons, ['unpriced', 'zero_price'])
+  // ⭐ Separately, and by their REAL names. Both earn nothing, but one is a gap
+  // in the record and the other is the owner's accountable decision.
+  eq('and both are reported, separately', reasons, ['no_charge', 'unpriced'])
+  eq('the no-charge exclusion credits the paperwork', EXCLUSION_COPY.no_charge, 'recorded as no charge')
   check('the median is taken over the priced visits only', e.perVisit === 80, String(e.perVisit))
   // ⭐ The failure this prevents: 5 visits, 2 of them valueless → a mean of
   // $240/5 = $48, which is BELOW every price the customer has ever paid.
@@ -199,17 +257,66 @@ console.log('\n── 4. ⭐⭐ NO SINGLE VISIT MAY DOMINATE ──')
 
 console.log('\n── 5. Fixture / test records are refused — and narrowly ──')
 {
+  // ⭐⭐ RE-EXPRESSED (Session 114) — this section now describes ONE classifier.
+  // `looksLikeFixture` used to keep its own marker list; it now delegates to
+  // lib/fixtureData, and two of the assertions here were encoding the very
+  // over-breadth that made converging necessary. Both are inverted below, with
+  // the reason, rather than deleted:
+  //
+  //   'S61 Field Home'      was asserted CAUGHT by /^s\d{2,3}\s/. That pattern
+  //                         cannot tell it from "S61 Roofing Ltd" — and measured
+  //                         across the whole repo, "S61 Field Home" is written by
+  //                         NO harness. It appeared only in this assertion. It is
+  //                         the name of the S61 FEATURE, not of a fixture row, so
+  //                         catching it was always wrong and nothing real is lost.
+  //
+  //   'Test Customer Record' was asserted CAUGHT by a (test|demo|sample)+(data|
+  //                         record|…) pair. That is Tier 2 in the canonical rule:
+  //                         test-LOOKING data is flagged for a human, never acted
+  //                         on. "Demo Farms" and "Soil Testing" are real money.
   check('an explicit fixture marker is caught', looksLikeFixture('ZZ S111 Fixture A'), '')
   check('a delete-me marker is caught', looksLikeFixture('S61 FIELD FIXTURE — DELETE ME'), '')
-  check('a session-numbered artefact is caught', looksLikeFixture('S61 Field Home'), '')
-  check('"test data" is caught', looksLikeFixture('Test Customer Record'), '')
-  check('an example.com address is caught', looksLikeFixture('bob@example.com'), '')
+  // ⚠️⚠️ RE-MEASURED (Session 114 follow-up audit). This asserted
+  // 'S61-FIXTURE CREW' (no zz- prefix) as the "harness-joined token". Re-checked
+  // against the actual harness: scripts/s61-field-cdp.mjs and s61-field-proof.mjs
+  // NEVER write a bare "S61-FIXTURE" — every row they name is "ZZ-S61-FIXTURE",
+  // with the zz- prefix. The bare form was fictional, and the rule built to catch
+  // it (a bare `s\d+-fixture` shape) was over-broad enough to classify a
+  // plausible real business ("S61-Fixture Installations Inc"). The shape is
+  // removed from lib/fixtureData; this now asserts the string a harness actually
+  // writes, which is ALSO already caught by the pre-existing 'zz-' prefix alone.
+  check('a harness-joined token is caught', looksLikeFixture('ZZ-S61-FIXTURE CREW'), '')
+  // ⭐ COVERAGE THIS FILE'S OLD RULE DID NOT HAVE. Growth had no VERIFY- rule, so
+  // guard fixtures tagged that way were counted as real money by the one report
+  // built to exclude them. Converging fixed a narrowness, not only a breadth.
+  check('a VERIFY- guard fixture is caught (it was NOT, before convergence)',
+    looksLikeFixture('VERIFY-ADDONS-3391'), '')
+  check('a reserved documentation address is caught', looksLikeFixture('bob@example.com'), '')
   // ⛔⛔ AND THE OTHER HALF, WHICH MATTERS AS MUCH: excluding a REAL customer's
   // revenue is as much a trust failure as including a fixture's.
   check('a real business with "Test" in its name is NOT excluded', !looksLikeFixture('Test Valley Landscaping'), '')
   check('a real surname is NOT excluded', !looksLikeFixture('Sample & Sons Roofing'), '')
   check('an ordinary name is NOT excluded', !looksLikeFixture('Edge Property Services'), '')
   check('an empty label is not a fixture', !looksLikeFixture(null, undefined, ''), '')
+  // ⛔ The four names the convergence was ordered to protect.
+  check('an electrician\'s real service is NOT excluded', !looksLikeFixture('Light Fixture Installation'), '')
+  check('a roofer named for a session number is NOT excluded', !looksLikeFixture('S61 Roofing Ltd'), '')
+  check('a customer called Demo Farms is NOT excluded', !looksLikeFixture('Demo Farms'), '')
+  check('a ZZ-prefixed real business is NOT excluded', !looksLikeFixture('ZZ Top Tribute Band Venue Clean'), '')
+  // ⛔⛔ FOUND BY THE FOLLOW-UP AUDIT (Session 114): the zz-shape rule used to
+  // check `n.includes('fixture')` — anywhere in the WHOLE string — not just
+  // beside the zz-token. A zz-branded electrical/lighting retailer (picking a
+  // name starting with a letter early in the alphabet for directory listing is
+  // a real small-business practice) would have had its real revenue silently
+  // excluded. Tightened to require "fixture" beside the zz-token specifically;
+  // these four must all survive.
+  check('a zz-branded lighting retailer is NOT excluded', !looksLikeFixture('ZZ Lighting Fixture Supply'), '')
+  check('a zz-branded electrical supplier is NOT excluded', !looksLikeFixture('ZZ Electric Fixture & Supply Co'), '')
+  check('a zz-branded fixture emporium is NOT excluded', !looksLikeFixture('ZZ Home Fixture Emporium'), '')
+  check('a zz-branded fixture design shop is NOT excluded', !looksLikeFixture('ZZ Modern Fixtures & Design'), '')
+  // ⛔ And the bare-S## direction: a plausible store/unit-numbered retailer.
+  check('a unit-numbered fixture retailer is NOT excluded', !looksLikeFixture('S7-Fixture Gallery'), '')
+  check('a store-numbered fixture supplier is NOT excluded', !looksLikeFixture('S24-Fixture Supply'), '')
 
   const e = assessEvidence({
     visits: [visit(70), visit(70), visit(70), visit(9000, { labels: ['ZZ S111 Fixture A', 'Snow'] })],
@@ -272,7 +379,7 @@ console.log('\n── 7. ⭐ THE TRANSPARENCY CONTRACT ──')
   check('…names the statistic rather than assuming "average"', /median visit value/.test(s), s)
   check('…shows the annualization formula in full', /\$70 × 14 bi-weekly visits/.test(s), s)
   check('…and discloses every exclusion with its reason',
-    /2 excluded/.test(s) && /no price recorded/.test(s) && /priced at \$0/.test(s), s)
+    /2 excluded/.test(s) && /no price recorded/.test(s) && /recorded as no charge/.test(s), s)
   eq('the cadence assumption is machine-readable too', e.annualization?.visitsPerSeason, SEASON_VISITS.biweekly)
 
   // No fake precision: the formula must be the actual numbers used.
