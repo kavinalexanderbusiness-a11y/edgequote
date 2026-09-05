@@ -701,20 +701,35 @@ function addDaysISO(iso: string, n: number): string {
 export type FeedbackStatus = 'acted' | 'dismissed' | 'won' | 'lost'
 export interface FeedbackRow { opportunity_key: string; kind: string; status: string; expected_value: number | null; result_value: number | null }
 
+/** A save either happened, or it did not, or nobody can tell yet. */
+export type SaveOutcome = { ok: true } | { ok: false; definite: boolean; error: string }
+
 export async function recordRecommendation(
   supabase: SupabaseClient,
   o: { key: string; kind: OppKind; customerId: string; expectedValue: number },
   status: FeedbackStatus,
   resultValue?: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<SaveOutcome> {
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'Not signed in' }
-  const { error } = await supabase.from('revenue_recommendations').upsert({
+  // Nothing has been sent yet, so this one really is definite.
+  if (!user) return { ok: false, definite: true, error: 'Not signed in' }
+  // ⚠️ `status` is already this function's FeedbackStatus parameter — the HTTP
+  // status must be renamed or the check below silently tests the wrong value.
+  const { error, status: httpStatus } = await supabase.from('revenue_recommendations').upsert({
     user_id: user.id, opportunity_key: o.key, kind: o.kind, customer_id: o.customerId,
     expected_value: o.expectedValue, status, result_value: resultValue ?? null,
     acted_at: new Date().toISOString(),
   }, { onConflict: 'user_id,opportunity_key' })
-  return error ? { ok: false, error: error.message } : { ok: true }
+  if (!error) return { ok: true }
+  // ⛔ AN ERROR OBJECT IS NOT PROOF THE SERVER REFUSED. postgrest-js resolves a
+  // failed request instead of throwing, and its constructed error carries
+  // `status: 0, statusText: ''` because no response was ever received; a real
+  // refusal comes back through processResponse with the actual HTTP status. So
+  // the status — not the presence of `code`, which is '' on both paths — is what
+  // says whether the server answered. Anything we cannot place is `definite:
+  // false`, because an unknown outcome is truthful and a guessed one is not.
+  const answered = typeof httpStatus === 'number' && httpStatus >= 400
+  return { ok: false, definite: answered, error: error.message }
 }
 
 /**

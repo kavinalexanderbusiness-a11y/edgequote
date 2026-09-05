@@ -44,14 +44,15 @@ export default function RevenueIntelligencePage() {
   // page only lends it React state through these callbacks, so the handler the
   // page runs is the one verify:growth-actions drives offline.
   const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(new Set())
-  const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
+  // Keyed by opportunity: an unresolved failure on one card must survive a tap on another.
+  const [actionNotices, setActionNotices] = useState<Record<string, ActionNotice>>({})
   const controllerRef = useRef<ReturnType<typeof createActionController> | null>(null)
   const controller = () => (controllerRef.current ??= createActionController({
     record: (o, status, value) => recordRecommendation(supabase, o, status, value),
     read: key => readRecommendation(supabase, key),
     setRow: (key, row) => setFeedback(prev => withRow(prev, key, row)),
     setBusy: setBusyKeys,
-    setNotice: setActionNotice,
+    setNotice: (key, n) => setActionNotices(prev => withRow(prev, key, n ?? undefined)),
   }))
   const [showForecast, setShowForecast] = useState(false)
   // ⭐ A refresh that fails must SAY so. loadRevenueIntel returns null when any
@@ -65,6 +66,9 @@ export default function RevenueIntelligencePage() {
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
 
   async function load() {
+    // Captured BEFORE the read: anything confirmed after this is newer than the
+    // answer coming back, and must not be overwritten by it.
+    const since = controller().beginRefresh()
     setLoading(true)
     setRefreshError(null)
     try {
@@ -73,7 +77,7 @@ export default function RevenueIntelligencePage() {
         setReport(res.report); setFeedback(res.feedback); setLoadedAt(Date.now()); writeCache('revintel', res.report)
         // The server's feedback is the confirmed baseline for every card; cards
         // with a save in flight keep their optimistic badge until it settles.
-        controller().onRefreshed(res.feedback)
+        controller().onRefreshed(res.feedback, since)
       }
       else setRefreshError('Could not refresh')
     } catch {
@@ -240,12 +244,12 @@ export default function RevenueIntelligencePage() {
       {/* A save the server refused, or one whose answer the wire lost, is said
           once here, above the cards it concerns. An unconfirmed one is not
           declared failed: the owner is pointed at a refresh, not at a repeat. */}
-      {actionNotice && (
-        <p role="alert" className="text-xs text-amber-400">
-          {actionNotice.text}
-          {actionNotice.tone === 'unconfirmed' && <>{' '}<button type="button" onClick={load} disabled={loading} className="underline font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">Refresh now</button></>}
+      {Object.values(actionNotices).map(n => (
+        <p key={n.key} role="alert" className="text-xs text-amber-400">
+          {n.text}
+          {n.tone === 'unconfirmed' && <>{' '}<button type="button" onClick={load} disabled={loading} className="underline font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">Refresh now</button></>}
         </p>
-      )}
+      ))}
       <div className="space-y-2.5">
         {inFilter.length === 0 ? (
           <EmptyState icon={Sparkles} className="py-12" title="No opportunities in this view yet"

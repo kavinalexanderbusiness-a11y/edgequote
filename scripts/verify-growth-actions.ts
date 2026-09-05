@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createActionController, withRow, type ActionDeps, type ActionNotice, type ActionTarget, type SaveAnswer, type ReadAnswer } from '../src/lib/growthActions'
-import type { FeedbackRow } from '../src/lib/revenueIntelligence'
+import { recordRecommendation, readRecommendation, type FeedbackRow } from '../src/lib/revenueIntelligence'
 
 let failures = 0
 const ok = (n: string) => console.log(`  ✓ ${n}`)
@@ -31,7 +31,7 @@ const rowOf = (key: string, status: string): FeedbackRow => ({ opportunity_key: 
 
 /** The page, as far as the handler can tell: a feedback map, a busy set, a notice, and the wire. */
 function page(initial: Record<string, FeedbackRow> = {}) {
-  const state = { feedback: { ...initial } as Record<string, FeedbackRow>, busy: new Set<string>() as ReadonlySet<string>, notice: null as ActionNotice | null }
+  const state = { feedback: { ...initial } as Record<string, FeedbackRow>, busy: new Set<string>() as ReadonlySet<string>, notice: null as ActionNotice | null, notices: {} as Record<string, ActionNotice> }
   const saves: { key: string; status: string; d: ReturnType<typeof deferred<SaveAnswer>> }[] = []
   const reads: { key: string; d: ReturnType<typeof deferred<ReadAnswer>> }[] = []
   const deps: ActionDeps = {
@@ -39,7 +39,7 @@ function page(initial: Record<string, FeedbackRow> = {}) {
     read: key => { const d = deferred<ReadAnswer>(); reads.push({ key, d }); return d.promise },
     setRow: (key, row) => { state.feedback = withRow(state.feedback, key, row) },
     setBusy: keys => { state.busy = keys },
-    setNotice: n => { state.notice = n },
+    setNotice: (key, n) => { state.notice = n; if (n) state.notices[key] = n; else delete state.notices[key] },
   }
   const c = createActionController(deps, initial)
   return { c, state, saves, reads, status: (k: string) => state.feedback[k]?.status ?? null, busy: () => [...state.busy].sort() }
@@ -69,7 +69,7 @@ async function main() {
     const p = page({ A: loaded })
     p.c.act(target('A', 'Northgate'), 'won')
     eq('optimistic won', p.status('A'), 'won')
-    p.saves[0].d.resolve({ ok: false, error: 'row-level security' }); await flush()
+    p.saves[0].d.resolve({ ok: false, definite: true, error: 'row-level security' }); await flush()
     eq('refused → back to the LOADED row, not to nothing', p.state.feedback.A, loaded)
     check('…said as not recorded (the server answered), naming the tap and the customer',
       p.state.notice?.tone === 'refused' && /Couldn't save "Mark won" for Northgate — it was not recorded/.test(p.state.notice.text), JSON.stringify(p.state.notice))
@@ -84,7 +84,7 @@ async function main() {
     const p = page()
     p.c.act(target('D'), 'dismissed')
     eq('a dismissed card vanishes optimistically (status dismissed)', p.status('D'), 'dismissed')
-    p.saves[0].d.resolve({ ok: false }); await flush()
+    p.saves[0].d.resolve({ ok: false, definite: true }); await flush()
     eq('refused → the card comes back (key removed; no prior row)', p.state.feedback.D, undefined)
   }
 
@@ -143,7 +143,7 @@ async function main() {
     p.c.act(target('A'), 'won')
     const fresh = { A: rowOf('A', 'acted') }
     p.state.feedback = { ...fresh }; p.c.onRefreshed(fresh)
-    p.saves[0].d.resolve({ ok: false }); await flush()
+    p.saves[0].d.resolve({ ok: false, definite: true }); await flush()
     eq('a refusal after the refresh restores the REFRESHED row — never the pre-refresh baseline', p.state.feedback.A, fresh.A)
   }
   {
@@ -161,12 +161,104 @@ async function main() {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n\r]*/g, ' ')
     check('act() delegates to the controller', /function act\([^)]*\) \{\s*controller\(\)\.act\(o, status\)\s*\}/.test(code), '')
     check('the controller is wired to the real save and the real read-back', /record: \(o, status, value\) => recordRecommendation\(supabase, o, status, value\)/.test(code) && /read: key => readRecommendation\(supabase, key\)/.test(code), '')
-    check('a successful load hands the server\'s feedback to onRefreshed', /controller\(\)\.onRefreshed\(res\.feedback\)/.test(code), '')
+    check('a successful load hands the server\'s feedback to onRefreshed, with the clock it started at',
+      /const since = controller\(\)\.beginRefresh\(\)/.test(code) && /controller\(\)\.onRefreshed\(res\.feedback, since\)/.test(code), '')
     check('busy is per card, from the controller', /busy=\{busyKeys\.has\(o\.key\)\}/.test(code) && /setBusy: setBusyKeys/.test(code), '')
-    check('the notice is an alert; only the unconfirmed tone offers Refresh', /role="alert"[\s\S]{0,120}\{actionNotice\.text\}/.test(code) && /actionNotice\.tone === 'unconfirmed' && [\s\S]{0,200}onClick=\{load\}/.test(code), '')
+    check('notices are rendered per key, as alerts; only the unconfirmed tone offers Refresh',
+      /Object\.values\(actionNotices\)\.map\(n =>/.test(code)
+      && /<p key=\{n\.key\} role="alert"[\s\S]{0,120}\{n\.text\}/.test(code)
+      && /n\.tone === 'unconfirmed' && [\s\S]{0,200}onClick=\{load\}/.test(code), '')
     const lib = readFileSync(join(process.cwd(), 'src/lib/growthActions.ts'), 'utf8')
     check('neither the page nor the handler ever says "nothing was recorded"', !/nothing was recorded/i.test(code) && !/nothing was recorded/i.test(lib.replace(/\/\/[^\n\r]*/g, '')), '')
     check('the superseded ordering ledger is gone', !/growthActionState/.test(src), '')
+  }
+
+
+  console.log('\n── 6. Through the REAL adapter: a returned transport error is not a refusal ──')
+  {
+    // ⛔ These drive the SHIPPED recordRecommendation, not a stub. postgrest-js
+    // resolves a dead connection as an error object with `status: 0`; a genuine
+    // refusal arrives through processResponse with the real HTTP status. Nothing
+    // else distinguishes them — `code` is '' on both paths.
+    const client = (upsertResult: unknown, readRow: FeedbackRow | null = null) => ({
+      auth: {
+        getUser: async () => ({ data: { user: { id: 'u1' } } }),
+        getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }),
+      },
+      from: () => {
+        const c: Record<string, unknown> = {}
+        for (const k of ['select', 'eq', 'limit']) c[k] = () => c
+        c.upsert = async () => upsertResult
+        c.then = (res: (v: unknown) => unknown) => res({ data: readRow ? [readRow] : [], error: null })
+        return c
+      },
+    })
+    const tgt = target('k1')
+
+    const dead = await recordRecommendation(
+      client({ data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0, statusText: '' }) as never,
+      tgt, 'won', 1960)
+    check('a dead connection (status 0) is NOT definite', dead.ok === false && dead.definite === false, JSON.stringify(dead))
+
+    const refused = await recordRecommendation(
+      client({ data: null, error: { message: 'new row violates row-level security policy', code: '42501' }, status: 403, statusText: 'Forbidden' }) as never,
+      tgt, 'won', 1960)
+    check('a real refusal (HTTP 403) IS definite', refused.ok === false && refused.definite === true, JSON.stringify(refused))
+
+    const saved = await recordRecommendation(
+      client({ data: null, error: null, status: 201, statusText: 'Created' }) as never, tgt, 'won', 1960)
+    check('a successful upsert is still ok', saved.ok === true)
+
+    // …and the shipped controller must then take the ambiguous path, not the
+    // refusal path, for the dead-connection case.
+    const sb = client({ data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0, statusText: '' }, null)
+    const seen: ActionNotice[] = []
+    const ctl = createActionController({
+      record: (o, st, v) => recordRecommendation(sb as never, o, st, v),
+      read: key => readRecommendation(sb as never, key),
+      setRow: () => {}, setBusy: () => {},
+      setNotice: (_k, n) => { if (n) seen.push(n) },
+    })
+    ctl.act(tgt, 'won')
+    await new Promise(r => setTimeout(r, 10))
+    check('⛔ a returned transport error reads back instead of claiming a refusal',
+      seen.length === 1 && seen[0].tone !== 'refused', JSON.stringify(seen))
+    check('…and it never says the save was not recorded',
+      !seen.some(n => /not recorded/i.test(n.text)), JSON.stringify(seen.map(n => n.text)))
+  }
+
+  console.log('\n── 7. A refresh that BEGAN before a save cannot undo it ──')
+  {
+    const p = page()
+    const since = p.c.beginRefresh()          // the read starts here
+    p.c.act(target('k1'), 'won')
+    p.saves[0].d.resolve({ ok: true }); await flush()
+    check('the save is confirmed', p.status('k1') === 'won')
+    // The server map answers now, from before the save committed.
+    p.state.feedback = {}
+    p.c.onRefreshed({}, since)
+    check('⛔ the stale refresh does not erase the confirmed badge', p.status('k1') === 'won', JSON.stringify(p.state.feedback))
+
+    const q = page()
+    q.c.act(target('k1'), 'won')
+    q.saves[0].d.resolve({ ok: true }); await flush()
+    const after = q.c.beginRefresh()          // a read that starts AFTER the save
+    q.state.feedback = {}
+    q.c.onRefreshed({}, after)
+    check('a refresh that began after it still takes the server as truth', q.status('k1') === null)
+  }
+
+  console.log('\n── 8. A notice belongs to its own card ──')
+  {
+    const p = page()
+    p.c.act(target('k1'), 'won'); p.c.act(target('k2'), 'won')
+    p.saves[0].d.resolve({ ok: false, definite: true }); await flush()
+    p.saves[1].d.resolve({ ok: false, definite: true }); await flush()
+    check('⛔ both failures are retained, not overwritten', Object.keys(p.state.notices).length === 2, JSON.stringify(Object.keys(p.state.notices)))
+    check('each names its own key', p.state.notices.k1?.key === 'k1' && p.state.notices.k2?.key === 'k2')
+    p.c.act(target('k1'), 'acted')
+    check('tapping one card clears only its own notice',
+      p.state.notices.k1 === undefined && p.state.notices.k2 !== undefined, JSON.stringify(Object.keys(p.state.notices)))
   }
 
   console.log(failures === 0 ? '\n✅ growth actions: latched per card, refusals restored and said, a dropped wire read back — never a fabricated failure\n' : `\n❌ ${failures} check(s) failed\n`)
