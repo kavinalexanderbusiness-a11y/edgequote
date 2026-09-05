@@ -217,6 +217,34 @@ console.log('\nReassignment is informed and cancellations are named:')
     'a bare count made "did that cancellation land?" require leaving the board')
 }
 
+// ── A failed read must never render as "nothing to do" ──────────────────────
+// Supabase RESOLVES on failure ({ data: null, error }), so `?? []` silently
+// turns an outage into an empty list. The board already aggregates its four
+// read errors; time-off did not, and rendered "no time off booked" — the screen
+// that gets somebody scheduled who is actually on leave.
+console.log('\n═══ Time off: a failed read says so ═══')
+{
+  const TIMEOFF = readFileSync(join(process.cwd(), 'src/app/dashboard/dispatch/time-off/page.tsx'), 'utf8')
+  check('the board aggregates its read errors before rendering',
+    /const readErr = jRes\.error \?\? eRes\.error/.test(PAGE) && /if \(readErr\)/.test(PAGE),
+    'the four board reads must be checked, not just awaited')
+  check('time off aggregates its read errors too',
+    /const readErr = pRes\.error \?\? hRes\.error/.test(TIMEOFF),
+    'pto_entries and holidays resolved with { error } and were never inspected')
+  check('…and returns instead of painting an empty list',
+    /if \(readErr\) \{ setLoadError\([\s\S]{0,60}\); return \}/.test(TIMEOFF),
+    'without the early return, `?? []` renders "no time off booked" during an outage')
+  check('…before any entries/holidays state is set from that read',
+    TIMEOFF.indexOf('const readErr =') < TIMEOFF.indexOf('setEntries('),
+    'the error check must precede the state it guards, or it guards nothing')
+  check('…while keeping the roster it DID read (loadTechnicians throws on failure)',
+    TIMEOFF.indexOf('setTechs(t)') < TIMEOFF.indexOf('const readErr ='),
+    'discarding a good read would swap one false empty state ("no one on the roster") for another')
+  check('the failure is visible and retryable, not just logged',
+    /loadError && \(/.test(TIMEOFF) && /Retry/.test(TIMEOFF),
+    'a friendly empty state must not double as the failure state')
+}
+
 if (failures) {
   console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
   process.exit(1)
