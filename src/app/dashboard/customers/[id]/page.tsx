@@ -78,7 +78,6 @@ const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
 // on. A slice whose LAST live read failed is NAMED here, never coerced to [] —
 // `[]` is the answer "this customer has none"; a failed read has no answer.
 type ReadSlice = 'Properties' | 'Quotes' | 'Jobs' | 'Invoices'
-const ALL_SLICES: ReadSlice[] = ['Properties', 'Quotes', 'Jobs', 'Invoices']
 
 // Presentation for the engine's verbs. The engine owns WHAT to do; this file
 // only decides how it looks — the same split the dashboard queue makes.
@@ -143,7 +142,7 @@ export default function CustomerDetailPage() {
   // a dozen reads and supabase-js resolves failures as empty, so without this a
   // dropped connection renders as "No history yet" — a claim about the customer
   // that the data never made. See lib/timelineData.
-  const [tlMissing, setTlMissing] = useState<string[]>([])
+  const [loaderMissing, setLoaderMissing] = useState<string[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   // What this business does, derived from its own catalogue and jobs — never asked.
   // Starts SHOWING everything, so a lawn field can't blink out mid-load.
@@ -348,9 +347,10 @@ export default function CustomerDetailPage() {
       if (!qRes.error) setQuotes((qRes.data as Quote[]) || [])
       if (!jRes.error) setJobs((jRes.data as Job[]) || [])
       if (!iRes.error) setInvoices((iRes.data as Invoice[]) || [])
-      const failedSlices = ALL_SLICES.filter(s =>
-        (s === 'Properties' && pRes.error) || (s === 'Quotes' && qRes.error) ||
-        (s === 'Jobs' && jRes.error) || (s === 'Invoices' && iRes.error))
+      const failedSlices = [
+        ...(pRes.error ? ['Properties'] : []), ...(qRes.error ? ['Quotes'] : []),
+        ...(jRes.error ? ['Jobs'] : []), ...(iRes.error ? ['Invoices'] : []),
+      ] as ReadSlice[]
       setReadMissing(failedSlices)
       setSource('live')
       // A FAILED read stays null (gate skipped), never an empty map — an empty map
@@ -401,7 +401,7 @@ export default function CustomerDetailPage() {
       setTlSources({ ...tlCustomer.sources, ...tlJob.sources })
       // The loader's own missing sources. quotes/jobs/invoices are this page's
       // slices and are named in readMissing; the Timeline card receives both.
-      setTlMissing([...tlCustomer.missing, ...tlJob.missing])
+      setLoaderMissing([...tlCustomer.missing, ...tlJob.missing])
       if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
       if (referredRevRes?.data) {
         // Referral revenue: the same exclusion rule as every other money
@@ -472,7 +472,7 @@ export default function CustomerDetailPage() {
       setTlSources(prev => ({ ...prev, ...tlCust.sources }))
       // A realtime refetch that drops a source must state it too — and a clean
       // refetch must clear a stale warning, or the card cries wolf forever.
-      setTlMissing(tlCust.missing)
+      setLoaderMissing(tlCust.missing)
     })())
     await Promise.all(tasks)
   }, [supabase, id])
@@ -765,7 +765,7 @@ export default function CustomerDetailPage() {
   const openUnknown = (['Quotes', 'Jobs', 'Invoices'] as ReadSlice[]).filter(s => missing.has(s))
   const notLoaded = (slice: string) => `${slice} could not be loaded`
   // The Timeline card names both this page's failed slices and the loader's.
-  const timelineMissing = [...readMissing.filter(s => s !== 'Properties'), ...tlMissing]
+  const tlMissing = [...readMissing.filter(s => s !== 'Properties'), ...loaderMissing]
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => isWon(q.status))
@@ -1563,7 +1563,7 @@ export default function CustomerDetailPage() {
           Keyed by customer: navigating profile→profile (via "Referred by") keeps this
           component mounted, and a search typed for one customer must not silently
           filter the next one's history. */}
-      <TimelineCard key={id} events={allEvents} missing={timelineMissing} onRetry={reload} />
+      <TimelineCard key={id} events={allEvents} missing={tlMissing} onRetry={reload} />
 
       {/* The comms cluster — health, AI brief, live thread, then consent + reference.
           It follows the daily-use cards above: the phone-call answers (owed · notes ·
