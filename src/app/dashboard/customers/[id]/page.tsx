@@ -1384,11 +1384,13 @@ export default function CustomerDetailPage() {
               invoice with no property, or whose property was removed). Those rows
               are in the customer-wide figures above and not here, so "Outstanding"
               and "Open quotes" here can be LESS than the card and the header chip.
-              Same engines on both sides (invoiceBalance; the sent/draft rule), so
-              scope is the only way they differ: the line above the grid says the
-              scope, and the caption below names the difference whenever there is
-              one. Hidden for a one-property customer — "1 property · 1 active
-              service" is just their only property, restated. */}
+              Same engines on both sides (invoiceBalance; the sent/draft rule) — but
+              not the same threshold: the header keeps any positive balance and the
+              roll-up skips one cent, so the caption below is computed over the
+              complement DIRECTLY (see there), never as header minus roll-up. The
+              line above the grid says the scope; the caption names the difference
+              whenever there is one. Hidden for a one-property customer — "1
+              property · 1 active service" is just their only property, restated. */}
           {properties.length > 1 && (
             <div className="space-y-2">
               <p className="text-[11px] text-ink-faint">Across these addresses only</p>
@@ -1403,7 +1405,21 @@ export default function CustomerDetailPage() {
                 )}
               </div>
               {(() => {
-                const owedElsewhere = moneyUnknown ? 0 : outstandingRevenue - rollupTotals.outstanding
+                // "Not tied to a current address" is only provable while the current
+                // addresses are known. A failed Properties read keeps last-known-good
+                // rows on screen (the banner names it), so the caption says nothing.
+                if (unknownFrom('Properties')) return null
+                // Money is summed over the complement under the roll-up's OWN rule —
+                // same status filter, same per-invoice > 0.01 — not as the header
+                // total minus the roll-up. The header counts a one-cent balance
+                // (Math.max(0, bal)) that the roll-up skips (bal > 0.01), so that
+                // subtraction can attribute a linked cent, plus float residue, to
+                // "no current address". Header and roll-up figures are unchanged.
+                const owedElsewhere = moneyUnknown ? 0 : invoices
+                  .filter(i => i.status !== 'draft' && i.status !== 'cancelled' && !(i.property_id && propRollup[i.property_id]))
+                  .reduce((s, i) => { const b = invoiceBalance(i, feeSettings).balance; return b > 0.01 ? s + b : s }, 0)
+                // The quote half is exact already: identical predicate on both sides,
+                // integer count, property gate the only difference.
                 const quotesElsewhere = quotesUnknown ? 0 : openQuotesAll.length - rollupTotals.openQuotes
                 const parts = [
                   owedElsewhere > 0.01 ? `${formatCurrency(owedElsewhere)} outstanding` : '',
