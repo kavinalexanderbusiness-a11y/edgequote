@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Bot, CheckCircle2, Clock3, LockKeyhole, Sparkles, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -87,6 +87,31 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // ONE in-flight request, tracked in a REF so every check below is
+  // synchronous. State would be a render behind, and a cancelled request’s
+  // late answer has to be refused at the instant it lands — not after React
+  // has committed. Bumping `gen` is what makes a run stale; nothing else does.
+  //
+  // ⚠️ Cancel aborts the CLIENT request and nothing else. The server may
+  // already be running the question: it can finish, record the run and incur
+  // provider spend. This does not stop that work and does not reverse any
+  // charge — it only stops this browser waiting for, or showing, the answer.
+  const run = useRef<{ gen: number; ctrl: AbortController | null }>({ gen: 0, ctrl: null })
+
+  function cancel() {
+    if (!run.current.ctrl) return
+    run.current.gen++
+    run.current.ctrl.abort()
+    run.current.ctrl = null
+    // The pending UI clears now. The previous answer and its own caption stay
+    // exactly as they were — cancelling a question does not retract the last
+    // answer, and no error is shown, because nothing failed.
+    setLoading(false)
+  }
+
+  // A pending request must not outlive the surface that asked.
+  useEffect(() => () => { run.current.gen++; run.current.ctrl?.abort(); run.current.ctrl = null }, [])
+
   async function ask(q = question) {
     const text = q.trim()
     if (!text || loading) return
@@ -95,22 +120,36 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
     // after the first from run history. The id guards double-submits of ONE ask,
     // not the whole mount.
     const requestId = `operator:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`
+    const ctrl = new AbortController()
+    const gen = ++run.current.gen
+    run.current.ctrl = ctrl
+    // True only while THIS run is still the one the surface is waiting for.
+    const current = () => run.current.gen === gen
     // `asked` is deliberately NOT set here. It captions the answer card, and
     // until the new answer lands that card still holds the PREVIOUS one — so
     // setting it now prints the new question over the old answer, and over the
     // old answer’s evidence line, for the whole wait. The two commit together.
     setQuestion(text); setLoading(true); setError(null)
     try {
-      const res = await fetch('/api/operator', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: text, request_id: requestId }) })
+      const res = await fetch('/api/operator', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: text, request_id: requestId }), signal: ctrl.signal })
       // A failing edge or proxy answers with HTML, and an empty body parses as
       // nothing. Letting json() throw would replace the real failure with a
       // parser complaint, which is what the owner would then be shown.
       const body = await res.json().catch(() => null)
+      // Cancelled or superseded: this run may no longer speak. It must not
+      // set an answer, and it must not clear a spinner it no longer owns.
+      if (!current()) return
       if (!res.ok) throw new Error(body?.error || 'Operator could not verify that request.')
       if (!body) throw new Error('Operator could not verify that request.')
       setAnswer(body as OperatorAnswer); setAsked(text)
-    } catch (e) { setError(e instanceof Error ? e.message : 'Operator could not verify that request.') }
-    finally { setLoading(false) }
+    } catch (e) {
+      // An aborted fetch rejects here. A cancelled run is not a failure and a
+      // superseded one has no news, so the same staleness test that guards the
+      // answer also keeps abort noise off the screen — one mechanism, not two.
+      if (!current()) return
+      setError(e instanceof Error ? e.message : 'Operator could not verify that request.')
+    }
+    finally { if (current()) { run.current.ctrl = null; setLoading(false) } }
   }
 
   return (
@@ -133,6 +172,14 @@ export function OperatorClient({ initial }: { initial: OperatorDashboardSnapshot
               className="min-w-0 flex-1 bg-transparent px-2 text-sm text-ink outline-none placeholder:text-ink-faint"
               aria-label="Ask EdgeQuote"
             />
+            {/* Only while a request is pending. Stopping the wait is the whole
+                affordance — there is no deadline setting and no timer. */}
+            {loading && (
+              <button type="button" onClick={cancel}
+                className="inline-flex shrink-0 items-center rounded-xl px-3 min-h-[44px] sm:min-h-0 text-sm font-medium text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                Cancel
+              </button>
+            )}
             <Button onClick={() => ask()} disabled={!question.trim()} loading={loading} aria-busy={loading}>
               {loading ? 'Checking…' : 'Ask'} {!loading && <ArrowRight className="h-4 w-4" aria-hidden />}
             </Button>

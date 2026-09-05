@@ -468,101 +468,232 @@ check('table access is revoked from PUBLIC and authenticated, not just anon', /r
 // Wrapped in a function for the same CJS reason as hostileCardChecks above:
 // a top-level await here is a hard parse error.
 async function requestLifecycleChecks() {
-console.log('\n═══ Client request lifecycle (the REAL ask() handler, executed) ═══')
-  // The three questions a request handler has to answer: can an older answer
-  // replace a newer one, can the spinner stick, can a failure be hidden behind
-  // a different message. Executed against the handler as committed — the
-  // function is lifted out of the component verbatim and run, so this cannot
-  // pass by testing a re-typed copy of it.
+console.log('\n═══ Client request lifecycle: cancel, recovery and staleness (real handlers) ═══')
+  // ask() and cancel() are lifted VERBATIM from the component and executed. A
+  // test written against a re-typed copy of them would prove nothing.
   const UI = readFileSync(join(process.cwd(), 'src/components/operator/OperatorClient.tsx'), 'utf8')
-  const start = UI.indexOf('async function ask(')
-  let depth = 0, i = UI.indexOf('{', start), end = -1
-  for (; i < UI.length; i++) {
-    if (UI[i] === '{') depth++
-    else if (UI[i] === '}') { depth--; if (depth === 0) { end = i + 1; break } }
+  const lift = (sig: string) => {
+    const a = UI.indexOf(sig)
+    if (a < 0) return ''
+    let d = 0, i = UI.indexOf('{', a)
+    for (; i < UI.length; i++) {
+      if (UI[i] === '{') d++
+      else if (UI[i] === '}') { d--; if (d === 0) return UI.slice(a, i + 1) }
+    }
+    return ''
   }
-  const askSrc = start >= 0 && end > 0 ? UI.slice(start, end) : ''
-  check('the ask() handler can still be located and lifted for execution',
-    askSrc.length > 0 && /fetch\('\/api\/operator'/.test(askSrc))
+  const askSrc = lift('async function ask(')
+  const cancelSrc = lift('function cancel() {')
+  check('ask() and cancel() can both be located and lifted for execution',
+    askSrc.length > 0 && cancelSrc.length > 0 && /fetch\('\/api\/operator'/.test(askSrc) && /abort\(\)/.test(cancelSrc))
+  check('the request carries an abort signal', /signal: ctrl\.signal/.test(askSrc))
+  check('the component aborts a pending request on unmount',
+    /useEffect\(\(\) => \(\) => \{[^}]*ctrl\?\.abort\(\)/.test(UI), 'a pending request must not outlive the surface')
 
-  const askJs = transformSync(askSrc, { loader: 'ts', format: 'esm' }).code
-  const makeAsk = new Function('deps', `
-    const { question, loading, setQuestion, setLoading, setError, setAsked, setAnswer, fetch } = deps;
-    ${askJs}
-    return ask;
-  `) as (deps: Record<string, unknown>) => (q?: string) => Promise<void>
+  const js = (t: string) => transformSync(t, { loader: 'ts', format: 'esm' }).code
+  const makeHandlers = new Function('deps', `
+    const { question, loading, run, setQuestion, setLoading, setError, setAsked, setAnswer, fetch } = deps;
+    ${js(cancelSrc)}
+    ${js(askSrc)}
+    return { ask, cancel };
+  `) as (deps: Record<string, unknown>) => { ask: (q?: string) => Promise<void>; cancel: () => void }
 
   type S = { question: string; asked: string | null; answer: { answer: string } | null; loading: boolean; error: string | null }
   const mount = () => {
     const st: S = { question: '', asked: null, answer: null, loading: false, error: null }
+    // The real useRef object: one identity for the life of the mount.
+    const run = { current: { gen: 0, ctrl: null as AbortController | null } }
     const set = (k: keyof S) => (v: unknown) => { (st as Record<string, unknown>)[k] = v }
-    // React commits state between discrete events, so each gesture gets a
-    // closure built from the latest state — same as the browser.
-    const gesture = (f: unknown) => makeAsk({
-      question: st.question, loading: st.loading,
+    // React commits state between discrete events, so each gesture builds its
+    // closure from the latest state — same as the browser.
+    const at = (f?: unknown) => makeHandlers({
+      question: st.question, loading: st.loading, run,
       setQuestion: set('question'), setLoading: set('loading'), setError: set('error'),
       setAsked: set('asked'), setAnswer: set('answer'), fetch: f,
     })
-    return { st, gesture }
+    return {
+      st, run,
+      ask: (f: unknown) => at(f).ask,
+      cancel: () => at().cancel(),
+      unmount: () => { run.current.gen++; run.current.ctrl?.abort(); run.current.ctrl = null },
+    }
   }
-  const defer = () => { let r: (v: unknown) => void = () => {}; const pr = new Promise(a => { r = a }); return { pr, resolve: r } }
+
+  // A fetch that settles only when told, and rejects like the real one on abort.
+  const netAbort = () => Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })
+  const wire = () => {
+    let settle: { resolve: (v: unknown) => void; reject: (e: unknown) => void } | null = null
+    let calls = 0
+    const fetchImpl = (_u: string, init: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
+      calls++
+      settle = { resolve, reject }
+      init?.signal?.addEventListener('abort', () => reject(netAbort()))
+    })
+    return {
+      fetchImpl,
+      get calls() { return calls },
+      resolve: (v: unknown) => settle?.resolve(v),
+      reject: (e: unknown) => settle?.reject(e),
+    }
+  }
   const ok = (t: string) => ({ ok: true, json: async () => ({ answer: t, tools_used: [], cards: [], generated_at: '2026-09-04T12:00:00Z' }) })
   const tick = () => new Promise(r => setImmediate(r))
 
-  // 1 — rapid requests cannot overlap, so no older answer can land last
+  // ── 1. never-settling → cancel → a new question works ─────────────────────
   {
     const c = mount()
-    let calls = 0
-    const d = defer()
-    const f = () => { calls++; return d.pr }
-    const p = c.gesture(f)('first')
+    const w = wire()
+    const p1 = c.ask(w.fetchImpl)('Why is cash low?')
     await tick()
-    // NOT awaited: if the serialisation guard is ever removed, this second ask
-    // waits on the same unsettled promise, and awaiting it here would hang the
-    // suite instead of failing it.
-    const p2 = c.gesture(f)('second')
+    check('a pending request holds the spinner', c.st.loading === true)
+    c.cancel()
+    check('cancel clears the pending UI immediately', c.st.loading === false)
+    check('…shows no error, because nothing failed', c.st.error === null)
+    check('…and leaves the previous answer and caption untouched', c.st.answer === null && c.st.asked === null)
+    await p1; await tick()
+    check('the abandoned request stays abandoned after it rejects', c.st.loading === false && c.st.error === null)
+
+    const w2 = wire()
+    const p2 = c.ask(w2.fetchImpl)('Which invoices are overdue?')
     await tick()
-    check('a second ask during an in-flight ask issues no second request', calls === 1)
-    d.resolve(ok('A1')); await p; await p2; await tick()
-    check('…so the answer that lands is the one that was asked', c.st.answer?.answer === 'A1')
-    check('…and the spinner clears', c.st.loading === false)
+    check('a NEW question is accepted after a cancel', w2.calls === 1 && c.st.loading === true)
+    w2.resolve(ok('Two are overdue.')); await p2; await tick()
+    check('…and its answer lands with its own caption',
+      c.st.answer?.answer === 'Two are overdue.' && c.st.asked === 'Which invoices are overdue?' && c.st.loading === false)
   }
 
-  // 2 — the caption and the answer are ONE exchange, never mixed
+  // ── 2. a cancelled request that resolves LATE must not speak ──────────────
   {
     const c = mount()
-    const d1 = defer(), d2 = defer()
-    let n = 0
-    const f = () => (++n === 1 ? d1.pr : d2.pr)
-    const p1 = c.gesture(f)('What needs my attention?')
-    d1.resolve(ok('Two invoices are overdue.')); await p1; await tick()
-    const p2 = c.gesture(f)('Any unpaid invoices?')
+    const w1 = wire()
+    const p1 = c.ask(w1.fetchImpl)('First question')
     await tick()
-    check('mid-flight, the answer card still names the question that produced it',
-      c.st.asked === 'What needs my attention?' && c.st.answer?.answer === 'Two invoices are overdue.',
-      'a new caption over an old answer misattributes its evidence line to a question it never read')
-    d2.resolve(ok('No unpaid invoices.')); await p2; await tick()
-    check('…and caption and answer move together when the new answer lands',
-      c.st.asked === 'Any unpaid invoices?' && c.st.answer?.answer === 'No unpaid invoices.')
+    c.cancel()
+    const w2 = wire()
+    const p2 = c.ask(w2.fetchImpl)('Second question')
+    await tick()
+    w2.resolve(ok('Answer to the second.')); await p2; await tick()
+    // now the cancelled first request finally answers
+    w1.resolve(ok('Answer to the FIRST.')); await p1; await tick()
+    check('a cancelled request that resolves late cannot replace a later answer',
+      c.st.answer?.answer === 'Answer to the second.' && c.st.asked === 'Second question',
+      `answer=${JSON.stringify(c.st.answer?.answer)} caption=${JSON.stringify(c.st.asked)}`)
+    check('…and cannot clear a spinner it no longer owns', c.st.loading === false)
+  }
+  {
+    const c = mount()
+    const w1 = wire()
+    const p1 = c.ask(w1.fetchImpl)('First question')
+    await tick()
+    c.cancel()
+    const w2 = wire()
+    const p2 = c.ask(w2.fetchImpl)('Second question')
+    await tick()
+    w1.reject(new Error('late network failure')); await p1; await tick()
+    check('a cancelled request that REJECTS late raises no error over a live one',
+      c.st.error === null && c.st.loading === true, `error=${JSON.stringify(c.st.error)} loading=${c.st.loading}`)
+    w2.resolve(ok('Answer to the second.')); await p2; await tick()
+    check('…and the live request still completes normally', c.st.answer?.answer === 'Answer to the second.')
   }
 
-  // 3 — a failure is shown as a failure, not as a parser complaint
+  // ── 3. repeated cancel is harmless ────────────────────────────────────────
   {
-    const c1 = mount()
-    await c1.gesture(async () => ({ ok: false, json: async () => ({ error: 'Operator is not configured.' }) }))('q')
-    check('a JSON error body still surfaces the server’s own message', c1.st.error === 'Operator is not configured.')
+    const c = mount()
+    const w = wire()
+    const p = c.ask(w.fetchImpl)('A question')
+    await tick()
+    c.cancel()
+    const genAfterFirst = c.run.current.gen
+    c.cancel(); c.cancel()
+    check('cancelling again does nothing — no throw, no further generation churn',
+      c.run.current.gen === genAfterFirst && c.st.loading === false && c.st.error === null)
+    await p; await tick()
+    const w2 = wire()
+    const p2 = c.ask(w2.fetchImpl)('Still usable?')
+    await tick()
+    check('…and the surface is still usable afterwards', w2.calls === 1 && c.st.loading === true)
+    w2.resolve(ok('Yes.')); await p2; await tick()
+    check('…answering normally', c.st.answer?.answer === 'Yes.')
+  }
+
+  // ── 4. cancel then re-ask the SAME question ───────────────────────────────
+  {
+    const c = mount()
+    const seen: string[] = []
+    const mk = () => {
+      let settle: ((v: unknown) => void) | null = null
+      const f = (_u: string, init: { body: string; signal?: AbortSignal }) => new Promise((res, rej) => {
+        seen.push(JSON.parse(init.body).request_id)
+        settle = res
+        init?.signal?.addEventListener('abort', () => rej(netAbort()))
+      })
+      return { f, resolve: (v: unknown) => settle?.(v) }
+    }
+    const a = mk()
+    const p1 = c.ask(a.f)('Same question')
+    await tick(); c.cancel(); await p1; await tick()
+    const b = mk()
+    const p2 = c.ask(b.f)('Same question')
+    await tick()
+    check('re-asking the SAME question after a cancel is not swallowed', seen.length === 2)
+    check('…and carries a fresh idempotency key, so run history keeps both',
+      seen[0] !== seen[1], `ids=${JSON.stringify(seen)}`)
+    b.resolve(ok('Answered on the retry.')); await p2; await tick()
+    check('…and the retry answers', c.st.answer?.answer === 'Answered on the retry.' && c.st.loading === false)
+  }
+
+  // ── 5. unmount aborts, and the late answer is silent ──────────────────────
+  {
+    const c = mount()
+    const w = wire()
+    const p = c.ask(w.fetchImpl)('Asked then navigated away')
+    await tick()
+    c.unmount()
+    check('unmount drops the pending request', c.run.current.ctrl === null)
+    w.resolve(ok('Too late.')); await p; await tick()
+    check('…and its late answer commits nothing', c.st.answer === null && c.st.error === null)
+  }
+
+  // ── 6. the ordinary paths are unchanged ───────────────────────────────────
+  {
+    const c = mount()
+    const w = wire()
+    const p = c.ask(w.fetchImpl)('Ordinary question')
+    await tick()
+    check('a second ask during an in-flight ask issues no second request',
+      (() => { void c.ask(w.fetchImpl)('Second'); return w.calls === 1 })())
+    w.resolve(ok('Ordinary answer.')); await p; await tick()
+    check('an ordinary success answers and clears the spinner',
+      c.st.answer?.answer === 'Ordinary answer.' && c.st.asked === 'Ordinary question' && c.st.loading === false)
 
     const c2 = mount()
-    await c2.gesture(async () => ({ ok: false, json: async () => { throw new SyntaxError('Unexpected token \'<\'') } }))('q')
-    check('a non-JSON error response (an HTML 502) reads as an honest failure',
-      c2.st.error === 'Operator could not verify that request.',
-      `owner would see: ${JSON.stringify(c2.st.error)}`)
-    check('…and its spinner clears', c2.st.loading === false)
+    await c2.ask(async () => ({ ok: false, json: async () => ({ error: 'Operator is not configured.' }) }))('q')
+    check('a JSON error body still surfaces the server’s own message',
+      c2.st.error === 'Operator is not configured.' && c2.st.loading === false)
 
     const c3 = mount()
-    await c3.gesture(async () => ({ ok: true, json: async () => { throw new SyntaxError('truncated') } }))('q')
-    check('an unreadable 200 body fails honestly instead of answering nothing',
-      c3.st.error === 'Operator could not verify that request.' && c3.st.answer === null)
+    await c3.ask(async () => ({ ok: false, json: async () => { throw new SyntaxError('Unexpected token \'<\'') } }))('q')
+    check('a non-JSON error response still reads as an honest failure',
+      c3.st.error === 'Operator could not verify that request.')
+
+    const c4 = mount()
+    await c4.ask(async () => ({ ok: true, json: async () => { throw new SyntaxError('truncated') } }))('q')
+    check('an unreadable 200 body still fails honestly instead of answering nothing',
+      c4.st.error === 'Operator could not verify that request.' && c4.st.answer === null)
+
+    // The D1 guarantee, restated here so cancel work cannot quietly undo it.
+    const c5 = mount()
+    const w5 = wire()
+    const q1 = c5.ask(w5.fetchImpl)('What needs my attention?')
+    w5.resolve(ok('Two invoices are overdue.')); await q1; await tick()
+    const w6 = wire()
+    const q2 = c5.ask(w6.fetchImpl)('Any unpaid invoices?')
+    await tick()
+    check('mid-flight, the answer card still names the question that produced it',
+      c5.st.asked === 'What needs my attention?' && c5.st.answer?.answer === 'Two invoices are overdue.')
+    w6.resolve(ok('No unpaid invoices.')); await q2; await tick()
+    check('…and caption and answer move together when the new answer lands',
+      c5.st.asked === 'Any unpaid invoices?' && c5.st.answer?.answer === 'No unpaid invoices.')
   }
 }
 
