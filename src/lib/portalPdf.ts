@@ -155,8 +155,8 @@ function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings
 
 export async function renderPortalQuoteBlob(
   q: PortalPdfQuote, customerName: string, b: PortalPdfBusiness | null,
-  /** The row's currentness answer — see QuotePDFProps.acceptanceSuperseded. */
-  doc?: { acceptanceSuperseded?: boolean },
+  /** The row's currentness answer — see QuotePDFProps.acceptanceCurrentness. */
+  doc?: { acceptanceCurrentness?: import('@/lib/payments/paymentTiming').AcceptanceCurrentness },
 ): Promise<Blob> {
   const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
   // Multi-service breakdown flows into the SAME PDF pipeline the dashboard uses —

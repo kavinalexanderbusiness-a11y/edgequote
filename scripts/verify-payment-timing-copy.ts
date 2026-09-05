@@ -290,7 +290,11 @@ console.log('\n■ 3. No surface composes its own payment-timing sentence')
   check('Quote PDF computes timing with the options rule',
     /basisSettled: !\(isOptionsQuote && !chosen\)/.test(pdf))
   check('…and with the caller’s currentness answer, never its own',
-    /acceptanceSuperseded,/.test(pdf) && /\{ quote, settings, services, options, acceptanceSuperseded \}/.test(pdf))
+    /acceptanceCurrentness,/.test(pdf) && /\{ quote, settings, services, options, acceptanceCurrentness \}/.test(pdf))
+  // ⛔ The document must not be able to say "revised" off its own bat: the
+  // wording lives in the copy engine and is chosen by the caller's state.
+  check('⛔ …and the document holds no revision wording of its own',
+    !/revised since it was accepted|previously agreed no longer applies|confirming the acceptance/.test(pdf))
   check('Quote PDF contains no payment arithmetic (the deposit-documents rule)',
     !/deposit_value\s*[/*]|\*\s*0?\.\d/.test(pdf))
   // Ours is the statement of record; the owner's free text sits BELOW it.

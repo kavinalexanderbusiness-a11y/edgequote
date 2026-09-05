@@ -367,9 +367,12 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
     const src = read('src/app/portal/[token]/model.ts')
     // ⭐ "Is it known CURRENT", not "is it known stale" — the difference is the
     // old-C payload, where the kind is present and currentness is not.
+    // ⭐ THREE states, not a boolean: both non-current answers withhold the
+    // figure, and only the KNOWN one may say the quote was revised.
     check('⛔ the portal fails closed on a usable snapshot it cannot verify',
-      /const acceptanceSuperseded = qq\.acceptance_kind != null && qq\.acceptance_is_current !== true/.test(src)
-      && !/acceptance_is_current === false/.test(src)
+      /qq\.acceptance_kind == null \? 'current'/.test(src)
+      && /qq\.acceptance_is_current === false \? 'superseded'/.test(src)
+      && /: 'unverified'/.test(src)
       && !/const acceptanceSuperseded = priceMovedSinceAccepted/.test(src))
     check('⭐ …so a kind-without-currentness payload drops the figure',
       !/\$700\.00/.test(row({ acceptance_kind: 'customer' }).paymentTimingLine ?? ''),

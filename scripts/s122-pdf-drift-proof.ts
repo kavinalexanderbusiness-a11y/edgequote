@@ -26,6 +26,7 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { Quote, BusinessSettings } from '../src/types'
+import type { AcceptanceCurrentness as Cur } from '../src/lib/payments/paymentTiming'
 
 ;(globalThis as unknown as { React: typeof React }).React = React
 
@@ -77,7 +78,7 @@ async function main() {
   console.log(`   out  : ${OUT}\n`)
 
   const { renderQuoteBlob } = await import('../src/components/quotes/QuotePDF')
-  const text = async (name: string, q: Quote, doc?: { acceptanceSuperseded?: boolean }) => {
+  const text = async (name: string, q: Quote, doc?: { acceptanceCurrentness?: Cur }) => {
     const blob = await renderQuoteBlob(q, settings, undefined, undefined, doc)
     const buf = Buffer.from(await blob.arrayBuffer())
     writeFileSync(join(OUT, `${name}.pdf`), buf)
@@ -107,7 +108,7 @@ async function main() {
 
   console.log('\n■ 2. AFTER — the rule kept, the figure withheld')
   {
-    const t = await text('AFTER-drifted-qualified', drifted, { acceptanceSuperseded: true })
+    const t = await text('AFTER-drifted-qualified', drifted, { acceptanceCurrentness: 'superseded' })
     check('the page still prints the CURRENT total $500.00', /Quote Total \$500\.00/.test(t))
     check('⭐ the superseded $700.00 is GONE', !/700/.test(t))
     check('⛔ …and $250.00 was NOT substituted in its place', !/250/.test(t),
@@ -125,7 +126,7 @@ async function main() {
   {
     // A named acceptance that still matches its document keeps its figure.
     const current = { ...drifted, accepted_price: 500 } as Quote
-    const t = await text('CONTROL-current-acceptance', current, { acceptanceSuperseded: false })
+    const t = await text('CONTROL-current-acceptance', current, { acceptanceCurrentness: 'current' })
     check('an acceptance that still matches prints its figure', /50% deposit \(\$250\.00\)/.test(t))
     check('…and says nothing about a revision', !/revised since it was accepted/i.test(t))
 
@@ -141,12 +142,12 @@ async function main() {
     // acceptance the charge route refuses. That is the same unreconcilable ask the
     // whole rule exists to stop.
     const fixed = { ...drifted, deposit_type: 'fixed', deposit_value: 700 } as Quote
-    const t3 = await text('CONTROL-fixed-rule-drifted', fixed, { acceptanceSuperseded: true })
+    const t3 = await text('CONTROL-fixed-rule-drifted', fixed, { acceptanceCurrentness: 'superseded' })
     check('⭐ a FIXED deposit ALSO drops its figure under drift', !/\$700\.00/.test(t3), t3.slice(0, 300))
     check('…and says a deposit is required without inventing a percentage',
       /A deposit is required before we schedule your visit/.test(t3) && !/%/.test(t3))
     check('…and still explains the revision', /previously agreed no longer applies/.test(t3))
-    const fixedOk = await text('CONTROL-fixed-rule-current', fixed, { acceptanceSuperseded: false })
+    const fixedOk = await text('CONTROL-fixed-rule-current', fixed, { acceptanceCurrentness: 'current' })
     check('…while an un-drifted fixed rule still states its dollars', /\$700\.00 deposit/.test(fixedOk))
   }
 
@@ -205,19 +206,40 @@ async function main() {
     // ⛔ THE DEFECT: kind present (old C projects it) and currentness absent (v2
     // not yet applied) — the snapshot is USABLE and its currentness is UNKNOWN.
     // `=== false` called that current and printed $700.00 on a $500 document.
+    // ⭐⭐ UNKNOWN WITHHOLDS THE FIGURE **AND SAYS ONLY WHAT IS KNOWN**. It used
+    // to borrow the known-stale sentence, which asserted a revision the payload
+    // never established — on an old-C database the acceptance may be perfectly
+    // current. Withholding was the safe direction; the claim was not.
     const oldC = line({ acceptance_kind: 'customer', acceptance_is_current: undefined, accepted_price: 1400 })
-    check('⭐ OLD-C · a usable snapshot with UNKNOWN currentness fails closed',
-      !/\$700\.00/.test(oldC) && /previously agreed no longer applies/.test(oldC), oldC)
+    check('⭐ OLD-C · a usable snapshot with UNKNOWN currentness withholds the figure',
+      !/\$700\.00/.test(oldC), oldC)
+    check('⛔ OLD-C · …and does NOT claim the quote was revised',
+      !/revised since it was accepted/.test(oldC) && !/previously agreed no longer applies/.test(oldC), oldC)
+    check('⭐ OLD-C · …it says the acceptance is being confirmed',
+      /confirming the acceptance we have on file/.test(oldC)
+      && /confirm it with you before anything is due/.test(oldC), oldC)
+    check('…and keeps the RULE, which the revision never touched', /50% deposit is required/.test(oldC))
     const oldCNull = line({ acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 })
-    check('⭐ OLD-C · …and a NULL currentness is unknown too, not current',
-      !/\$700\.00/.test(oldCNull) && /previously agreed no longer applies/.test(oldCNull), oldCNull)
+    check('⭐ OLD-C · a NULL currentness behaves identically to a missing one',
+      oldCNull === oldC, `${oldCNull}\n      vs ${oldC}`)
+    // ⛔ THE CONTROL THAT KEEPS THE TWO APART: known-stale must still say the
+    // accurate thing. If this ever matches the unverified sentence, the split
+    // has collapsed back into one.
+    const knownStale = line({ acceptance_kind: 'customer', acceptance_is_current: false, accepted_price: 1400 })
+    check('⭐ KNOWN-STALE · keeps the accurate revised wording',
+      /revised since it was accepted/.test(knownStale)
+      && /previously agreed no longer applies/.test(knownStale), knownStale)
+    check('⛔ …and the two sentences are genuinely different',
+      knownStale !== oldC && !/confirming the acceptance we have on file/.test(knownStale))
     const v2true = line({ acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 })
     check('v2 · an explicitly CURRENT acceptance still prints its authoritative figure',
       /\$700\.00/.test(v2true), v2true)
     const model = readFileSync(join(process.cwd(), 'src/app/portal/[token]/model.ts'), 'utf8')
-    check('⛔ the portal asks "is it known CURRENT", not "is it known stale"',
-      /const acceptanceSuperseded = qq\.acceptance_kind != null && qq\.acceptance_is_current !== true/.test(model)
-      && !/acceptance_is_current === false/.test(model)
+    check('⛔ the portal maps THREE states, not a boolean',
+      /qq\.acceptance_kind == null \? 'current'/.test(model)
+      && /qq\.acceptance_is_current === true \? 'current'/.test(model)
+      && /qq\.acceptance_is_current === false \? 'superseded'/.test(model)
+      && /: 'unverified'/.test(model)
       && !/const acceptanceSuperseded = priceMovedSinceAccepted/.test(model))
     const sql = readFileSync(join(process.cwd(), 'supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql'), 'utf8')
     check('…and the payload gets it from the CANONICAL function, in the same patch as the kind',
@@ -232,18 +254,18 @@ async function main() {
     // A model-level assertion is not a document.
     const { renderPortalQuoteBlob } = await import('../src/lib/portalPdf')
     const realDoc = async (name: string, over: Record<string, unknown>) => {
-      let seen: { q: unknown; doc?: { acceptanceSuperseded?: boolean } } | null = null
+      let seen: { q: unknown; doc?: { acceptanceCurrentness?: Cur } } | null = null
       const data = {
         customer: { id: 'c', name: 'ZZ Fixture Customer', email: null, phone: null, address: null, city: null },
         business: { gst_percent: 0 }, property: null, properties: [],
         quotes: [q(over)], invoices: [], jobs: [], recurrences: [], photos: [], payments: [],
       }
       const v = buildPortalView(data as never, '2026-09-04', {
-        quote: async (qq: unknown, doc?: { acceptanceSuperseded?: boolean }) => { seen = { q: qq, doc }; return new Blob() },
+        quote: async (qq: unknown, doc?: { acceptanceCurrentness?: Cur }) => { seen = { q: qq, doc }; return new Blob() },
         invoice: async () => new Blob(),
       } as never)
       await v.docItems.find(d => d.kind === 'quote')!.getBlob!()
-      const s = seen as unknown as { q: never; doc?: { acceptanceSuperseded?: boolean } }
+      const s = seen as unknown as { q: never; doc?: { acceptanceCurrentness?: Cur } }
       const blob = await renderPortalQuoteBlob(s.q, 'ZZ Fixture Customer', settings as never, s.doc)
       const buf = Buffer.from(await blob.arrayBuffer())
       writeFileSync(join(OUT, `${name}.pdf`), buf)
@@ -258,11 +280,25 @@ async function main() {
     check('⭐ REAL PDF · the old-C document does NOT demand $700.00',
       !/700/.test(oldCDoc), oldCDoc.slice(0, 300))
     check('…it still shows the current $500.00 total', /Quote Total \$500\.00/.test(oldCDoc))
-    check('…and explains the revision instead of naming a figure',
-      /previously agreed no longer applies/.test(oldCDoc))
+    check('⛔ REAL PDF · …and the paper does NOT claim the quote was revised',
+      !/revised since it was accepted/.test(oldCDoc) && !/previously agreed no longer applies/.test(oldCDoc),
+      oldCDoc.slice(0, 300))
+    check('⭐ REAL PDF · …it says the acceptance is being confirmed',
+      /confirming the acceptance we have on file/.test(oldCDoc))
     const oldCNullDoc = await realDoc('OLDC-currentness-null', { acceptance_kind: 'customer', acceptance_is_current: null, accepted_price: 1400 })
     check('⭐ REAL PDF · a NULL currentness document behaves identically',
-      !/700/.test(oldCNullDoc) && /previously agreed no longer applies/.test(oldCNullDoc))
+      !/700/.test(oldCNullDoc) && /confirming the acceptance we have on file/.test(oldCNullDoc)
+      && !/revised since it was accepted/.test(oldCNullDoc))
+    // ⛔ THE CONTROL, as a document: known-stale must still say the accurate thing
+    // on paper. Two PDFs, two sentences — if they ever converge the split is gone.
+    const staleDoc = await realDoc('KNOWN-STALE-current-false', { acceptance_kind: 'customer', acceptance_is_current: false, accepted_price: 1400 })
+    check('⭐ REAL PDF · known-stale keeps the revised wording',
+      /revised since it was accepted/.test(staleDoc) && /previously agreed no longer applies/.test(staleDoc),
+      staleDoc.slice(0, 300))
+    check('⛔ REAL PDF · …and never borrows the confirmation sentence',
+      !/confirming the acceptance we have on file/.test(staleDoc))
+    check('⛔ REAL PDF · neither document names a dollar deposit',
+      !/700/.test(staleDoc) && !/\$250\.00/.test(staleDoc) && !/\$250\.00/.test(oldCDoc))
     const v2Doc = await realDoc('V2-current-true', { acceptance_kind: 'customer', acceptance_is_current: true, accepted_price: 1400 })
     check('REAL PDF · an explicitly current acceptance still prints $700.00',
       /\$700\.00/.test(v2Doc), v2Doc.slice(0, 300))

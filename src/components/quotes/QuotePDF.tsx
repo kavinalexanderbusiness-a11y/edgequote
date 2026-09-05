@@ -9,7 +9,7 @@ import { activeOption, hasOptions, sortedOptions } from '@/lib/quoteOptions'
 import { pdfLogoUrl } from '@/lib/photos'
 // THE payment-timing reader. The document states the configuration it was
 // generated from; it never composes its own wording about when money is due.
-import { paymentTiming, pdfTimingLine } from '@/lib/payments/paymentTiming'
+import { paymentTiming, pdfTimingLine, type AcceptanceCurrentness } from '@/lib/payments/paymentTiming'
 
 const COLORS = {
   green: '#00C896',
@@ -118,15 +118,21 @@ interface QuotePDFProps {
    * for itself would be a fourth independent derivation of the one question this
    * lane has spent its length consolidating.
    *
-   * When true the payment sentence keeps the RULE and drops the FIGURE: a quote
+   * ⭐ THREE states. `superseded` and `unverified` both drop the FIGURE and keep
+   * the RULE; they differ only in what the page may then SAY — one knows the quote
+   * was revised, the other knows only that it cannot check. Collapsing them put a
+   * revision claim on paper that nothing established.
+   *
+   * When it is not `current` the payment sentence keeps the RULE and drops the
+   * FIGURE: a quote
    * with named evidence at $1,400 that has since been revised to $500 used to
    * print "Quote Total $500.00" above "A 50% deposit ($700.00)", which is
-   * arithmetic no customer can reconcile. See paymentTiming.acceptanceSuperseded.
+   * arithmetic no customer can reconcile. See paymentTiming.acceptanceCurrentness.
    */
-  acceptanceSuperseded?: boolean
+  acceptanceCurrentness?: AcceptanceCurrentness
 }
 
-export function QuoteDocument({ quote, settings, services, options, acceptanceSuperseded }: QuotePDFProps) {
+export function QuoteDocument({ quote, settings, services, options, acceptanceCurrentness }: QuotePDFProps) {
   // ⭐ THE rule this document must never break: a page that shows three prices
   // must not print a number equal to their sum, and must not let the reader
   // construct one. So when options exist the line-item table is REPLACED (not
@@ -148,7 +154,7 @@ export function QuoteDocument({ quote, settings, services, options, acceptanceSu
   // grand-total label above already follows.
   const timing = paymentTiming(quote, {
     basisSettled: !(isOptionsQuote && !chosen),
-    acceptanceSuperseded,
+    acceptanceCurrentness,
   })
   // ⛔ NEVER fall back to quotes.subtotal. That column is `generated always as
   // (hours * crew_size * rate)` — the exact fabrication RUN-2026-07-16e ripped out
@@ -522,13 +528,13 @@ export function QuoteDocument({ quote, settings, services, options, acceptanceSu
 // heavy @react-pdf library only loads when the user actually opens a PDF.
 export async function renderQuoteBlob(
   quote: Quote, settings: BusinessSettings | null, services?: QuoteService[], options?: QuoteOption[],
-  /** See QuotePDFProps.acceptanceSuperseded — the caller's currentness answer. */
-  doc?: { acceptanceSuperseded?: boolean },
+  /** See QuotePDFProps.acceptanceCurrentness — the caller's currentness answer. */
+  doc?: { acceptanceCurrentness?: AcceptanceCurrentness },
 ): Promise<Blob> {
   return pdf(
     <QuoteDocument
       quote={quote} settings={settings} services={services} options={options}
-      acceptanceSuperseded={doc?.acceptanceSuperseded}
+      acceptanceCurrentness={doc?.acceptanceCurrentness}
     />,
   ).toBlob()
 }

@@ -560,10 +560,18 @@ export default function QuoteDetailPage() {
       // superseded"; that is the same three-valued caution as the basis above —
       // it never invents drift, and the figure it then prints is the one the
       // ledger already authorises.
-      const acceptanceSuperseded = acceptanceLoaded
-        && acceptanceStanding(acceptance) === 'needs_reapproval'
+      // ⭐ This side has the canonical answer either way, so it never reports
+      // `unverified`: quote_acceptance_state derives needs_reapproval from the
+      // material fingerprint. ⚠️ A FAILED read is `current` here rather than
+      // unverified, and that is deliberate — without the state the presentation
+      // is `unevidenced`, `customerFacingQuote` has already stripped the
+      // snapshot, and there is no superseded figure for a confirmation sentence
+      // to be about. Saying "we're confirming the acceptance" over a document
+      // that is simply showing its live price would be its own small untruth.
+      const acceptanceCurrentness = acceptanceLoaded
+        && acceptanceStanding(acceptance) === 'needs_reapproval' ? 'superseded' : 'current'
       const blob = await renderQuoteBlob(facing.moneyQuote, settings, services, options,
-        { acceptanceSuperseded })
+        { acceptanceCurrentness })
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the

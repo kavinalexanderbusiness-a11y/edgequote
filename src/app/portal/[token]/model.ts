@@ -30,7 +30,7 @@ import { schedulingGate } from '@/lib/payments/depositGate'
 // that describe the gate above. The quote card used to assert "you'll get an
 // invoice once the work is done" on a quote whose approval screen then asked for
 // half up front; both sentences now come from this one reader.
-import { paymentTiming, quoteTimingLine, approvedTimingLine } from '@/lib/payments/paymentTiming'
+import { paymentTiming, quoteTimingLine, approvedTimingLine, type AcceptanceCurrentness } from '@/lib/payments/paymentTiming'
 import { cashAmountOf, ledgerRowType } from '@/lib/payments/analytics'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { sortedOptions } from '@/lib/quoteOptions'
@@ -768,7 +768,7 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
 }
 
 export interface DocBlobRenderers {
-  quote: (q: PortalQuote, doc?: { acceptanceSuperseded?: boolean }) => Promise<Blob>
+  quote: (q: PortalQuote, doc?: { acceptanceCurrentness?: AcceptanceCurrentness }) => Promise<Blob>
   invoice: (i: PortalInvoice) => Promise<Blob>
 }
 
@@ -927,10 +927,19 @@ export function buildDocItems(opts: {
     // usable snapshot whose currentness is not explicitly true is treated as
     // superseded. Baseline is untouched because the kind is absent there, which is
     // what keeps this a fix to the broken shape and not a behaviour change.
-    const acceptanceSuperseded = qq.acceptance_kind != null && qq.acceptance_is_current !== true
+    // ⭐⭐ THREE FACTS, NOT TWO. Both non-current answers withhold the figure; only
+    // one of them may say the quote was revised. An earlier boolean collapsed
+    // them, so an old-C payload — kind present, currentness absent — printed
+    // "This quote has been revised since it was accepted" about an acceptance
+    // that may be perfectly current. Withholding was right; the claim was not.
+    const acceptanceCurrentness: AcceptanceCurrentness =
+      qq.acceptance_kind == null ? 'current'          // no usable snapshot to withhold
+      : qq.acceptance_is_current === true ? 'current'
+      : qq.acceptance_is_current === false ? 'superseded'
+      : 'unverified'                                   // old-C: kind, no currentness
     const timing = paymentTiming(moneyQuote, {
       basisSettled: !(options && !qq.selected_option_id),
-      acceptanceSuperseded,
+      acceptanceCurrentness,
     })
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
@@ -1044,7 +1053,7 @@ export function buildDocItems(opts: {
       // the SAME accepted_price, so handing it the raw quote would print the
       // $700 sentence onto the document they keep, under the $250 card they were
       // just shown. `accepted_price` feeds nothing else in that renderer.
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote, { acceptanceSuperseded }), lines, planOptions,
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote, { acceptanceCurrentness }), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
       schedulingDeposit, depositBlockedLine, preference, canEditPreference: qq.status === 'accepted',
       paymentTimingLine: quoteTimingLine(timing),

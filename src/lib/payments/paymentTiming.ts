@@ -66,7 +66,39 @@ export interface PaymentTiming {
  * words: one is a choice the customer has not made yet, the other is an agreement
  * this document no longer matches.
  */
-export type BasisUnsettledReason = 'unchosen_option' | 'superseded_acceptance'
+export type BasisUnsettledReason =
+  | 'unchosen_option'
+  | 'superseded_acceptance'
+  /**
+   * The acceptance behind this document exists but its currentness cannot be
+   * established. Distinct from `superseded_acceptance` because the two are
+   * different facts and only one of them is known — see AcceptanceCurrentness.
+   */
+  | 'unverified_acceptance'
+
+/**
+ * ⭐⭐ WHAT THE CALLER KNOWS ABOUT THE ACCEPTANCE BEHIND THIS DOCUMENT.
+ *
+ * ⛔ THREE STATES, because there are three facts and collapsing two of them puts
+ * a claim on paper that nobody established. An earlier version had a boolean, and
+ * an independent review caught what that cost: an old-C payload — one carrying
+ * `acceptance_kind` without `acceptance_is_current` — took the superseded branch
+ * and printed *"This quote has been revised since it was accepted"* on a quote
+ * whose acceptance may in fact be perfectly current. Withholding the figure there
+ * was right. Asserting a revision to justify it was not.
+ *
+ *   current      the acceptance matches this document — print the figure.
+ *   superseded   it is KNOWN not to: `quote_acceptance_is_current` said false, or
+ *                the owner's state says needs_reapproval. The document may say so.
+ *   unverified   there IS a usable acceptance and we cannot check it. Withhold the
+ *                figure exactly as for `superseded`, and say only what is true:
+ *                the acceptance is being confirmed.
+ *
+ * ⚠️ The CALLER decides. The document must not derive this for itself — that would
+ * be another independent derivation of the question this lane has spent its length
+ * consolidating — and there is deliberately no price heuristic behind it.
+ */
+export type AcceptanceCurrentness = 'current' | 'superseded' | 'unverified'
 
 export interface TimingOptions {
   /**
@@ -105,7 +137,7 @@ export interface TimingOptions {
    * itself — that would be a fourth independent derivation of the question this
    * lane has spent its whole length consolidating.
    */
-  acceptanceSuperseded?: boolean
+  acceptanceCurrentness?: AcceptanceCurrentness
 }
 
 /**
@@ -131,11 +163,16 @@ export function paymentTiming(q: GateQuote, opts: TimingOptions = {}): PaymentTi
   // ⭐ TWO reasons a basis can be unsettled, and the superseded one is checked
   // FIRST because it is the stronger fact: an unchosen option is a decision still
   // to come, a superseded acceptance is an agreement already broken.
-  const superseded = opts.acceptanceSuperseded === true
+  // ⭐ Both non-current states withhold the figure — the difference is only in
+  // what the document is then allowed to SAY about why.
+  const currentness = opts.acceptanceCurrentness ?? 'current'
+  const superseded = currentness !== 'current'
   const settled = !superseded && opts.basisSettled !== false
-  const reason: BasisUnsettledReason | null = superseded
+  const reason: BasisUnsettledReason | null = currentness === 'superseded'
     ? 'superseded_acceptance'
-    : (opts.basisSettled === false ? 'unchosen_option' : null)
+    : currentness === 'unverified'
+      ? 'unverified_acceptance'
+      : (opts.basisSettled === false ? 'unchosen_option' : null)
   const isPercentRule = q.deposit_type === 'percent'
   // ⚠️ An unchosen option cannot unsettle a FIXED rule — $500 is $500 whichever
   // option they pick, so only the percent rule waits on a choice.
@@ -186,15 +223,30 @@ export function quoteTimingLine(t: PaymentTiming): string {
   // says why. Reusing "of the option you choose" would tell a customer their
   // figure depends on a choice when it actually depends on a revision they have
   // not seen yet — a true-sounding sentence about the wrong thing.
+  // ⚠️ A percent rule can still state its RULE, because a percentage is the
+  // quote's configuration and survives whatever happened to the acceptance. A
+  // fixed rule's rule IS its dollars, so there is nothing left to state but the
+  // requirement itself — inventing a percentage for it would be arithmetic
+  // nobody wrote.
+  const rule = t.depositPercent != null ? `A ${t.depositPercent}% deposit` : 'A deposit'
   if (t.basisUnsettledReason === 'superseded_acceptance') {
-    // ⚠️ A percent rule can still state its RULE, because a percentage is the
-    // quote's configuration and survives the revision. A fixed rule's rule IS its
-    // dollars, so there is nothing left to state but the requirement itself —
-    // and inventing a percentage for it would be arithmetic nobody wrote.
-    const rule = t.depositPercent != null ? `A ${t.depositPercent}% deposit` : 'A deposit'
     return `${rule} is required before we schedule your visit. `
       + 'This quote has been revised since it was accepted, so the amount previously agreed no longer applies — '
       + 'we’ll confirm the deposit on the updated quote before anything is due.'
+  }
+  // ⛔⛔ SAY ONLY WHAT IS KNOWN. Both states withhold the figure, and it would be
+  // easy to reuse the sentence above — an independent review caught exactly that:
+  // an old-C payload printed "This quote has been revised since it was accepted"
+  // about a quote whose acceptance may be perfectly current. Withholding was the
+  // safe direction; the revision claim was not established by anything.
+  //
+  // So this sentence asserts no revision, promises no change, and does not
+  // reassure either. It says the one true thing — the acceptance on file is being
+  // confirmed — and that nothing is due until it has been.
+  if (t.basisUnsettledReason === 'unverified_acceptance') {
+    return `${rule} is required before we schedule your visit. `
+      + 'We’re confirming the acceptance we have on file for this quote, so we can’t state the amount here yet — '
+      + 'we’ll confirm it with you before anything is due.'
   }
   const ask = t.depositAmount == null
     ? `A ${t.depositPercent}% deposit of the option you choose`
