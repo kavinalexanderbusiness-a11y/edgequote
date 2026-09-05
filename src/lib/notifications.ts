@@ -113,6 +113,19 @@ function groupTitle(type: string, n: number): string {
   return `${n} ${plural}`
 }
 
+// ── The snooze vocabulary ────────────────────────────────────────────────────
+// "Remind me later" means the same thing everywhere it is offered (the Inbox's
+// event actions and the notifications page), so it is defined once, here, beside
+// the rest of the notification vocabulary. Local time deliberately: 8am is a
+// promise about the owner's morning, not about UTC.
+/** "Remind me later" → tomorrow at 8am **local** time, as an ISO instant. */
+export function tomorrow8am(): string {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  d.setHours(8, 0, 0, 0)
+  return d.toISOString()
+}
+
 export interface NotifGroup {
   key: string
   type: string

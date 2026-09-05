@@ -3,7 +3,8 @@
 // The two quiet controls an EVENT item carries (derived items have neither —
 // they resolve through their canonical door and disappear on their own).
 //   Snooze  → notifications.snoozed_until = tomorrow 8am (the product's one
-//             snooze vocabulary — same rule as the notifications page).
+//             snooze vocabulary — lib/notifications’ tomorrow8am, the same
+//             function the notifications page calls).
 //   Dismiss → notifications.archived_at = now. Archiving IS the legitimate
 //             state change for an event record: the fact stays on file, it just
 //             stops asking. Never a delete.
@@ -14,14 +15,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { Clock, X } from 'lucide-react'
-
-// "Remind me later" → tomorrow at 8am local — the notifications page's rule.
-function tomorrow8am(): string {
-  const d = new Date()
-  d.setDate(d.getDate() + 1)
-  d.setHours(8, 0, 0, 0)
-  return d.toISOString()
-}
+import { tomorrow8am } from '@/lib/notifications'
 
 export function EventItemActions({ notificationId }: { notificationId: string }) {
   const router = useRouter()

@@ -24,13 +24,14 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
 import {
   composeInbox, MIRRORED_BY_STATE, SOURCE_LABELS,
   type InboxItem, type InboxSources, type SourceResult, type ChangeOrderRow,
   type CrewUnreadRow, type DayPlanRow,
 } from '../src/lib/inbox'
 import { computePriorities, type Priority, type PriorityInvoice } from '../src/lib/dashboard/priorities'
-import { notifPriority } from '../src/lib/notifications'
+import { notifPriority, tomorrow8am } from '../src/lib/notifications'
 import { planDay } from '../src/lib/dayPlan'
 import { settingsToSeasons } from '../src/lib/seasons'
 import type { LeadResponseReport } from '../src/lib/leadResponse'
@@ -460,6 +461,54 @@ console.log('\n═══ 8. The wiring: one engine, one count, honest pages ═�
   check('dismiss archives — the record stays on file', /archived_at/.test(ACTIONS) && !/\.delete\(/.test(ACTIONS))
   check('snooze/dismiss branch on the write’s own error before moving on',
     /if \(error\)/.test(ACTIONS), 'a failed snooze that looks snoozed is the undo-contract bug')
+
+  // ── One snooze vocabulary ──────────────────────────────────────────────────
+  // "Remind me later" is offered on two surfaces. It used to be implemented
+  // twice, identically, with the copy documenting itself as a copy — nothing
+  // failed if one drifted, so the owner could get two different answers to the
+  // same word. These pin the single definition AND its local-time meaning.
+  const NOTIF_LIB = read('src/lib/notifications.ts')
+  const PAGE_SRC = read('src/app/dashboard/notifications/page.tsx')
+  const declares = (s: string) => /(?:function|const)\s+tomorrow8am\b/.test(s)
+  check('the snooze rule is declared exactly once, in the organizer',
+    declares(NOTIF_LIB) && !declares(ACTIONS) && !declares(PAGE_SRC),
+    'two copies of “tomorrow 8am” can drift into two different promises')
+  check('…and both surfaces call that one definition',
+    /import \{[^}]*\btomorrow8am\b[^}]*\} from '@\/lib\/notifications'/.test(ACTIONS) &&
+    /import \{[^}]*\btomorrow8am\b[^}]*\} from '@\/lib\/notifications'/.test(PAGE_SRC) &&
+    /tomorrow8am\(\)/.test(ACTIONS) && /tomorrow8am\(\)/.test(PAGE_SRC))
+
+  // Executed, not read: the promise is 8am in the OWNER’S morning. A UTC-based
+  // implementation passes every source regex above and still wakes a Kolkata
+  // owner at 1:30pm, so each zone is checked in a child process with a real TZ.
+  const ZONES = ['America/Edmonton', 'Asia/Kolkata', 'Pacific/Chatham', 'Australia/Lord_Howe', 'UTC']
+  // A probe FILE, not `tsx -e`: on Windows spawnSync needs shell:true to find
+  // npx, and the shell then mangles inline code containing quotes/newlines.
+  const probePath = join(process.cwd(), `.tomorrow8am-probe.${process.pid}.ts`)
+  writeFileSync(probePath, [
+    "import { tomorrow8am } from './src/lib/notifications'",
+    'const d = new Date(tomorrow8am())',
+    'const t = new Date(); t.setDate(t.getDate() + 1)',
+    'console.log(JSON.stringify({ h: d.getHours(), m: d.getMinutes(), s: d.getSeconds(),',
+    '  ms: d.getMilliseconds(), sameDay: d.getFullYear() === t.getFullYear() &&',
+    '  d.getMonth() === t.getMonth() && d.getDate() === t.getDate() }))',
+  ].join('\n'))
+  let zoneResults: { tz: string; h: number; m: number; s: number; ms: number; sameDay: boolean }[] = []
+  try {
+    zoneResults = ZONES.map(tz => {
+      const r = spawnSync('npx', ['tsx', probePath], {
+        cwd: process.cwd(), encoding: 'utf8', shell: process.platform === 'win32',
+        env: { ...process.env, TZ: tz },
+      })
+      const line = (r.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || ''
+      try { return { tz, ...JSON.parse(line) } } catch { return { tz, h: -1, m: -1, s: -1, ms: -1, sameDay: false } }
+    })
+  } finally { rmSync(probePath, { force: true }) }
+  const localAt8 = (z: { h: number; m: number; s: number; ms: number; sameDay: boolean }) =>
+    z.h === 8 && z.m === 0 && z.s === 0 && z.ms === 0 && z.sameDay
+  check('snooze lands at 08:00 LOCAL tomorrow in every zone, not 08:00 UTC',
+    zoneResults.every(localAt8),
+    'zones off: ' + zoneResults.filter(z => !localAt8(z)).map(z => `${z.tz}→${z.h}h`).join(', '))
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

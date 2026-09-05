@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { toast } from '@/lib/toast'
 import { AppNotification } from '@/components/notifications/NotificationBell'
-import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
+import { groupNotifications, notificationActionLabel, tomorrow8am, type NotifGroup } from '@/lib/notifications'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -36,8 +36,6 @@ const ICON: Record<string, typeof FileText> = {
 // (title, Build-quote action, accent) instead of reading like ordinary portal chatter.
 const isLeadNotif = (n: AppNotification | undefined): boolean =>
   !!n && n.type === 'portal_request' && /new\b[^]*\blead/i.test(n.body || '')
-// "Remind me later" → tomorrow at 8am local.
-function tomorrow8am(): string { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.toISOString() }
 
 export default function NotificationsPage() {
   const supabase = useMemo(() => createClient(), [])
