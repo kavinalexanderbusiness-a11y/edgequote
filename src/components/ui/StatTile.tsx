@@ -24,9 +24,23 @@ interface StatTileProps {
   tonedSurface?: boolean // tint the whole tile with the tone (status tiles)
   onClick?: () => void   // interactive tile → renders a <button>
   className?: string
+  /**
+   * ⭐⭐ OPT-IN, DEFAULT OFF. `sub` truncates to one line with an ellipsis by
+   * default — right for a short caption like "3 acted · 1 won", wrong for a
+   * caveat the reader MUST read in full. A narrow-phone audit caught exactly
+   * that: "19 without enough data" clipped to "19 without e…" at 375px,
+   * because the tile holding it is one of four in a 2-column mobile grid and
+   * the sub-line had almost no width. Set `subWrap` on a tile whose sub-text is
+   * a disclosure, never a decoration — clipping the ONE sentence that limits
+   * what a headline figure means is worse than a taller tile.
+   * ⛔ Left false everywhere else on purpose: this is a shared component used
+   * across the app, and changing the default would reflow every other tile's
+   * card grid for callers that never asked for it.
+   */
+  subWrap?: boolean
 }
 
-export function StatTile({ label, value, sub, icon: Icon, tone, accent, tonedSurface, onClick, className }: StatTileProps) {
+export function StatTile({ label, value, sub, icon: Icon, tone, accent, tonedSurface, onClick, className, subWrap }: StatTileProps) {
   const surface = accent
     ? 'border-accent/30 bg-accent/[0.06]'
     : tonedSurface && tone
@@ -41,7 +55,7 @@ export function StatTile({ label, value, sub, icon: Icon, tone, accent, tonedSur
       </div>
       {/* tabular-nums so KPI digits never shift width as values change */}
       <p className={cn('text-xl font-black tracking-tight tabular-nums mt-1.5', tone ? toneText[tone] : 'text-ink')}>{value}</p>
-      {sub && <p className="text-[11px] text-ink-muted mt-1 truncate">{sub}</p>}
+      {sub && <p className={cn('text-[11px] text-ink-muted mt-1', subWrap ? 'break-words' : 'truncate')}>{sub}</p>}
     </>
   )
 

@@ -1,14 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import {
-  loadRevenueIntel, recordRecommendation, RevenueIntelReport, Opportunity, LtvForecast,
-  OppKind, OPP_META, Confidence, FeedbackRow,
+  loadRevenueIntel, recordRecommendation, readRecommendation, RevenueIntelReport, Opportunity, LtvForecast,
+  OppKind, OPP_META, Confidence, FeedbackRow, priorityScoreLabel, priorityScoreTooltip,
 } from '@/lib/revenueIntelligence'
 import { INSUFFICIENT_LABEL, evidenceSummary, insufficientReason } from '@/lib/growthEvidence'
+import { concentrationFact } from '@/lib/growthConcentration'
+import { createActionController, withRow, type ActionNotice } from '@/lib/growthActions'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
@@ -16,7 +18,7 @@ import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
-import { formatCurrency, cn } from '@/lib/utils'
+import { formatCurrency, cn, timeAgo } from '@/lib/utils'
 import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw, HelpCircle } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
 
@@ -36,23 +38,70 @@ export default function RevenueIntelligencePage() {
   const [feedback, setFeedback] = useState<Record<string, FeedbackRow>>({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<OppKind | 'all'>('all')
-  const [busy, setBusy] = useState<string | null>(null)
+  // ⭐ The tap handler lives in lib/growthActions — one save in flight per card
+  // (a synchronous latch), concurrent across cards, a server refusal restored
+  // and said, a dropped connection READ BACK rather than declared failed. The
+  // page only lends it React state through these callbacks, so the handler the
+  // page runs is the one verify:growth-actions drives offline.
+  const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(new Set())
+  // Keyed by opportunity: an unresolved failure on one card must survive a tap on another.
+  const [actionNotices, setActionNotices] = useState<Record<string, ActionNotice>>({})
+  const controllerRef = useRef<ReturnType<typeof createActionController> | null>(null)
+  const controller = () => (controllerRef.current ??= createActionController({
+    record: (o, status, value) => recordRecommendation(supabase, o, status, value),
+    read: key => readRecommendation(supabase, key),
+    setRow: (key, row) => setFeedback(prev => withRow(prev, key, row)),
+    setBusy: setBusyKeys,
+    setNotice: (key, n) => setActionNotices(prev => withRow(prev, key, n ?? undefined)),
+  }))
   const [showForecast, setShowForecast] = useState(false)
+  // ⭐ A refresh that fails must SAY so. loadRevenueIntel returns null when any
+  // read errors (its honesty gate) and throws on a dropped connection; both used
+  // to fall through `if (res)` with nothing said, so the previous figures stayed
+  // on screen as if they were current. The report is still KEPT — stale data
+  // labelled stale beats a blank page — but it is labelled, dated, and a retry
+  // is offered in the same line. `loadedAt` is null while the figures are the
+  // session cache's (an earlier visit), so the label says "earlier results".
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [loadedAt, setLoadedAt] = useState<number | null>(null)
 
   async function load() {
+    // The cache lease is taken FIRST, before anything can await: the write below
+    // must carry the account this load was STARTED under, not whoever is signed
+    // in when it lands. Same rule as the other writers.
     const lease = cacheLease()
+    // Captured BEFORE the read: anything confirmed after this is newer than the
+    // answer coming back, and must not be overwritten by it.
+    const since = controller().beginRefresh()
+    setLoading(true)
+    setRefreshError(null)
     try {
       const res = await loadRevenueIntel(supabase)
-      if (res) { setReport(res.report); setFeedback(res.feedback); writeCache('revintel', res.report, { lease }) }
+      if (res) {
+        setReport(res.report); setFeedback(res.feedback); setLoadedAt(Date.now()); writeCache('revintel', res.report, { lease })
+        // The server's feedback is the confirmed baseline for every card; cards
+        // with a save in flight keep their optimistic badge until it settles.
+        controller().onRefreshed(res.feedback, since)
+      }
+      else setRefreshError('Could not refresh')
+    } catch {
+      setRefreshError('Could not refresh')
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function act(o: Opportunity, status: 'acted' | 'dismissed' | 'won') {
-    setBusy(o.key)
-    setFeedback(prev => ({ ...prev, [o.key]: { opportunity_key: o.key, kind: o.kind, status, expected_value: o.expectedValue, result_value: status === 'won' ? o.expectedValue : null } }))
-    await recordRecommendation(supabase, o, status, status === 'won' ? o.expectedValue : undefined)
-    setBusy(null)
+  // ⭐ `result_value` is seeded from the FORECAST (`o.expectedValue`), not from
+  // any invoice/payment evidence — there is no collections feed into this table
+  // at all. "Marking won" records the owner's own claim that the play landed;
+  // it does not verify what was actually charged or collected. Kept exactly as
+  // the forecast on purpose (a "how much did they actually pay" flow would be a
+  // different, real-money feature — invoicing/payments own that, not this
+  // advisor), but every surface reading this value must say "marked won", never
+  // "revenue" or "collected". See the `wonValue` tile above.
+  // The optimistic row (result_value = the forecast) is built by the controller;
+  // the page only forwards the tap. A second tap on a busy card is refused there.
+  function act(o: Opportunity, status: 'acted' | 'dismissed' | 'won') {
+    controller().act(o, status)
   }
 
   if (loading && !report) {
@@ -71,7 +120,7 @@ export default function RevenueIntelligencePage() {
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Who to call next" />
       <p className="text-sm text-ink-muted">
         Could not load revenue intelligence — check your connection and{' '}
-        <button type="button" onClick={() => window.location.reload()} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">try again</button>.
+        <button type="button" onClick={load} disabled={loading} className="text-accent-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">try again</button>.
       </p>
     </PageContainer>
   )
@@ -83,7 +132,26 @@ export default function RevenueIntelligencePage() {
   const fbList = Object.values(feedback)
   const actedCount = fbList.filter(f => f.status === 'acted' || f.status === 'won').length
   const wonCount = fbList.filter(f => f.status === 'won').length
+  // ⭐⭐ THIS IS NOT COLLECTED REVENUE. `act()` below seeds `result_value` from
+  // `o.expectedValue` — the SAME forecast figure the opportunity card already
+  // showed — at the moment the owner taps "Mark won". Nothing here reads an
+  // invoice, a payment or any other evidence that money actually changed hands;
+  // `revenue_recommendations.result_value` has no such feed at all today. So
+  // `wonValue` is "the sum of what we forecasted for the plays you told us you
+  // won", not a collections figure — and the tile below is labelled to say
+  // exactly that ("Value marked won"), never "Revenue" or "Collected".
   const wonValue = fbList.filter(f => f.status === 'won').reduce((s, f) => s + Number(f.result_value || 0), 0)
+
+  // The headline's one caveat line: how many recommendations the figure speaks
+  // for, how many were left out, and — only when one customer dominates — the
+  // share, from the SAME denominator (lib/growthConcentration; one-time upsells
+  // are the next tile). A null fact simply drops out of the line.
+  const recurringCaveat = [
+    summary.unquantified > 0
+      ? `/yr from ${summary.quantified} · ${summary.unquantified} without enough data`
+      : `/yr from ${summary.quantified} recommendation${summary.quantified === 1 ? '' : 's'}`,
+    concentrationFact(summary.concentration),
+  ].filter(Boolean).join(' · ')
 
   const KINDS: (OppKind | 'all')[] = ['all', 'renewal', 'upsell', 'cross_sell', 'membership', 'referral', 'reactivation']
   const kindCount = (k: OppKind | 'all') => k === 'all' ? live.length : live.filter(o => o.kind === k).length
@@ -94,6 +162,15 @@ export default function RevenueIntelligencePage() {
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
 
+      {/* ⭐ Stale is said, above everything it qualifies. Not a card: one line,
+          rendered only after a failed refresh, dating the figures still shown. */}
+      {refreshError && (
+        <p role="alert" className="text-xs text-amber-400">
+          {refreshError} — showing {loadedAt ? `results from ${timeAgo(new Date(loadedAt).toISOString())}` : 'earlier results'}, which may be out of date.{' '}
+          <button type="button" onClick={load} disabled={loading} className="underline font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">Retry</button>
+        </p>
+      )}
+
       {/* Summary — upside on the left, risk on the right (the two numbers that matter) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-rise">
         {/* ⭐⭐ THE HEADLINE NOW SAYS HOW MUCH OF THE BOOK IT SPEAKS FOR.
@@ -101,13 +178,19 @@ export default function RevenueIntelligencePage() {
             was in fact a sum over figures many of which were a single visit
             multiplied by a cadence nobody declared. The figure is now only the
             quantified ones, and the sub-line says how many were left out. */}
+        {/* ⭐ subWrap: the audit that added this caveat is the same one that had
+            it clipped to "19 without e…" at 375px — a truncated disclosure is
+            no disclosure. See StatTile's subWrap doc for why this is opt-in
+            rather than the shared component's new default. */}
         <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)}
-          sub={summary.unquantified > 0
-            ? `/yr from ${summary.quantified} · ${summary.unquantified} without enough data`
-            : `/yr from ${summary.quantified} recommendation${summary.quantified === 1 ? '' : 's'}`}
+          sub={recurringCaveat}
+          subWrap
           accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
-        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
+        {/* ⭐ "Revenue from acted" implied collected money. This is the sum of
+            forecasted expectedValue for plays marked won — see the `wonValue`
+            comment above — so the label says what it actually is. */}
+        <Tile label="Value marked won" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
         {(() => {
           const atRisk = ltvForecast.reduce((s, f) => s + (Number(f.churnRiskImpact) || 0), 0)
           // Tappable — opens + scrolls to the LTV forecast where the at-risk names live.
@@ -127,9 +210,14 @@ export default function RevenueIntelligencePage() {
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Top move right now</p>
             <p className="text-base font-bold tracking-tight text-ink mt-0.5">{summary.topAction.action} — {summary.topAction.customerName}</p>
+            {/* ⭐⭐ "% likely to land" claimed a measured conversion probability.
+                The score is a fixed-point heuristic (base + signal deltas,
+                clamped 0-100) — real for RANKING, invented if read as a
+                percentage chance. priorityScoreLabel is the one honest sentence,
+                shared with every OppCard below so neither drifts back. */}
             <p className="text-xs text-ink-muted mt-1 tabular-nums">
               <span className="font-semibold text-accent-text">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'}</span>
-              {' '}· {summary.topAction.score}% likely to land, based on this customer’s history
+              {' '}· {priorityScoreLabel(summary.topAction.score)}, based on this customer’s history
             </p>
           </div>
           <Link href={summary.topAction.actionHref} onClick={() => act(summary.topAction!, 'acted')} className="shrink-0">
@@ -142,23 +230,36 @@ export default function RevenueIntelligencePage() {
       <div className="flex flex-wrap items-center gap-1.5">
         {KINDS.map(k => {
           const n = kindCount(k)
-          if (k !== 'all' && n === 0) return null
+          // ⭐ The ACTIVE kind stays visible at zero. Before, a refresh (or the
+          // last dismissal) that emptied the selected kind hid its pill while
+          // `filter` still held it — an empty list under "All" that was not
+          // selected, with no way to see or clear the filter that caused it.
+          if (k !== 'all' && n === 0 && filter !== k) return null
           return (
             <FilterPill key={k} active={filter === k} onClick={() => setFilter(k)}>
               {k === 'all' ? 'All' : OPP_META[k as OppKind].label} {n > 0 && <span className="opacity-70 tabular-nums">{n}</span>}
             </FilterPill>
           )
         })}
-        <button onClick={load} title="Refresh" aria-label="Refresh opportunities" className="ml-auto h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><RefreshCw className="w-3.5 h-3.5" /></button>
+        <button onClick={load} disabled={loading} aria-busy={loading} title="Refresh" aria-label="Refresh opportunities" className="ml-auto h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"><RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} /></button>
       </div>
 
       {/* Ranked opportunities — the Action Center */}
+      {/* A save the server refused, or one whose answer the wire lost, is said
+          once here, above the cards it concerns. An unconfirmed one is not
+          declared failed: the owner is pointed at a refresh, not at a repeat. */}
+      {Object.values(actionNotices).map(n => (
+        <p key={n.key} role="alert" className="text-xs text-amber-400">
+          {n.text}
+          {n.tone === 'unconfirmed' && <>{' '}<button type="button" onClick={load} disabled={loading} className="underline font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded disabled:opacity-50">Refresh now</button></>}
+        </p>
+      ))}
       <div className="space-y-2.5">
         {inFilter.length === 0 ? (
           <EmptyState icon={Sparkles} className="py-12" title="No opportunities in this view yet"
             description="Predictions sharpen as jobs complete and quotes are decided." />
         ) : inFilter.map((o, i) => (
-          <OppCard key={o.key} o={o} index={i} status={feedback[o.key]?.status} busy={busy === o.key} onAct={act} />
+          <OppCard key={o.key} o={o} index={i} status={feedback[o.key]?.status} busy={busyKeys.has(o.key)} onAct={act} />
         ))}
       </div>
 
@@ -177,7 +278,8 @@ export default function RevenueIntelligencePage() {
             {ltvForecast.slice(0, 12).map(f => (
               <div key={f.customerId} className="px-5 py-2.5 flex items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <Link href={`/dashboard/customers/${f.customerId}`} className="text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
+                  {/* block: measured (same run) — `truncate` cannot clip an inline anchor, so long names overflowed the viewport. */}
+                  <Link href={`/dashboard/customers/${f.customerId}`} className="block text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
                   <p className="text-[11px] text-ink-faint tabular-nums">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
                 </div>
                 {f.churnRiskImpact > 0 && (
@@ -199,8 +301,8 @@ export default function RevenueIntelligencePage() {
 }
 
 // Thin adapter over the ONE shared KPI tile (no local tile styles to drift).
-function Tile({ label, value, sub, accent, danger }: { label: string; value: string; sub?: string; accent?: boolean; danger?: boolean }) {
-  return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} />
+function Tile({ label, value, sub, accent, danger, subWrap }: { label: string; value: string; sub?: string; accent?: boolean; danger?: boolean; subWrap?: boolean }) {
+  return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} subWrap={subWrap} />
 }
 
 function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: number; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {
@@ -221,15 +323,26 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
               <span className={cn('w-1.5 h-1.5 rounded-full', CONF_DOT[o.confidence])} />
               {CONF_LABEL[o.confidence]}
             </span>
-            {/* Likelihood as a meter, not a fraction — read at a glance. */}
-            <span className="inline-flex items-center gap-1.5 text-[10px] text-ink-faint tabular-nums" title={`${o.score}/100 likelihood this play lands`}>
+            {/* ⭐⭐ A PRIORITY METER, NOT A LIKELIHOOD METER. The bar's fill width
+                is still driven by the same 0-100 score (that geometry is honest
+                — it IS how the advisor ranks), but the number beside it used to
+                read "61%" with a tooltip saying "likelihood this play lands",
+                which is a measured-probability claim this heuristic score
+                cannot support. The chip now says "Priority score N/100" in
+                full (priorityScoreLabel — the same words the hero line uses;
+                never `%`), VISIBLY: the fixture run at 375/390/430 measured
+                that a title tooltip never appears on a touch screen, so a
+                bare "61/100" was a number with no name for every phone user.
+                The tooltip keeps the longer sentence for pointer users. */}
+            <span className="inline-flex items-center gap-1.5 text-[10px] text-ink-faint tabular-nums" title={priorityScoreTooltip(o.score)}>
               <span className="w-10 h-1 rounded-full bg-border overflow-hidden">
                 <span className="block h-full rounded-full bg-accent/80" style={{ width: `${Math.min(100, Math.max(4, o.score))}%` }} />
               </span>
-              {o.score}%
+              {priorityScoreLabel(o.score)}
             </span>
           </div>
-          <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
+          {/* break-words: measured at 375/390/430 — an unbroken customer name painted past the card (growth-visual-fixture run 1). */}
+          <p className="text-sm font-bold tracking-tight text-ink mt-1.5 break-words">{o.action} — {o.customerName}</p>
         </div>
         {/* ⭐⭐ THE FIGURE ONLY APPEARS WHEN ITS EVIDENCE EARNED IT.
             An unquantified opportunity is still worth acting on — the action and
