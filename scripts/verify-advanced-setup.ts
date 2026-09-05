@@ -323,7 +323,12 @@ async function navigationCases(mutate?: (s: string) => string) {
     out.retainedNotGuess = s.raw()?.unknown === undefined
   }
 
-  // A FOREIGN snapshot is never served — and the fallback is still fail-OPEN.
+  // A FOREIGN snapshot is never served — the RENDER-TIME gate, and ONLY that.
+  // ⚠️ Narrow on purpose, and it must not be read as more: B's read is never
+  // answered here, so `loadModules` never reaches its error branch. This proves
+  // `getSnapshot`. It says nothing about the retention line, and it passes
+  // identically whichever way that line is written. The case below is the one
+  // that reaches it.
   {
     const w = fake6b(); const s = liftStore(w.create, mutate)
     s.ensureAuthWatch(); w.signIn('acct-A'); await settle()
@@ -331,6 +336,34 @@ async function navigationCases(mutate?: (s: string) => string) {
     w.signIn('acct-B'); await settle()
     out.foreignServed = s.served() === null
     out.foreignDrawn = drawn(s)
+  }
+
+  // ⛔⛔ A GOOD → SWITCH TO B → B'S READ FAILS. The only route into loadModules'
+  // error branch with a snapshot already in the store, and therefore the only
+  // case that can see the line the account-isolation work changed.
+  //
+  // ⚠️ THE SAFE ANSWER HERE IS NOT `served() === null`; asserting that would be
+  // asserting something the code cannot produce. The error branch stamps
+  // `storeOwner = uid` (B) on its way out, so `mayServeOwner(true, B, B)` is TRUE
+  // and a render IS legitimately served the snapshot. What makes it safe is what
+  // that snapshot HOLDS: `enabled: null` + `unknown: true` — the fail-open guess
+  // owned by B, never A's composition relabelled as B's.
+  //
+  // The pre-isolation `store = store ?? { … }` kept A's array and then stamped
+  // B's name on it. The render gate cannot catch that, because the mislabelling
+  // happens upstream of it.
+  {
+    const w = fake6b(); const s = liftStore(w.create, mutate)
+    s.ensureAuthWatch(); w.signIn('acct-A'); await settle()
+    w.answer(good([ONE_NON_CORE])); await settle()
+    w.signIn('acct-B'); await settle()   // B's own load is now in flight…
+    w.answer(blipped); await settle()    // …and it fails
+    out.bFailedEnabled = JSON.stringify(s.served()?.enabled ?? null)
+    out.bFailedIsGuess = s.served()?.unknown === true
+    out.bFailedDrawn = drawn(s)
+    const refusal = s.persist([ONE_NON_CORE], {})
+    await settle(); w.answerWrite({ error: null })
+    out.bFailedWriteRefused = await refusal
   }
   return out
 }
@@ -355,10 +388,22 @@ void (async () => {
   check('a failed read after a GOOD one keeps OUR last good composition',
     nav.retainedEnabled === JSON.stringify([ONE_NON_CORE]) && nav.retainedNotGuess === true,
     'the account-isolation rewrite kept this; it only stopped retaining ANOTHER account\'s snapshot')
-  check('⛔ a snapshot belonging to another account is never served',
-    nav.foreignServed === true)
+  check('a snapshot belonging to another account is not served AT RENDER',
+    nav.foreignServed === true,
+    'the render-time gate only — B\'s read has not settled here, so this cannot see the retention line')
   check('…and that fallback is fail-OPEN too, not an empty nav',
     nav.foreignDrawn === ALL, `drew ${nav.foreignDrawn} of ${ALL}`)
+  check('⛔⛔ A good → switch to B → B\'s read FAILS: B is never served A\'s composition',
+    nav.bFailedEnabled === 'null',
+    `served enabled = ${nav.bFailedEnabled} — the pre-isolation fallback keeps A's array and stamps B's name on it`)
+  check('…what B IS served is the fail-open guess owned by B, not nothing',
+    nav.bFailedIsGuess === true,
+    'served() is deliberately NOT asserted null here: the error branch stamps storeOwner = B, so the render gate serves the snapshot legitimately. Safety is enabled:null + unknown:true, not absence')
+  check('…so navigation still draws every module on that path',
+    nav.bFailedDrawn === ALL, `drew ${nav.bFailedDrawn} of ${ALL}`)
+  check('…and a write on that guess fails CLOSED',
+    typeof nav.bFailedWriteRefused === 'string' && nav.bFailedWriteRefused.length > 0,
+    'otherwise B would save a composition derived from a failed read')
   check('[positive control] a GOOD read narrows navigation, so "all" is not constant',
     typeof nav.goodDrawn === 'number' && nav.goodDrawn < ALL && nav.goodDrawn > 0,
     `a successful read drew ${nav.goodDrawn} of ${ALL}`)
@@ -397,10 +442,22 @@ void (async () => {
     /return mayServeOwner\([^)]*\) \? store : null/, 'return store'))
   check('[mutation] serving the store without checking the owner is caught',
     bareSnapshot.foreignServed !== true,
-    'this is the account-isolation property the rewrite exists for')
+    'the RENDER-TIME half of ownership — not the retention line; see the next mutation for that')
+
+  // ⛔⛔ THE MUTATION THIS GUARD PREVIOUSLY LACKED. Restoring the pre-isolation
+  // fallback must turn the B-failed case RED. It did not before, because no case
+  // reached that line: the guard scored 42/0 on BOTH spellings, which was a
+  // COVERAGE GAP and not evidence that the two are equivalent. They are not —
+  // the old form serves A's composition to B.
+  const oldFallback = await navigationCases(inject('old-fallback',
+    /store = [^\n]*\{ enabled: null, meta: \{\}, unknown: true \}/,
+    'store = store ?? { enabled: null, meta: {}, unknown: true }'))
+  check('[mutation] the PRE-ISOLATION fallback leaking A\'s composition to B is caught',
+    oldFallback.bFailedEnabled !== 'null' && oldFallback.bFailedDrawn !== ALL,
+    `with \`store = store ?? …\` the B-failed case served ${oldFallback.bFailedEnabled} and drew ${oldFallback.bFailedDrawn} of ${ALL} — if this line is green, the case is not discriminating`)
 
   check('every fault above actually reached the source — no vacuous mutation',
-    ['empty-nav', 'no-guess-flag', 'bare-snapshot'].every(k => (injected[k] ?? 0) > 0),
+    ['empty-nav', 'no-guess-flag', 'bare-snapshot', 'old-fallback'].every(k => (injected[k] ?? 0) > 0),
     `injected: ${JSON.stringify(injected)} — a missing key means the anchor moved and that check proved nothing`)
 
   sectionFinished = true
