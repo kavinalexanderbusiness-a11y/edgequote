@@ -10,6 +10,7 @@ import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useModules } from '@/hooks/useModules'
 import { CATEGORY_ORDER, MODULE_CATEGORIES } from '@/lib/modules'
 import { useUnread } from '@/hooks/useUnread'
+import { clearOwnedCaches } from '@/lib/clientCache'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 import { Kbd } from '@/components/ui/Kbd'
 
@@ -152,6 +153,10 @@ export function Sidebar() {
     // security-positive reading of that click — it ends the session on a phone
     // that may be lost. verify:auth-session §5 has pinned this deliberately, and
     // fails if it ever becomes scope-limited without someone saying so.
+    // The device forgets this account's reports and field bundle (the `eq:`
+    // namespace only) before the session ends — the next account on this
+    // browser must not inherit them, and the stamp alone would only hide them.
+    clearOwnedCaches()
     await supabase.auth.signOut({ scope: 'global' })
     router.push('/login')
   }
