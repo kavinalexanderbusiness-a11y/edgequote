@@ -119,7 +119,11 @@ console.log('\n── §1 one owner, leased writes, named first, cleared at sign
   // to their owner (ROOT/S111 hold that surface); until threaded they write
   // nothing — fail closed — and this list is where that debt is recorded.
   const DEFERRED = ['src/app/dashboard/customers/page.tsx', 'src/app/dashboard/customers/[id]/page.tsx']
-  const writers = walk('src').filter(f => !/[\\/]lib[\\/]clientCache\.ts$/.test(f)).map(f => f.replace(/\\/g, '/')).filter(f => /writeCache\(/.test(strip(read(f))))
+  // Discovery must see generic calls too — `writeCache<FieldBundle>(` — or the
+  // schedule bundle, the prefetch and the second customer page vanish from the pin.
+  const CALL = /writeCache(?:<[^>]*>)?\(/g
+  const writers = walk('src').filter(f => !/[\\/]lib[\\/]clientCache\.ts$/.test(f)).map(f => f.replace(/\\/g, '/')).filter(f => CALL.test(strip(read(f))) && (CALL.lastIndex = 0, true))
+  check('discovery sees every writer, generic calls included (14 files: 12 threaded + 2 deferred)', writers.length === 14, `found ${writers.length}: ${writers.join(', ')}`)
   const unleased = writers.filter(f => {
     const s = strip(read(f))
     return [...s.matchAll(/writeCache(?:<[^>]*>)?\(/g)].some(m => !/lease\s*\}\)/.test(s.slice(m.index!, m.index! + 900)))
