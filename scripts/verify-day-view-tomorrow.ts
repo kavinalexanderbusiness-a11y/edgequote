@@ -71,6 +71,45 @@ check('an unknown tenant timezone shows loading before any schedule controls',
   && /if \(!tenantTimeReady\) return <SkeletonRows label="Loading schedule…" \/>/.test(page))
 check('the calendar receives the same tenant day as the board', /todayISO=\{tenantToday\}/.test(page))
 
+// Execute only the two readiness-sensitive effect bodies with fake timers,
+// DOM and setters. A slow timezone read must not consume navigation intent or
+// exhaust the scroll timeout while the target is hidden behind the skeleton.
+function effectAfter(marker: string) {
+  const start = page.indexOf(marker)
+  const match = start < 0 ? null : page.slice(start).match(/useEffect\(\(\) => \{([\s\S]*?)\n  \}, \[([^\]]*)\]\)/)
+  if (!match) throw new Error(`Missing schedule effect: ${marker}`)
+  return { body: match[1], dependencies: match[2] }
+}
+const panelEffect = effectAfter("const panelParam = searchParams.get('panel')")
+const runPanel = new Function('tenantTimeReady', 'panelParam', 'editing', 'readJobPanel', 'window', 'document', 'jobPanelAnchorId', 'scrollBehavior', panelEffect.body)
+let timer: (() => void) | null = null
+let scrolls = 0
+const fakeWindow = {
+  setInterval(callback: () => void) { timer = callback; return 1 },
+  clearInterval() { timer = null },
+}
+const fakeDocument = { getElementById: () => ({ scrollIntoView() { scrolls++ } }) }
+const panelArgs = ['time', { id: 'synthetic-visit' }, (value: string) => value, fakeWindow, fakeDocument, (value: string) => value, () => 'auto']
+runPanel(false, ...panelArgs)
+check('a slow timezone read starts no panel timeout while the target is hidden', timer === null && scrolls === 0)
+const cleanupPanel = runPanel(true, ...panelArgs)
+if (timer) (timer as () => void)()
+check('the panel scroll starts when timezone loading finishes', scrolls === 1)
+cleanupPanel?.()
+check('timezone readiness retriggers the panel effect', /\btenantTimeReady\b/.test(panelEffect.dependencies))
+
+const estimateEffect = effectAfter('const estimateDeepLinkUsed = useRef(false)')
+const runEstimate = new Function('tenantTimeReady', 'estimateParam', 'estimateDeepLinkUsed', 'setEstimateDialog', 'dayISO', estimateEffect.body)
+const estimateUsed = { current: false }
+const openedEstimates: { date: string }[] = []
+const openEstimate = (value: { date: string }) => openedEstimates.push(value)
+runEstimate(false, 'new', estimateUsed, openEstimate, '2026-09-05')
+check('a slow timezone read does not consume estimate intent using the fallback day', !estimateUsed.current && openedEstimates.length === 0)
+runEstimate(true, 'new', estimateUsed, openEstimate, '2026-09-06')
+runEstimate(true, 'new', estimateUsed, openEstimate, '2026-09-07')
+check('the estimate opens once on the resolved business day and stays there', openedEstimates.length === 1 && openedEstimates[0].date === '2026-09-06')
+check('timezone readiness retriggers estimate intent', /\btenantTimeReady\b/.test(estimateEffect.dependencies))
+
 // Render the actual calendar with empty synthetic data. No client effects or
 // network calls run. This repo's JSX-preserve TS runner needs React in scope,
 // as in verify:mobile-shell.

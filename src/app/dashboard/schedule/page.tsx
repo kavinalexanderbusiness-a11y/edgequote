@@ -1156,7 +1156,9 @@ export default function SchedulePage() {
   const panelParam = searchParams.get('panel')
   useEffect(() => {
     const panel = readJobPanel(panelParam)
-    if (!panel || !editing) return
+    // The target is not mounted while the tenant timezone is loading. Start
+    // the bounded scroll attempt only once the schedule can render it.
+    if (!tenantTimeReady || !panel || !editing) return
     let tries = 0
     const id = window.setInterval(() => {
       const el = document.getElementById(jobPanelAnchorId(panel))
@@ -1166,7 +1168,7 @@ export default function SchedulePage() {
       } else if (++tries > 20) window.clearInterval(id)   // give up quietly after ~2s
     }, 100)
     return () => window.clearInterval(id)
-  }, [panelParam, editing])
+  }, [panelParam, editing, tenantTimeReady])
 
   function closeForm() {
     setShowForm(false)
@@ -2818,10 +2820,10 @@ export default function SchedulePage() {
   // reopen it on the next render.
   const estimateDeepLinkUsed = useRef(false)
   useEffect(() => {
-    if (estimateParam !== 'new' || estimateDeepLinkUsed.current) return
+    if (!tenantTimeReady || estimateParam !== 'new' || estimateDeepLinkUsed.current) return
     estimateDeepLinkUsed.current = true
     setEstimateDialog({ date: dayISO, existing: null })
-  }, [estimateParam, dayISO])
+  }, [estimateParam, dayISO, tenantTimeReady])
 
   const setEstimateStatus = useCallback(async (item: EstimateAppointment, to: ScheduleItem['status']) => {
     const err = await estimates.setStatus(item.id, to)
