@@ -78,6 +78,9 @@ export interface ConcentrationResult {
   /** topAmount / totalConsidered, clamped to [0, 1]. 0 when hasData is false —
    *  read `hasData` first; a bare 0 here is not itself meaningful. */
   topShare: number
+  /** How many contributors hold exactly `topAmount`. 1 = a clear leader;
+   *  2+ = a tie, and the note says "each", never "alone". 0 when hasData is false. */
+  topTiedCount: number
   /** True only when hasData AND topShare has crossed CONCENTRATION_MATERIAL_SHARE.
    *  The one flag a caller needs to decide whether to render anything at all. */
   material: boolean
@@ -154,7 +157,7 @@ export function assessConcentration(entries: readonly ConcentrationEntry[]): Con
     return {
       hasData: false, totalConsidered: 0, contributorCount: 0,
       topAmount: 0, topCustomerId: null, topCustomerName: null,
-      topShare: 0, material: false,
+      topShare: 0, topTiedCount: 0, material: false,
     }
   }
 
@@ -164,6 +167,10 @@ export function assessConcentration(entries: readonly ConcentrationEntry[]): Con
   for (const [id, c] of byCustomer) {
     if (c.amount > topAmount) { topAmount = c.amount; topId = id; topName = c.name }
   }
+  // A strict `>` keeps the FIRST of equals as the named contributor; the count
+  // of equals travels with it so the sentence can refuse to say "alone".
+  let topTiedCount = 0
+  for (const c of byCustomer.values()) if (c.amount === topAmount) topTiedCount++
 
   // Clamped defensively: a share should land in [0, 1] by construction (the
   // top contributor's own amount is part of the total it is divided by), but
@@ -179,6 +186,7 @@ export function assessConcentration(entries: readonly ConcentrationEntry[]): Con
     topCustomerId: topId,
     topCustomerName: topName,
     topShare,
+    topTiedCount,
     material: topShare >= CONCENTRATION_MATERIAL_SHARE,
   }
 }
@@ -199,13 +207,24 @@ export function concentrationNote(
   formatMoney: (n: number) => string,
 ): string | null {
   if (!r.hasData || !r.material || !r.topCustomerId || !r.topCustomerName) return null
-  const pct = Math.round(r.topShare * 100)
+  // ⭐ Rounding said honestly. Whole percents match the tiles' precision, but
+  // "100% … across 3 customers" is a contradiction, so a share that ROUNDS to
+  // 100 while others exist reads "over 99%" instead of a number that is false.
+  const rounded = Math.round(r.topShare * 100)
+  const pct = rounded >= 100 ? 'over 99%' : `${rounded}%`
   // ⭐ "The only contributor" and "the largest of several" are both true
   // statements about a 100%-concentrated book with contributorCount === 1, but
   // they read very differently — the first is a statement of fact about a thin
   // book, the second implies competitors for the top spot that don't exist yet.
+  // "Recurring projection" names the tile this sentence sits under; one-time
+  // figures live on a different tile and are not in this denominator.
   if (r.contributorCount === 1) {
-    return `${r.topCustomerName} is currently the ONLY customer behind this projection (${formatMoney(r.topAmount)}). If that changes, the whole figure moves with it.`
+    return `${r.topCustomerName} is currently the ONLY customer behind the recurring projection (${formatMoney(r.topAmount)}). If that changes, the whole figure moves with it.`
   }
-  return `${r.topCustomerName} alone accounts for ${pct}% of this projection — ${formatMoney(r.topAmount)} of ${formatMoney(r.totalConsidered)} across ${r.contributorCount} customers.`
+  // A tie at the top is a tie: nobody is "alone" there.
+  if (r.topTiedCount > 1) {
+    const others = r.topTiedCount - 1
+    return `${r.topCustomerName} and ${others} other${others === 1 ? '' : 's'} each account for ${pct} of the recurring projection — ${formatMoney(r.topAmount)} each, of ${formatMoney(r.totalConsidered)} across ${r.contributorCount} customers.`
+  }
+  return `${r.topCustomerName} alone accounts for ${pct} of the recurring projection — ${formatMoney(r.topAmount)} of ${formatMoney(r.totalConsidered)} across ${r.contributorCount} customers.`
 }

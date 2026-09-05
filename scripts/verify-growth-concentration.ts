@@ -375,14 +375,96 @@ console.log('\n── 12. Source-level: the existing accumulation loop is untouc
     /if \(o\.oneTime\) totalOneTime \+= o\.expectedValue; else totalOpportunity \+= o\.expectedValue/.test(CODE.engine), '')
   check('quantified/unquantified counting is the original expression',
     /if \(o\.expectedValue > 0\) quantified\+\+; else unquantified\+\+/.test(CODE.engine), '')
-  check('concentration is computed from the SAME ranked list, not a second pass with different inputs',
-    /assessConcentration\(\s*ranked\.map/.test(CODE.engine), '')
+  check('concentration is computed from the SAME ranked list — its recurring half, the headline\'s own set — not a second pass',
+    /assessConcentration\(\s*ranked\.filter\(o => !o\.oneTime\)\.map/.test(CODE.engine), '')
 
   // ⛔ The banner must render nothing unless material — asserted on the page.
   check('the page gates rendering on summary.concentration?.material',
     /summary\.concentration\?\.material/.test(CODE.page), '')
   check('the page uses concentrationNote rather than re-deriving the sentence itself',
     /concentrationNote\(/.test(CODE.page), '')
+}
+
+console.log('\n── 13. ⭐⭐ THE DENOMINATOR IS THE HEADLINE — recurring only; ties and rounding said honestly ──')
+{
+  // (a) Excluded data never moves the share: the same book with unquantified
+  // and non-finite entries added yields the same share, total and count.
+  const clean = assessConcentration([entry('A', 900), entry('B', 100)])
+  const noisy = assessConcentration([entry('A', 900), entry('B', 100), entry('B', 0), entry('C', 0), entry('C', NaN), entry('D', -50)])
+  check('unquantified / non-finite / negative entries change neither the share, the total nor the count',
+    noisy.topShare === clean.topShare && noisy.totalConsidered === clean.totalConsidered && noisy.contributorCount === clean.contributorCount,
+    JSON.stringify({ clean, noisy }))
+
+  // (b) Ties: two customers at exactly the top amount — nobody is "alone".
+  const tie = assessConcentration([entry('A', 500, 'Alpha'), entry('B', 500, 'Beta')])
+  eq('a two-way tie is reported as a tie', tie.topTiedCount, 2)
+  const tieNote = concentrationNote(tie, money) || ''
+  check('…and the sentence says "each", never "alone"', /each account for 50%/.test(tieNote) && !/alone/.test(tieNote), tieNote)
+  check('…naming the first and counting the rest', /Alpha and 1 other each/.test(tieNote), tieNote)
+  eq('one dollar breaks the tie', assessConcentration([entry('A', 501), entry('B', 499)]).topTiedCount, 1)
+  eq('a clear leader is not a tie even with equals further down', assessConcentration([entry('A', 600), entry('B', 200), entry('C', 200)]).topTiedCount, 1)
+
+  // (c) Rounding: a share that rounds to 100% while others exist is "over 99%".
+  const nearlyAll = concentrationNote(assessConcentration([entry('A', 995, 'Alpha'), entry('B', 5)]), money) || ''
+  check('99.5% across two customers does not print "100%"', /over 99% of/.test(nearlyAll) && !/100%/.test(nearlyAll), nearlyAll)
+  const ninetyNine = concentrationNote(assessConcentration([entry('A', 990), entry('B', 10)]), money) || ''
+  check('99.0% prints 99%', /99% of/.test(ninetyNine), ninetyNine)
+  check('the sentence names the RECURRING projection — the tile it sits under', /of the recurring projection/.test(ninetyNine), ninetyNine)
+
+  // (d) Through the REAL engine, with a one-time upsell present: the denominator
+  // equals the recurring headline exactly, and is NOT recurring + one-time.
+  let engine: typeof import('../src/lib/revenueIntelligence') | null = null
+  let seasonsMod: typeof import('../src/lib/seasons') | null = null
+  try { engine = require('../src/lib/revenueIntelligence'); seasonsMod = require('../src/lib/seasons') } catch (e) {
+    pending++
+    console.log('  ? PENDING — real-engine reconciliation not run (needs the app dependency graph)')
+    console.log(`      reason: ${(e as Error).message?.split('\n')[0] || e}`)
+  }
+  if (engine && seasonsMod) {
+    const today = '2026-09-04'
+    const job = (id: string, cust: string, date: string, price: number, rec: string | null = null, status = 'completed') => ({
+      id, scheduled_date: date, status, service_type: 'Lawn Mowing', quote_id: null, recurrence_id: rec,
+      duration_minutes: 60, actual_minutes: null, price, lat: null, lng: null, city: null, postal_code: null, neighborhood: null, customer_id: cust,
+    })
+    const rep = engine.computeRevenueIntel({
+      jobs: [
+        // A: weekly, 4 visits, next booked → recurring renewal + referral
+        job('a1', 'A', '2026-08-07', 70, 'rA'), job('a2', 'A', '2026-08-14', 70, 'rA'), job('a3', 'A', '2026-08-21', 70, 'rA'), job('a4', 'A', '2026-08-28', 70, 'rA'), job('a5', 'A', '2026-09-05', 70, 'rA', 'scheduled'),
+        // D: bi-weekly, 3 visits, next booked → recurring renewal + referral
+        job('d1', 'D', '2026-07-20', 200, 'rD'), job('d2', 'D', '2026-08-03', 200, 'rD'), job('d3', 'D', '2026-08-17', 200, 'rD'), job('d4', 'D', '2026-09-14', 200, 'rD', 'scheduled'),
+        // B, C: one-off lawn customers who BOUGHT an add-on (three sales below) — A and D have not,
+        // so the engine offers it to them as a ONE-TIME upsell (median of ≥3 priced sales).
+        job('b1', 'B', '2026-08-10', 90), job('b2', 'B', '2026-08-24', 90), job('c1', 'C', '2026-08-11', 90),
+      ],
+      pctx: { quotesById: {}, recById: { rA: { freq: 'weekly', interval_unit: 'week', interval_count: 1 }, rD: { freq: 'biweekly', interval_unit: 'week', interval_count: 2 } }, base: null, today },
+      customers: ['A', 'B', 'C', 'D'].map(id => ({ id, name: `Customer ${id}`, created_at: '2025-01-01', referred_by_customer_id: null })),
+      properties: [],
+      recurrences: { rA: { freq: 'weekly', interval_unit: 'week', interval_count: 1 }, rD: { freq: 'biweekly', interval_unit: 'week', interval_count: 2 } },
+      invoices: [],
+      lineItems: [
+        { job_id: 'b1', description: 'Core aeration', amount: 80, service_key: null },
+        { job_id: 'b2', description: 'Core aeration', amount: 80, service_key: null },
+        { job_id: 'c1', description: 'Core aeration', amount: 80, service_key: null },
+      ],
+      jobCustomerById: { b1: 'B', b2: 'B', c1: 'C' },
+      seasons: seasonsMod.DEFAULT_SEASONS, capacityHours: 8, preferredDays: [1, 2, 3, 4, 5], today,
+    })
+    const s = rep.summary
+    // ANTI-VACUITY: the case is only a reconciliation case if a one-time figure exists.
+    check('the synthetic book really carries a quantified ONE-TIME opportunity',
+      s.totalOneTime > 0 && rep.opportunities.some(o => o.oneTime && o.expectedValue > 0),
+      JSON.stringify({ totalOneTime: s.totalOneTime, kinds: rep.opportunities.map(o => `${o.kind}:${o.oneTime ? 'one-time' : 'recurring'}:${o.expectedValue}`) }))
+    eq('concentration.totalConsidered equals the recurring headline (summary.totalOpportunity) exactly', s.concentration?.totalConsidered, s.totalOpportunity)
+    check('…and is NOT recurring + one-time', s.concentration?.totalConsidered !== s.totalOpportunity + s.totalOneTime,
+      `${s.concentration?.totalConsidered} vs ${s.totalOpportunity} + ${s.totalOneTime}`)
+    const top = s.concentration?.topCustomerId
+    const numerator = rep.opportunities.filter(o => !o.oneTime && o.customerId === top && o.expectedValue > 0).reduce((n, o) => n + o.expectedValue, 0)
+    eq('the numerator is that customer\'s RECURRING projections, nothing else', s.concentration?.topAmount, numerator)
+    check('share = numerator / headline, to floating-point precision',
+      Math.abs((s.concentration?.topShare ?? -1) - numerator / s.totalOpportunity) < 1e-12, `${s.concentration?.topShare} vs ${numerator / s.totalOpportunity}`)
+    check('the one-time upsell never becomes the top contributor or part of it',
+      !rep.opportunities.some(o => o.oneTime && o.customerId === top && o.expectedValue >= (s.concentration?.topAmount ?? 0)), '')
+  }
 }
 
 // ⛔ "Do not claim pending checks passed." A run with 0 failures but >0 pending

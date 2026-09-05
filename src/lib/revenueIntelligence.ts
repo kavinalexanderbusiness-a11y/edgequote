@@ -134,9 +134,11 @@ export interface RevenueIntelReport {
     quantified: number
     unquantified: number
     /**
-     * ⭐⭐ HOW MUCH OF THE QUANTIFIED TOTAL RESTS ON ONE CUSTOMER — a DIFFERENT
+     * ⭐⭐ HOW MUCH OF THE RECURRING HEADLINE RESTS ON ONE CUSTOMER — a DIFFERENT
      * question from whether each figure was earned (that is lib/growthEvidence's
-     * job, already done by the time an Opportunity reaches this summary). See
+     * job, already done by the time an Opportunity reaches this summary). Its
+     * denominator is exactly `totalOpportunity` (recurring, quantified); one-time
+     * upsells belong to `totalOneTime` and are not in it. See
      * lib/growthConcentration for the full rationale and the threshold.
      * ⛔ `null` when there is nothing quantified to measure concentration over —
      * the caller must render nothing, not a "0%".
@@ -645,12 +647,20 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   // ⭐⭐ CONCENTRATION — a DISCLOSURE pass over the same `ranked` list, not a
   // second pricing or eligibility engine. lib/growthEvidence has already decided
   // which figures may exist; this only asks how the ones that survived are
-  // distributed ACROSS customers. Every opportunity is handed over (unquantified
-  // ones included) — assessConcentration's own filter is the single place that
-  // decides what counts, the same discipline growthEvidence uses for exclusions,
-  // so this call site does not need to duplicate that judgment.
+  // distributed ACROSS customers. Every RECURRING opportunity is handed over
+  // (unquantified ones included) — assessConcentration's own filter is the
+  // single place that decides what counts, the same discipline growthEvidence
+  // uses for exclusions, so this call site does not need to duplicate that.
+  //
+  // ⭐ THE SAME SET AS THE HEADLINE. The banner sits under the "Recurring
+  // opportunity" tile, whose figure is `totalOpportunity` — the sum over
+  // `!o.oneTime` in the loop above. One-time upsells are a different tile and a
+  // different total, so they are excluded here for the same reason they are
+  // excluded there: a share "of this projection" must divide the number the
+  // owner is looking at. verify:growth-concentration §13 proves
+  // `concentration.totalConsidered === summary.totalOpportunity`.
   const concentration = assessConcentration(
-    ranked.map((o): ConcentrationEntry => ({
+    ranked.filter(o => !o.oneTime).map((o): ConcentrationEntry => ({
       customerId: o.customerId, customerName: o.customerName, expectedValue: o.expectedValue,
     })),
   )
