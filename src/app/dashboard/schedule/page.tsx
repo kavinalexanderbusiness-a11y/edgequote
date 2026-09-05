@@ -2099,7 +2099,7 @@ export default function SchedulePage() {
   // actually DOES, so replay reuses the same engines the online path just ran:
   // completing the job → 'job.complete' (patch + draft invoice); a plain edit →
   // 'job.update', carrying a price change through to an existing draft.
-  async function quickSaveJob(job: Job, patch: QuickPatch) {
+  async function quickSaveJob(job: Job, patch: QuickPatch): Promise<void | boolean> {
     // ── The partial-patch contract (see QuickPatch): apply ONLY the keys the
     // quick editor actually sent. The sheet renders a SUBSET of the row, so a
     // fixed field list here would turn every column it doesn't render into a
@@ -2175,7 +2175,7 @@ export default function SchedulePage() {
       )
     } catch (e) {
       setBanner('Could not save the job: ' + (e instanceof Error ? e.message : 'please try again.'))
-      return
+      return false
     }
     setJobs(prev => prev.map(j => (j.id === job.id ? { ...j, ...fields } : j)))
     if (outcome === 'queued') setBanner('Saved offline — it’ll sync when you’re back in signal.')

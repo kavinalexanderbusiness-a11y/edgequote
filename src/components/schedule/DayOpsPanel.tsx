@@ -130,7 +130,7 @@ interface Props {
   learnedDurationFor?: (serviceType: string | null | undefined) => number | null
   onRainDelay: () => void
   onAddJob: () => void
-  onQuickSave: (job: Job, patch: QuickPatch) => Promise<void>
+  onQuickSave: (job: Job, patch: QuickPatch) => Promise<void | boolean>
   // Add-on services per visit + handlers (the JOB is the source of truth; these
   // are additive and flow into the draft invoice automatically).
   addonsByJobId: Record<string, JobLineItem[]>

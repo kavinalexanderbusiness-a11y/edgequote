@@ -22,14 +22,18 @@
 //     a scope-wide save blasting the anchor's crew onto siblings would undo
 //     the dispatch board's lane assignments in silence.
 //
-// Every check here is a source pin that a mutation can turn red. Regexes are
-// \r?\n-safe (CRLF disarms naive strippers — see the guard-design memories).
+// Source pins protect the editor contracts; the recovery section executes the
+// actual page/sheet save functions with mocked I/O. No live rows are touched.
+// Regexes are \r?\n-safe (CRLF disarms naive strippers).
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 
 let failures = 0
-const ok = (n: string) => console.log(`  ✓ ${n}`)
+let passes = 0
+const ok = (n: string) => { passes++; console.log(`  ✓ ${n}`) }
 const fail = (n: string, d: string) => { failures++; console.log(`  ✗ ${n}\n      ${d}`) }
 const check = (n: string, cond: boolean, d = '') => cond ? ok(n) : fail(n, d)
 
@@ -209,10 +213,82 @@ check('the form disclosure is gated on an actual service change on a quote-linke
 check('the sheet disclosure is gated the same way',
   /serviceChanged && job\.quote_id/.test(sheet) && /changing the service changes the label, never the amount/.test(read(SHEET)))
 
-// ═══ Summary ═══
-console.log('\n── Summary ────────────────────────────────────────────────────')
-if (failures) {
-  console.log(`\n❌ verify:job-editor — ${failures} failure${failures === 1 ? '' : 's'}\n`)
-  process.exit(1)
+// ═══ 10. A refused quick save must not discard the draft or move the job ═══
+// Lift the complete, real function declarations via the TypeScript parser.
+// This exercises the caller/result contract rather than modelling a second save.
+function executableFunction(file: string, name: string): string {
+  const raw = read(file)
+  const tree = ts.createSourceFile(file, raw, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  let found: ts.FunctionDeclaration | undefined
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) found = node
+    ts.forEachChild(node, visit)
+  }
+  visit(tree)
+  if (!found) throw new Error(`Could not locate ${name}`)
+  return ts.transpileModule(found.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 }
-console.log('\n✅ verify:job-editor — patch shapes seeded, engines reused, dirt protected, money disclosed\n')
+
+async function verifySaveRecovery() {
+  console.log('\n═══ Refused writes keep the quick-edit draft open ═══')
+  type Outcome = 'refused' | 'ran' | 'queued' | 'queue-error'
+  let outcome: Outcome = 'refused', closes = 0, moves = 0, updates = 0, refreshes = 0
+  const notices: string[] = []
+  const patches: Record<string, unknown>[] = []
+  const job = { id: 'fixture-visit', status: 'scheduled', notes: 'Original notes' }
+  const seed = { service_type: 'Cleaning', scheduled_date: '2026-09-05', start_time: '09:00', duration_minutes: '30', crew_size: '1', status: 'scheduled', notes: 'Original notes', assignee: 'unassigned' }
+  const draft = { ...seed, notes: 'Owner edits to preserve', scheduled_date: '2026-09-06' }
+  const parent: Record<string, any> = {
+    queueOrRun: async (_work: unknown, run: () => Promise<void>) => {
+      if (outcome === 'queue-error') throw new Error('Synthetic queue refusal')
+      if (outcome === 'queued') return 'queued'
+      await run()
+      return 'ran'
+    },
+    supabase: { from: (table: string) => {
+      if (table !== 'jobs') throw new Error(`Unexpected table: ${table}`)
+      return { update: (patch: Record<string, unknown>) => {
+        patches.push(patch)
+        return { eq: async () => ({ error: outcome === 'refused' ? { message: 'Synthetic refused write' } : null }) }
+      } }
+    } },
+    setBanner: (message: string) => notices.push(message),
+    setJobs: () => { updates++ },
+    fetchJobs: async () => { refreshes++ },
+    completionPatch: () => { throw new Error('Unexpected completion in notes-only test') },
+    uncomplete: () => { throw new Error('Unexpected uncomplete in notes-only test') },
+  }
+  runInNewContext(executableFunction(PAGE, 'quickSaveJob'), parent)
+  const editor: Record<string, any> = {
+    job, seed, draft, saving: false, saveFailed: false,
+    setSaving: (value: boolean) => { editor.saving = value },
+    setSaveFailed: (value: boolean) => { editor.saveFailed = value },
+    onSave: parent.quickSaveJob,
+    onClose: () => { closes++ },
+    onMove: async () => { moves++ },
+  }
+  runInNewContext(executableFunction(SHEET, 'save'), editor)
+  await editor.save()
+  check('a refused UPDATE reports failure inside the open editor', editor.saveFailed && closes === 0 && notices.length === 1)
+  check('a refused field save does not run the requested date move', moves === 0)
+  check('the typed notes and date survive failure; saving is released for retry', editor.draft === draft && draft.notes === 'Owner edits to preserve' && draft.scheduled_date === '2026-09-06' && !editor.saving)
+  check('the parent applies no optimistic success after a refused write', updates === 0 && refreshes === 0)
+  check('the editor renders its failure as an accessible alert', /saveFailed && <p role="alert"/.test(sheet) && read(SHEET).includes('Your edits are still here'))
+
+  outcome = 'ran'
+  await editor.save()
+  check('retry saves the same notes-only patch, without price or date columns', patches.length === 2 && patches.every(p => Object.keys(p).join() === 'notes' && p.notes === draft.notes))
+  check('successful retry clears the error, moves through the existing engine and closes once', !editor.saveFailed && !editor.saving && moves === 1 && closes === 1 && updates === 1 && refreshes === 1)
+
+  outcome = 'queue-error'
+  await editor.save()
+  check('offline queue refusal also retains the draft and prevents closing/moving', editor.saveFailed && !editor.saving && closes === 1 && moves === 1)
+  outcome = 'queued'
+  await editor.save()
+  check('a successfully queued edit keeps the existing offline success behavior', !editor.saveFailed && closes === 2 && moves === 2 && updates === 2 && refreshes === 1 && notices.some(n => n.includes('Saved offline')))
+}
+
+verifySaveRecovery().then(() => {
+  console.log(`\nverify:job-editor — ${passes} passed, ${failures} failed\n`)
+  if (failures) process.exitCode = 1
+}).catch(error => { console.error(error); process.exitCode = 1 })

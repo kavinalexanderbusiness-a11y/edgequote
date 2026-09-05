@@ -44,8 +44,9 @@ interface Props {
   technicians: Technician[]
   onClose: () => void
   /** Field save — the page's quickSaveJob engine (status transitions keep
-   *  routing through the completion/uncomplete engines there). */
-  onSave: (job: Job, patch: QuickPatch) => Promise<void>
+   *  routing through the completion/uncomplete engines there). Explicit false
+   *  keeps the draft open after a refused write. */
+  onSave: (job: Job, patch: QuickPatch) => Promise<void | boolean>
   /** Date changes are a RESCHEDULE, not a field write. They route through the
    *  page's existing move engine — cadence/preference warnings, the scope
    *  dialog for a recurring visit, the undo toast — never a bare column
@@ -92,10 +93,12 @@ export function VisitQuickEdit({ job, crews, technicians, onClose, onSave, onMov
   const [draft, setDraft] = useState<Draft | null>(null)
   const [seed, setSeed] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(false)
 
   // Re-seed whenever a different visit opens. The seed is kept verbatim so
   // dirtiness is a comparison, never a guess.
   useEffect(() => {
+    setSaveFailed(false)
     if (!job) { setDraft(null); setSeed(null); return }
     const d = draftFrom(job)
     setDraft(d)
@@ -130,6 +133,7 @@ export function VisitQuickEdit({ job, crews, technicians, onClose, onSave, onMov
   async function save() {
     if (!job || !draft || !seed || saving) return
     setSaving(true)
+    setSaveFailed(false)
     try {
       // ONLY the changed keys — absence means untouched (see QuickPatch).
       const patch: QuickPatch = {}
@@ -146,7 +150,10 @@ export function VisitQuickEdit({ job, crews, technicians, onClose, onSave, onMov
         patch.technician_id = cols.technician_id
       }
 
-      if (Object.keys(patch).length > 0) await onSave(job, patch)
+      if (Object.keys(patch).length > 0 && await onSave(job, patch) === false) {
+        setSaveFailed(true)
+        return
+      }
       // The reschedule half, through the page's move engine (may open the scope
       // dialog for a recurring visit AFTER the sheet closes — that question is
       // the explicitness, not an extra step to engineer away).
@@ -187,6 +194,7 @@ export function VisitQuickEdit({ job, crews, technicians, onClose, onSave, onMov
     >
       {draft && job && (
         <div className="space-y-4">
+          {saveFailed && <p role="alert" className="text-sm text-red-400">These changes could not be saved. Your edits are still here — try again.</p>}
           <Input label="Service" placeholder="What's being done"
             value={draft.service_type}
             onChange={e => setDraft(d => d && { ...d, service_type: e.target.value })} />
