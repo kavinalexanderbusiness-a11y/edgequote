@@ -259,11 +259,11 @@ async function raceChecks() {
   const e0 = PAGE.indexOf('}, [supabase, date])', s0)
   const raw = PAGE.slice(PAGE.indexOf('{', s0 + 40) + 1, PAGE.lastIndexOf('}', e0))
   const expr = transformSync(`(async () => {${raw}})`, { loader: 'ts' }).code.replace(/;\s*$/, '')
-  type St = { jobs: { id: string }[]; notes: { day: string }[] | null; loadError: string | null; loading: boolean }
+  type St = { jobs: { id: string }[]; notes: { day: string }[] | null; loadError: string | null; loading: boolean; loadedDate: string | null }
   const defer = () => { let r!: (v: unknown) => void; let rj!: (e: unknown) => void
     const p = new Promise<unknown>((res, rej) => { r = res; rj = rej }); p.catch(() => {}); return { p, r, rj } }
   const harness = () => {
-    const st: St = { jobs: [], notes: null, loadError: null, loading: true }
+    const st: St = { jobs: [], notes: null, loadError: null, loading: true, loadedDate: null }
     const gate = { current: createRequestGate() }
     // `sessionUser: null` makes getSession resolve with NO session — the shape an
     // expired login has. Until this existed the harness could only DELAY a good
@@ -279,6 +279,7 @@ async function raceChecks() {
         setEquipment: () => {}, setAutomations: () => {}, setSettings: () => {}, setDayRow: () => {},
         setJobs: (v: St['jobs']) => { st.jobs = v }, setNotes: (v: St['notes']) => { st.notes = v },
         setLoadError: (v: string | null) => { st.loadError = v }, setLoading: (v: boolean) => { st.loading = v },
+        setLoadedDate: (v: string | null) => { st.loadedDate = v },
       }
       return (new Function(...Object.keys(d), `return (${expr})()`) as (...a: unknown[]) => Promise<void>)(...Object.values(d))
     }
@@ -347,12 +348,300 @@ async function raceChecks() {
   { const { st, run } = harness(), o = defer()
     const p = run('2026-06-01', o.p as Promise<unknown>); o.r({ data: [{ id: 'ONLY' }], error: null }); await p
     check('the ordinary single-load path is unchanged', st.jobs[0]?.id === 'ONLY' && !st.loading && st.loadError === null) }
+  // Handed to the next section so it drives the SAME extracted fetchAll, rather
+  // than standing up a second harness that could drift from this one.
+  return { harness, defer }
 }
 
-raceChecks().then(() => {
-  if (failures) {
-    console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
-    process.exit(1)
+// ── A day-scoped ACTION may only run over the day it was loaded for ─────────
+// The board hides itself while a day has not loaded, but print / export / Balance
+// are reachable past the hidden board — the `p` key and the command palette hold
+// refs that survive the `if (loading) return <skeleton>` early return. So the
+// refusal has to be a function of WHICH DAY THE STATE IS, and the only honest
+// answer to that is `loadedDate` versus the selected `date`.
+//
+// ⭐ These do not model the guard: they extract the shipping `staleDay` definition
+// and the shipping action body, and run them over state produced by the shipping
+// fetchAll. ⛔ A flag derived from `loadError` cannot answer "is this day loaded?" —
+// a day that is still LOADING has no error yet, and is equally not this day.
+async function loadedDateChecks(ctx: Awaited<ReturnType<typeof raceChecks>>) {
+  const { harness, defer } = ctx
+  console.log('\n═══ A day-scoped action only acts on the day that loaded ═══')
+
+  // ⭐ Name-agnostic on purpose: the fix may rename or split the flag. What the
+  // action must be a function of is `loadedDate` vs `date`, however it is spelled.
+  const flagLines = [...PAGE.matchAll(/^  const (\w+) = ((?:(?!\n).)*(?:loadedDate|loadError)(?:(?!\n).)*)$/gm)]
+    .map(m => `const ${m[1]} = ${m[2]}`)
+  check('the page derives at least one flag from loadedDate/loadError', flagLines.length > 0,
+    'no `const <name> = …loadedDate…` found — the page has no notion of which day its state is')
+  if (flagLines.length === 0) return
+
+  /** The literal body of a `const <name> = useCallback((…) => { … }` block. */
+  const bodyOf = (name: string): string => {
+    const at = PAGE.indexOf(`const ${name} = useCallback(`)
+    if (at < 0) throw new Error(`${name} not found`)
+    const open = PAGE.indexOf('{', PAGE.indexOf('=>', at))
+    let d = 0, i = open
+    for (; i < PAGE.length; i++) { if (PAGE[i] === '{') d++; else if (PAGE[i] === '}') { d--; if (!d) break } }
+    return PAGE.slice(open + 1, i)
   }
-  console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes, newest day wins\n')
+
+  /** Runs the REAL action body with the REAL staleDay definition over given state. */
+  const act = (name: string, st: { loadError: string | null; loadedDate: string | null }, date: string) => {
+    let refusal: string | null = null, built = false
+    const notify = Object.assign(() => {}, { error: (m: string) => { refusal = m } })
+    const deps: Record<string, unknown> = {
+      loadError: st.loadError, loadedDate: st.loadedDate, date, notify,
+      onlyIds: undefined,   // exportDayCsv's own parameter — a free name in its body
+      useRef: (v: unknown) => ({ current: v }),   // an extracted flag line may declare a day ref
+      buildSheet: () => { built = true; return { lanes: [{ id: 'L' }] } },
+      openPrintSheet: () => true,
+      sheetCsvRows: () => [{ a: 1 }], exportRowsToCsv: () => {}, SHEET_CSV_COLUMNS: [],
+    }
+    const src = `${flagLines.join('\n')}\n${bodyOf(name)}`
+    new Function(...Object.keys(deps), src)(...Object.values(deps))
+    return { refused: refusal !== null, built }
+  }
+
+  const A = '2026-06-01', B = '2026-06-02'
+
+  // ⭐ Discovered, not assumed. A day check that must survive an await has to read
+  // a ref; a plan that outlives its day has to carry a field naming that day. Both
+  // are the page’s to name, so the cases read the names out of the source and
+  // inject under them — otherwise this instrument measures its own vocabulary.
+  const refM = /const (\w+) = useRef[^\n]*\n\s*\1\.current = \{ date/.exec(PAGE)
+  const REF = refM?.[1] ?? ''
+  check('the page keeps a day-scope ref, readable after an await', !!REF,
+    'no `const <name> = useRef(…)` refreshed with `{ date, … }` every render')
+  const planM = /setBalancePlan\(\{ \.\.\.[\s\S]{0,160}?(\w+): date \}\)/.exec(PAGE)
+  const PLAN_DAY = planM?.[1] ?? ''
+  check('…and stamps a Balance plan with the day it was computed for', !!PLAN_DAY,
+    'no `setBalancePlan({ …, <field>: date })` — an open plan cannot say which day it is for')
+
+  // (1) ⛔ THE WINDOW: A loaded, the owner picks B, B is still in flight. No error
+  // has happened yet, so an error-derived flag is false — while the state on screen
+  // is still A’s. Print here stamps B on A’s visits.
+  { const { st, run } = harness(), a = defer(), b = defer()
+    const pA = run(A, a.p as Promise<unknown>); a.r({ data: [{ id: 'JOB-A' }], error: null }); await pA
+    check('a successful load records which day it was', st.loadedDate === A, `loadedDate=${st.loadedDate}`)
+    const pB = run(B, b.p as Promise<unknown>)                       // still loading
+    check('…and a newly picked day does not inherit it', st.loadedDate === A && st.loadError === null,
+      `loadedDate=${st.loadedDate} loadError=${JSON.stringify(st.loadError)}`)
+    for (const fn of ['printDay', 'exportDayCsv']) {
+      const r = act(fn, st, B)
+      check(`${fn} refuses while the newly picked day is STILL LOADING`, r.refused && !r.built,
+        r.built ? `it built a sheet from ${st.loadedDate}’s visits and stamped it ${B}` : 'no refusal')
+    }
+    b.r({ data: [{ id: 'JOB-B' }], error: null }); await pB
+    check('…and once it lands the action is allowed again', !act('printDay', st, B).refused) }
+
+  // (2) The failed-day case the repair already covers — kept so a fix to (1)
+  // cannot be made by simply deleting the error term.
+  { const { st, run } = harness(), a = defer(), b = defer()
+    const pA = run(A, a.p as Promise<unknown>); a.r({ data: [{ id: 'JOB-A' }], error: null }); await pA
+    const pB = run(B, b.p as Promise<unknown>); b.r({ data: null, error: { message: 'connection reset' } }); await pB
+    check('a day that FAILED to load refuses print', act('printDay', st, B).refused)
+    check('…and export', act('exportDayCsv', st, B).refused) }
+
+  // (3) ⭐ The distinction that must survive: a same-day refresh failure keeps the
+  // board, because it IS this day. Guarding on `loadedDate !== date` preserves this;
+  // guarding on "any load error" would wrongly disable the day the owner is on.
+  { const { st, run } = harness(), a = defer(), a2 = defer()
+    const pA = run(A, a.p as Promise<unknown>); a.r({ data: [{ id: 'JOB-A' }], error: null }); await pA
+    const pR = run(A, a2.p as Promise<unknown>); a2.r({ data: null, error: { message: 'flaky' } }); await pR
+    check('a SAME-DAY refresh failure keeps the day actionable (last known good)',
+      st.loadedDate === A && st.loadError !== null && !act('printDay', st, A).refused,
+      'the day on screen is still the day that loaded') }
+
+  // (4) Nothing has ever loaded: there is no day to act on.
+  { const { st, run } = harness(), a = defer()
+    run(A, a.p as Promise<unknown>)
+    check('the very first load refuses print before anything has loaded',
+      st.loadedDate === null && act('printDay', st, A).refused) }
+
+  // (5) ⛔ Balance is a WRITE door, and the command palette calls openBalance
+  // DIRECTLY — `disabled` on the Button guards the Button, not the verb. The
+  // modal it opens renders outside every day-scope gate, and applying it calls
+  // assignJob() on whatever jobs are in state. So the refusal has to be in the
+  // function, exactly as it is for print and export.
+  { let planned = false
+    const deps: Record<string, unknown> = {
+      loadError: null, loadedDate: A, date: B,
+      setBalancePlan: () => { planned = true },
+      balanceDay: (x: unknown) => x, balanceLanes: () => [],
+      notify: Object.assign(() => {}, { error: () => {} }),
+      useRef: (v: unknown) => ({ current: v }),   // an extracted flag line may declare a day ref
+    }
+    const src = `${flagLines.join('\n')}\n${bodyOf('openBalance')}`
+    new Function(...Object.keys(deps), src)(...Object.values(deps))
+    check('Balance refuses at the function too — the palette calls it past the button',
+      !planned, `openBalance planned a rebalance of ${A}’s lanes while the owner is on ${B}`) }
+
+  // The write-door cases below need those two names to inject under. Without them
+  // they cannot be evaluated at all, so they are skipped rather than faked — the
+  // two checks above already say what is missing.
+  if (!REF || !PLAN_DAY) return
+
+  // ── Doors that WRITE, past the board and across an await ──────────────────
+  // `runBody` evaluates a real function body over stubs, and reports a missing
+  // name as a failure instead of crashing the section — so a fix that reads the
+  // day through a differently-named binding fails LOUDLY and legibly.
+  const runBody = (name: string, extra: Record<string, unknown>) => {
+    const calls: string[] = []
+    const stub = (id: string) => (...a: unknown[]) => { calls.push(id); return a[0] }
+    const deps: Record<string, unknown> = {
+      notify: Object.assign(stub('notify'), { error: stub('notify.error'), success: stub('notify.success') }),
+      supabase: {}, setOptimizingLane: () => {}, setApplyingBalance: () => {},
+      jobStop: (j: { id: string }) => ({ jobId: j.id }),
+      geocodeMissingStops: async () => {}, sequenceRoute: () => ({ ordered: [], totalKm: 1 }),
+      computeDayEtas: () => ({ finishMin: 1, finish: '5pm' }), DEFAULT_JOB_MIN: 60,
+      applyLaneOrder: stub('applyLaneOrder'), assignJob: stub('assignJob'),
+      assigneeOfLane: () => ({}), setBalancePlan: () => {}, fetchAll: () => {},
+      jobs: [{ id: 'J1' }], opts: undefined, laneId: 'L1',
+      useRef: (v: unknown) => ({ current: v }),   // an extracted flag line may declare a day ref
+      format: () => 'Mon, Jun 1', parseISO: (v: unknown) => v,   // named in a refusal message
+      setJobs: () => {}, orderWrite: { current: Promise.resolve() },
+      ...extra,
+    }
+    let missing: string | null = null
+    const fn = new Function(...Object.keys(deps), `return (async () => {${bodyOf(name)}})()`)
+    return (fn(...Object.values(deps)) as Promise<void>)
+      .catch((e: unknown) => { missing = String((e as Error)?.message ?? e) })
+      .then(() => ({ calls, missing }))
+  }
+
+  const laneRoute = { seq: [{ id: 'J1', duration_minutes: 60 }], startHHmm: '08:00', totalKm: 2, etas: { finishMin: 2, finish: '6pm' } }
+  const scopeVal = (day: { date: string; loadedDate: string | null }) =>
+    ({ date: day.date, loaded: day.loadedDate, loadedDate: day.loadedDate })
+  const routeDeps = (day: { date: string; loadedDate: string | null }, onOptimize?: () => void) => ({
+    date: day.date, loadedDate: day.loadedDate,
+    dayNotLoaded: day.loadedDate !== day.date,
+    [REF]: { current: scopeVal(day) },
+    laneRoutesRef: { current: { L1: laneRoute } },
+    settings: { base: { lat: 1, lng: 1 } },
+    optimizeRoute: async () => { onOptimize?.(); return { ordered: [{ jobId: 'J1' }], usedGoogle: false, totalKm: 1 } },
+  })
+
+  // (6) ⛔ Optimize route is a per-crew PALETTE verb (`run: () => bestOrderLane(c.id)`)
+  // and it writes route_order. It reads laneRoutesRef — a REF, so it still holds the
+  // previous day’s lanes while a newly picked day is pending or failed.
+  { const r = await runBody('bestOrderLane', routeDeps({ date: B, loadedDate: A }))
+    check('bestOrderLane refuses while the day has not loaded',
+      !r.calls.includes('applyLaneOrder'),
+      r.missing ? `the day check used a name the case does not supply: ${r.missing}`
+                : `it wrote ${A}\u2019s route order while the owner is on ${B}`) }
+
+  // (7) ⭐ And the same verb across its awaits. It already re-reads lane MEMBERSHIP
+  // after the optimizer round-trip (`nowInLane`) because state moves during it — the
+  // day moves too. ⛔ Its dep array is [settings.base, supabase, applyLaneOrder], so a
+  // closure read of `date` is stale; the re-check has to come from a ref.
+  { const d = routeDeps({ date: A, loadedDate: A })
+    const dayRef = (d as Record<string, unknown>)[REF] as { current: { date: string } }
+    const r = await runBody('bestOrderLane', { ...d, optimizeRoute: async () => {
+      dayRef.current.date = B                     // the owner moves on mid-optimize
+      return { ordered: [{ jobId: 'J1' }], usedGoogle: false, totalKm: 1 } } })
+    check('…and does not apply an order after the day changed mid-optimize',
+      !r.calls.includes('applyLaneOrder'),
+      r.missing ? `the post-await day check used a name the case does not supply: ${r.missing}`
+                : `it applied ${A}\u2019s optimized order after the owner moved to ${B}`) }
+
+  // …and it must still work on a day that is loaded and stays put (anti-vacuity).
+  { const r = await runBody('bestOrderLane', routeDeps({ date: A, loadedDate: A }))
+    check('…while a settled, loaded day still optimizes', r.calls.includes('applyLaneOrder'),
+      'the guard must not disable the ordinary case') }
+
+  // (8) ⛔ A Balance plan OUTLIVES a date change: nothing clears balancePlan when the
+  // date moves, and the modal renders outside every day gate. So `loadedDate !== date`
+  // cannot save this — once the new day loads, that flag is false while the open plan
+  // is still the old day’s. The PLAN has to carry the day it was computed for.
+  { const r = await runBody('applyBalance', {
+      date: B, loadedDate: B, dayNotLoaded: false, [REF]: { current: scopeVal({ date: B, loadedDate: B }) },
+      balancePlan: { moves: [{ jobId: 'J1', toLaneId: 'L2' }], [PLAN_DAY]: A } })
+    check('applyBalance refuses a plan computed for another day',
+      !r.calls.includes('assignJob'),
+      r.missing ? `the plan-scope check used a name the case does not supply: ${r.missing}`
+                : `it wrote ${A}\u2019s balance moves while the owner is on ${B}`) }
+
+  { const r = await runBody('applyBalance', {
+      date: A, loadedDate: A, dayNotLoaded: false, [REF]: { current: scopeVal({ date: A, loadedDate: A }) },
+      balancePlan: { moves: [{ jobId: 'J1', toLaneId: 'L2' }], [PLAN_DAY]: A } })
+    check('…while a plan for the day on screen still applies', r.calls.includes('assignJob'),
+      'the scope check must not disable Balance itself') }
+
+  // (9) The route_order write FUNNEL. Every path that reorders a lane — drag,
+  // nudge, move-with-slot, the optimizer arriving after its awaits — ends here,
+  // so a check at this one point covers callers that have none of their own.
+  // ⚠️ This body carries TS (`pos.get(j.id)!`), so it needs the same transform
+  // the race harness uses; a raw new Function() would throw on the `!`.
+  const { transformSync } = await import('esbuild')
+  const funnel = async (day: { date: string; loadedDate: string | null }) => {
+    const wrote: string[] = []
+    const deps: Record<string, unknown> = {
+      [REF]: { current: scopeVal(day) },   // both spellings of the loaded field
+      notify: Object.assign(() => {}, { error: () => wrote.push('refused') }),
+      setJobs: (fn: (c: { id: string; route_order: number }[]) => unknown) => {
+        fn([{ id: 'J1', route_order: 9 }]) },
+      orderWrite: { current: Promise.resolve() },
+      supabase: { from: () => ({ update: () => ({ eq: (_c: string, id: string) => {
+        wrote.push(`write:${id}`); return Promise.resolve({ error: null }) } }) }) },
+      fetchAll: () => {},
+    }
+    const src = transformSync(`const __f = async (laneJobIds) => {${bodyOf('applyLaneOrder')}}`, { loader: 'ts' }).code
+    const fn = new Function(...Object.keys(deps), `${src}\nreturn __f`)(...Object.values(deps)) as (ids: string[]) => Promise<void>
+    await fn(['J1'])
+    await new Promise(r => setTimeout(r, 0))
+    return wrote
+  }
+  { const w = await funnel({ date: B, loadedDate: A })
+    check('the route-order write funnel refuses when the day on hand is not the selected one',
+      !w.some(x => x.startsWith('write:')), `it wrote ${JSON.stringify(w)}`) }
+  { const w = await funnel({ date: A, loadedDate: A })
+    check('…and still writes on the day that is loaded', w.some(x => x.startsWith('write:')),
+      'the funnel must not disable ordinary reordering') }
+}
+
+// ── The harness may not pass by failing to finish ───────────────────────────
+// ⛔ A pending promise does NOT keep Node alive: if anything awaited above never
+// settles, the loop drains, the .then() never runs, and the process exits 0 with
+// no summary — which verify-all, keying on the exit status, cannot tell from a
+// pass. Measured on the parent commit: 0 of 12 race checks ran, exit 0.
+// Two belts, because the failure mode is silence: a REFERENCED timer (never
+// .unref()'d, so it holds the loop open) and an exit assertion that forbids a 0.
+const RACE_TIMEOUT_MS = 30000
+let raceCompleted = false
+
+const watchdog = setTimeout(() => {
+  console.log(`\n❌ verify:dispatch-board — the race section did not finish within ${RACE_TIMEOUT_MS}ms.`)
+  console.log('   Something the harness awaits never settled, so the checks below it never ran.')
+  console.log('   Silence is a FAILURE here, not a pass.\n')
+  process.exitCode = 1
+  // Draining naturally flushes stdout, which process.exit() can truncate on a
+  // pipe. If some handle IS holding the loop open, this unref’d timer forces it.
+  setTimeout(() => process.exit(1), 250).unref()
+}, RACE_TIMEOUT_MS)
+
+/** Reached a verdict: stand the watchdog down and allow a 0. */
+const finish = () => { raceCompleted = true; clearTimeout(watchdog) }
+
+process.on('exit', code => {
+  if (!raceCompleted && code === 0) {
+    console.log('\n❌ verify:dispatch-board — exited before the race section completed.\n')
+    process.exitCode = 1
+  }
 })
+
+raceChecks()
+  .then(loadedDateChecks)
+  .then(() => {
+    finish()
+    if (failures) {
+      console.log(`\n❌ verify:dispatch-board — ${failures} failure${failures === 1 ? '' : 's'}\n`)
+      process.exit(1)
+    }
+    console.log('\n✅ verify:dispatch-board — legible lanes, visible notes, honest writes, newest day wins\n')
+  })
+  .catch((err: unknown) => {
+    finish()
+    console.log(`\n❌ verify:dispatch-board — the race harness threw\n   ${String((err as Error)?.message ?? err).slice(0, 300)}\n`)
+    process.exit(1)
+  })
