@@ -1,7 +1,6 @@
-import Link from 'next/link'
 import { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button } from './Button'
+import { Button, ButtonLink } from './Button'
 
 interface EmptyStateProps {
   icon: LucideIcon
@@ -26,9 +25,7 @@ export function EmptyState({ icon: Icon, title, description, action, tone = 'def
       <h3 className="text-base font-semibold text-ink mb-1">{title}</h3>
       <p className="text-sm text-ink-muted max-w-xs mb-6">{description}</p>
       {action && (action.href ? (
-        <Link href={action.href} className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
-          <Button type="button" tabIndex={-1}>{action.label}</Button>
-        </Link>
+        <ButtonLink href={action.href}>{action.label}</ButtonLink>
       ) : (
         <Button type="button" onClick={action.onClick}>{action.label}</Button>
       ))}
