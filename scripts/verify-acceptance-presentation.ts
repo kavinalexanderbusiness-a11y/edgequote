@@ -319,6 +319,12 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
   // Without this control the section would pass just as well if the model always
   // threw accepted_price away, which would silently undo S121's snapshot.
   const ev = row({ acceptance_kind: 'customer' })
+  // ⚠️ Captured HERE, not read from `pdfSaw` further down. `row()` resets that
+  // recorder on every call, so an assertion several fixtures later was silently
+  // describing whichever quote happened to be built last — it began failing the
+  // moment two drift fixtures were added below, which is the good version of that
+  // mistake: a positional read that breaks loudly rather than drifting quietly.
+  const evPdfBasis = pdfSaw[0]?.accepted_price
   check('with the CUSTOMER’s own acceptance, the snapshot is honoured',
     ev.amount === 1400, String(ev.amount))
   check('…the deposit follows it to $700', ev.schedulingDeposit?.required === 700)
@@ -330,16 +336,37 @@ console.log('\n■ 6. THE REAL COMPOSITION BOUNDARY — one quote, one figure, e
   const same = row({ acceptance_kind: 'customer', total: 1400, initial_price: 1400 })
   check('…the sentence follows it too — one basis, every surface',
     /\$700\.00/.test(same.paymentTimingLine ?? ''), same.paymentTimingLine)
-  check('⭐ …and when the document has DRIFTED away from the acceptance, the '
-    + 'sentence keeps the rule and drops the figure',
-    !/\$700\.00/.test(ev.paymentTimingLine ?? '')
-    && /50% deposit is required/.test(ev.paymentTimingLine ?? '')
-    && /previously agreed no longer applies/.test(ev.paymentTimingLine ?? ''),
-    ev.paymentTimingLine)
+  // ⭐⭐ DRIFT IS DECIDED CANONICALLY — by `quote_acceptance_is_current`, the same
+  // function the owner's screens and the charge route ask, carried in the payload
+  // by RUN-S122C. It is NOT a total comparison: an edit to address, service_type,
+  // notes or the deposit terms moves the material fingerprint and leaves `total`
+  // untouched, and a price proxy answered "not superseded" there — so the owner's
+  // copy suppressed the stale figure while the customer's copy printed it.
+  const drifted = row({ acceptance_kind: 'customer', acceptance_is_current: false })
+  check('⭐ …and when the acceptance is no longer CURRENT, the sentence keeps the '
+    + 'rule and drops the figure',
+    !/\$700\.00/.test(drifted.paymentTimingLine ?? '')
+    && /50% deposit is required/.test(drifted.paymentTimingLine ?? '')
+    && /previously agreed no longer applies/.test(drifted.paymentTimingLine ?? ''),
+    drifted.paymentTimingLine)
   check('⛔ …and does NOT substitute a figure from the current total instead',
-    !/\$250\.00/.test(ev.paymentTimingLine ?? ''), ev.paymentTimingLine)
+    !/\$250\.00/.test(drifted.paymentTimingLine ?? ''), drifted.paymentTimingLine)
+  // ⭐ THE CLASS THE PRICE PROXY MISSED: same total, only the fingerprint moved.
+  const sameTotal = row({ acceptance_kind: 'customer', accepted_price: 500, acceptance_is_current: false })
+  check('⭐ same-total drift is caught too — the figure is dropped',
+    !/\$250\.00/.test(sameTotal.paymentTimingLine ?? '')
+    && /previously agreed no longer applies/.test(sameTotal.paymentTimingLine ?? ''),
+    sameTotal.paymentTimingLine)
+  {
+    // Read locally — §4's `model` is out of scope here, and a guard that reaches
+    // for a name it does not own is a guard that stops running at the first edit.
+    const src = read('src/app/portal/[token]/model.ts')
+    check('⛔ the portal reads the canonical answer, never a total comparison',
+      /const acceptanceSuperseded = qq\.acceptance_is_current === false/.test(src)
+      && !/const acceptanceSuperseded = priceMovedSinceAccepted/.test(src))
+  }
   check('…and the PDF is handed the same basis',
-    pdfSaw[0]?.accepted_price === 1400, String(pdfSaw[0]?.accepted_price))
+    evPdfBasis === 1400, String(evPdfBasis))
   check('…and only here may the screen say "you accepted"',
     /price you accepted/i.test(ev.amountNote ?? ''), ev.amountNote)
 

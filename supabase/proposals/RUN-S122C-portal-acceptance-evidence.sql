@@ -46,7 +46,11 @@ begin
   -- anchor matches ZERO times. This trap has now cost this lane twice.
   v_src := replace(v_src, E'\r\n', E'\n');
 
-  if position('acceptance_kind' in v_src) > 0 then
+  -- ⚠️ Idempotency now keys on the SECOND field, not the first. A ledger that
+  -- already carries `acceptance_kind` from the earlier one-field version of this
+  -- patch must still receive the currentness bit, and keying on the kind would
+  -- silently declare that database already done.
+  if position('acceptance_is_current' in v_src) > 0 then
     raise notice 'already widened — nothing to do';
     return;
   end if;
@@ -71,10 +75,39 @@ begin
   -- that lets the portal choose an honest SENTENCE. A customer's own acceptance
   -- detail is theirs to be shown deliberately, never as a side effect of
   -- widening a list projection.
+  -- ⭐⭐ AND WHETHER THAT ACCEPTANCE STILL MATCHES THIS DOCUMENT.
+  --
+  -- The kind alone was not enough, and the gap was found on a generated PDF: a
+  -- quote accepted at $1,400 whose document has since been revised to $500
+  -- printed "Quote Total $500.00" above a deposit derived from the $1,400
+  -- snapshot. To stop presenting that figure the surface must know the acceptance
+  -- is superseded — and the honest answer is the FINGERPRINT one.
+  --
+  -- ⛔ IT MUST BE THE CANONICAL FUNCTION, not a comparison invented here. The
+  -- owner's screens ask `quote_acceptance_is_current`; the charge route asks
+  -- `quote_acceptance_is_current`; so the portal asks it too. The first attempt
+  -- used a TOTAL comparison on the client, which disagreed with the fingerprint
+  -- on a class that is reachable and was already proven: an edit to `address`,
+  -- `service_type`, `notes` or the deposit terms moves the fingerprint and leaves
+  -- `total` untouched. Same quote, two documents, two answers — the exact defect
+  -- class this lane exists to close.
+  --
+  -- ⭐ ONE BIT, and it ships in the SAME patch as the kind on purpose. The
+  -- superseded-figure problem only exists once the snapshot is usable, and the
+  -- snapshot only becomes usable when `acceptance_kind` is projected — so there
+  -- is never a window where a surface can show a snapshot without also knowing
+  -- whether it still stands. No actor, no amount, no timestamp, no note.
+  --
+  -- ⚠️ SAFE FOR AN ANONYMOUS CALLER: quote_acceptance_is_current returns false
+  -- for an unknown quote and applies its tenant check only when auth.uid() is
+  -- non-null, which it is not in the portal. It leaks nothing a token holder
+  -- cannot already see about their own quote.
   v_new := v_old || E'\n'
         || '             (select qa.kind from public.quote_acceptances qa'
         || E'\n'
-        || '               where qa.quote_id = qt.id order by qa.seq desc limit 1) as acceptance_kind,';
+        || '               where qa.quote_id = qt.id order by qa.seq desc limit 1) as acceptance_kind,'
+        || E'\n'
+        || '             public.quote_acceptance_is_current(qt.id) as acceptance_is_current,';
 
   v_src := replace(v_src, v_old, v_new);
   execute v_src;

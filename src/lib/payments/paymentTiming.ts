@@ -137,12 +137,19 @@ export function paymentTiming(q: GateQuote, opts: TimingOptions = {}): PaymentTi
     ? 'superseded_acceptance'
     : (opts.basisSettled === false ? 'unchosen_option' : null)
   const isPercentRule = q.deposit_type === 'percent'
-  // ⚠️ A FIXED rule states its dollars outright and needs no basis — $500 is $500
-  // whichever option they pick, so an unchosen option cannot unsettle it. A
-  // SUPERSEDED acceptance is different: the fixed figure is still the quote's
-  // configuration, so it remains true and is still printed. Only the percent rule
-  // borrows its dollars from a basis, and only that borrowing can go stale.
-  const unsettled = isPercentRule && !settled
+  // ⚠️ An unchosen option cannot unsettle a FIXED rule — $500 is $500 whichever
+  // option they pick, so only the percent rule waits on a choice.
+  //
+  // ⛔⛔ A SUPERSEDED ACCEPTANCE UNSETTLES BOTH, and an earlier version of this
+  // line got that wrong. The reasoning then was about PROVENANCE — a fixed figure
+  // is the quote's own configuration, not a consent artifact — and that is true
+  // and beside the point. The failure this rule exists to stop is RECONCILIATION:
+  // a dollar ask the customer cannot square with the document in front of them.
+  // `requiredDeposit` clamps a fixed rule to the basis (`min(value, basis)`), so
+  // with named evidence at $1,400 against a $500 document a fixed $700 still
+  // prints on a $500 page — the exact sentence that started this — under an
+  // acceptance the charge route will refuse. Provenance did not save it.
+  const unsettled = superseded || (isPercentRule && !settled)
   return {
     mode: 'deposit_before_scheduling',
     requiresDepositBeforeScheduling: true,
@@ -180,7 +187,12 @@ export function quoteTimingLine(t: PaymentTiming): string {
   // figure depends on a choice when it actually depends on a revision they have
   // not seen yet — a true-sounding sentence about the wrong thing.
   if (t.basisUnsettledReason === 'superseded_acceptance') {
-    return `A ${t.depositPercent}% deposit is required before we schedule your visit. `
+    // ⚠️ A percent rule can still state its RULE, because a percentage is the
+    // quote's configuration and survives the revision. A fixed rule's rule IS its
+    // dollars, so there is nothing left to state but the requirement itself —
+    // and inventing a percentage for it would be arithmetic nobody wrote.
+    const rule = t.depositPercent != null ? `A ${t.depositPercent}% deposit` : 'A deposit'
+    return `${rule} is required before we schedule your visit. `
       + 'This quote has been revised since it was accepted, so the amount previously agreed no longer applies — '
       + 'we’ll confirm the deposit on the updated quote before anything is due.'
   }

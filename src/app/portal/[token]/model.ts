@@ -72,7 +72,7 @@ export interface PortalQuoteOption { id: string; name: string; description: stri
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; acceptance_kind?: string | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; acceptance_kind?: string | null; acceptance_is_current?: boolean | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -899,16 +899,22 @@ export function buildDocItems(opts: {
     // acceptance no longer matches the document, the sentence keeps the RULE and
     // drops the FIGURE (lib/payments/paymentTiming).
     //
-    // ⚠️ THIS IS THE WEAKER OF THE TWO AVAILABLE SIGNALS, and saying so is the
-    // point. Currentness is decided by the material FINGERPRINT — which also moves
-    // on scope, address and notes — and the portal payload does not carry that
-    // answer. `priceMovedSinceAccepted` is a TOTAL comparison, so it catches
-    // exactly the case that produces the visible mismatch and misses drift that
-    // leaves the total alone. The owner's send path, which HAS the fingerprint
-    // answer, uses it. Widening get_portal_data to carry `needs_reapproval` is
-    // what makes both paths ask the same question; until then this is the honest
-    // subset rather than a guess dressed as the whole.
-    const acceptanceSuperseded = priceMovedSinceAccepted
+    // ⭐⭐ THE CANONICAL ANSWER, from the payload — `quote_acceptance_is_current`,
+    // the same function the owner's screens and the charge route ask. An earlier
+    // version compared TOTALS here, and that was a second derivation which
+    // disagreed with the first on a reachable class: an edit to `address`,
+    // `service_type`, `notes` or the deposit terms moves the material fingerprint
+    // and leaves `total` untouched, so the owner's copy suppressed the stale
+    // figure while the customer's copy still printed it. Same quote, two
+    // documents, two answers.
+    //
+    // ⚠️ THREE-VALUED, and the third value is safe rather than lucky. `undefined`
+    // means the payload predates RUN-S122C — and that same patch is what makes
+    // `acceptance_kind` available, without which the presentation is `unevidenced`
+    // and `customerFacingQuote` has already stripped the snapshot. So on an
+    // un-widened payload there is no superseded figure to suppress: the two fields
+    // arrive together on purpose.
+    const acceptanceSuperseded = qq.acceptance_is_current === false
     const timing = paymentTiming(moneyQuote, {
       basisSettled: !(options && !qq.selected_option_id),
       acceptanceSuperseded,
