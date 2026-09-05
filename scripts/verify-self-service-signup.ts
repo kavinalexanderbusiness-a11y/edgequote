@@ -155,8 +155,9 @@ const iClaim = SETUP.indexOf("rpc('claim_beta_invite')")
 const iAsk = SETUP.indexOf("rpc('provisioning_status')")
 const iWrite = SETUP.indexOf("from('business_settings')")
 check('order: claim_beta_invite → provisioning_status → business_settings', iClaim > 0 && iAsk > iClaim && iWrite > iAsk)
-check('the gate is set only from an error-free answer (a failed question changes nothing)',
-  /if \(!gateErr\) \{\s*const parsed = parseProvisioningStatus\(gateAnswer\)\s*setStatus\(parsed\)\s*const step = registrationNextStep\(parsed\)\s*if \(step !== 'setup'\) \{ setGate\(step\); return \}/.test(SETUP))
+check('the gate is set only from a known, error-free answer; failed checks cannot reveal creation controls',
+  /if \(gateErr\) throw new Error\([^)]+\)\s*const parsed = parseProvisioningStatus\(gateAnswer\)\s*if \(!parsed\) throw new Error\([^)]+\)\s*setStatus\(parsed\)\s*const step = registrationNextStep\(parsed\)\s*if \(step !== 'setup'\) \{ setGate\(step\); setLoadPhase\('ready'\); return \}/.test(SETUP)
+  && SETUP.indexOf("if (loadPhase === 'error') {") < SETUP.indexOf("if (gate !== 'setup') {"))
 check('an unlicensed account sees one honest screen and never the picker', /if \(gate !== 'setup'\) \{/.test(SETUP) && SETUP.indexOf("if (gate !== 'setup') {") < SETUP.indexOf('if (!state) {'))
 check('closed → the owner\'s words; crew → the join door; unverified → confirm first',
   /REGISTRATION_CLOSED\.title/.test(SETUP) && /REGISTRATION_CLOSED\.body/.test(SETUP) && /href="\/crew\/join"/.test(SETUP) && /Confirm your email first/.test(SETUP))
