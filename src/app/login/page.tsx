@@ -174,7 +174,7 @@ function LoginForm() {
         </div>
 
         <p className="text-center text-xs text-ink-faint mt-6">
-          Access is by invitation. Sign in with your invited email address.
+          Sign in to manage your business.
         </p>
       </main>
     </div>
