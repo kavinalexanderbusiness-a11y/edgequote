@@ -91,6 +91,13 @@ export default function SetupPage() {
 
   // ── Done ──
   if (result?.ok) {
+    // A brand-new business — no settings row existed when this page loaded,
+    // the same signal the dashboard gate uses — is sent to the one thing the
+    // dashboard would ask for next anyway: its first quote. The customer, the
+    // scheduled work and the invoice all follow from it, so nothing has to be
+    // set up first. A configured business reseeding from Settings goes back to
+    // its dashboard exactly as before.
+    const firstRun = !state.hasSettingsRow
     return (
       <Shell>
         <div className="text-center mb-6">
@@ -107,9 +114,26 @@ export default function SetupPage() {
           ))}
         </div>
         <div className="flex gap-2 mt-6">
-          <Button className="flex-1" onClick={() => { router.push('/dashboard'); router.refresh() }}>Go to your dashboard <ArrowRight className="w-4 h-4" /></Button>
-          <Link href="/dashboard/settings/templates" className="flex-1"><Button variant="secondary" className="w-full" type="button">Review services</Button></Link>
+          {firstRun ? (
+            <>
+              <Button className="flex-1" onClick={() => { router.push('/dashboard/quotes/new'); router.refresh() }}>Create your first quote <ArrowRight className="w-4 h-4" /></Button>
+              <Button variant="secondary" className="flex-1" type="button" onClick={() => { router.push('/dashboard'); router.refresh() }}>Go to your dashboard</Button>
+            </>
+          ) : (
+            <>
+              <Button className="flex-1" onClick={() => { router.push('/dashboard'); router.refresh() }}>Go to your dashboard <ArrowRight className="w-4 h-4" /></Button>
+              <Link href="/dashboard/settings/templates" className="flex-1"><Button variant="secondary" className="w-full" type="button">Review services</Button></Link>
+            </>
+          )}
         </div>
+        {/* The seeded prices stay one tap away for a first run, without a third
+            button competing with the next step. */}
+        {firstRun && result.seeded.services > 0 && (
+          <p className="mt-4 text-center text-xs text-ink-faint">
+            Want to check the starter prices first?{' '}
+            <Link href="/dashboard/settings/templates" className="font-medium text-accent-text underline-offset-2 hover:underline">Review services</Link>
+          </p>
+        )}
       </Shell>
     )
   }
@@ -128,10 +152,17 @@ export default function SetupPage() {
       </div>
 
       <div className="mb-5">
-        <Input label="Business name" placeholder="e.g. Northside Plumbing Ltd." value={name} onChange={e => setName(e.target.value)} />
+        {/* Optional, and SAID so: the primary button waits on the trade alone,
+            and nothing here told a first-time owner which of the two fields was
+            holding it. The reseed surface keeps its unhinted field. */}
+        <Input label="Business name" placeholder="e.g. Northside Plumbing Ltd." value={name} onChange={e => setName(e.target.value)}
+          hint={configured ? undefined : 'Optional — add or change it any time in Settings.'} />
       </div>
 
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">What kind of work do you do?</p>
+      {!configured && (
+        <p className="text-xs text-ink-muted -mt-1 mb-3">Pick one to continue — the only required step.</p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-5">
         {TRADE_PACKS.map(p => {
           const active = picked === p.key
