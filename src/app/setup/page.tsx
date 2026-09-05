@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { TRADE_PACKS, tradePack, type TradePack } from '@/lib/trades'
 import { loadSeedState, seedPlan, applyTradeSelection, type SeedState, type SeedResult } from '@/lib/onboarding/seed'
+import { REGISTRATION_CLOSED, parseProvisioningStatus, registrationNextStep, type RegistrationStep } from '@/lib/registration'
 import { cn } from '@/lib/utils'
 import { Zap, Check, ArrowRight, Sparkles, Wrench, ShieldCheck } from 'lucide-react'
 
@@ -33,6 +34,9 @@ export default function SetupPage() {
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<SeedResult | null>(null)
   const [error, setError] = useState('')
+  // What the database says this account may do here. 'setup' is the normal
+  // case; the other three each get one honest screen instead of a refused write.
+  const [gate, setGate] = useState<RegistrationStep>('setup')
 
   useEffect(() => {
     let alive = true
@@ -46,6 +50,17 @@ export default function SetupPage() {
       // INSERT policy below with no way through.
       await supabase.rpc('claim_beta_invite')
       if (!alive) return
+      // Then ask whether this account may create a business at all — the same
+      // function the business_settings INSERT policy derives from. A public
+      // sign-up while the switch is closed, or a crew-linked account, is told so
+      // HERE, calmly, instead of by a refused upsert. If the question itself
+      // fails, carry on exactly as before: the database still gates the write.
+      const { data: gateAnswer, error: gateErr } = await supabase.rpc('provisioning_status')
+      if (!alive) return
+      if (!gateErr) {
+        const step = registrationNextStep(parseProvisioningStatus(gateAnswer))
+        if (step !== 'setup') { setGate(step); return }
+      }
       setUid(user.id)
       const [st, biz] = await Promise.all([
         loadSeedState(supabase, user.id),
@@ -83,6 +98,32 @@ export default function SetupPage() {
     setApplying(false)
     if (!res.ok) { setError(res.error || 'Something went wrong.'); setResult(res); return }
     setResult(res)
+  }
+
+  // ── Not licensed to set up a business — one honest screen each ──
+  if (gate !== 'setup') {
+    const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }).catch(() => {}); router.replace('/login') }
+    return (
+      <Shell>
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-bg-secondary border border-border flex items-center justify-center mx-auto mb-3"><ShieldCheck className="w-6 h-6 text-amber-300" /></div>
+          <h1 className="text-xl font-bold text-ink">
+            {gate === 'crew' ? 'This account belongs to a crew' : gate === 'unverified' ? 'Confirm your email first' : REGISTRATION_CLOSED.title}
+          </h1>
+          <p className="text-sm text-ink-muted mt-1">
+            {gate === 'crew'
+              ? 'This account is linked to an employer’s crew, so it can’t also own a business. Use your join code to reach your crew tools, or start a business with a different email.'
+              : gate === 'unverified'
+                ? 'Open the confirmation link we emailed you, then come back here.'
+                : REGISTRATION_CLOSED.body}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {gate === 'crew' && <Link href="/crew/join" className="flex-1"><Button className="w-full" type="button">Enter your join code</Button></Link>}
+          <Button variant="secondary" className="flex-1" type="button" onClick={signOut}>Sign out</Button>
+        </div>
+      </Shell>
+    )
   }
 
   if (!state) {

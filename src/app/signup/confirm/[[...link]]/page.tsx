@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { MailX, ShieldCheck, TriangleAlert } from 'lucide-react'
 import type { BetaClaimStatus } from '@/lib/betaInvite'
+import { REGISTRATION_CLOSED, parseProvisioningStatus, registrationNextStep } from '@/lib/registration'
 
 // ── /signup/confirm — where the emailed link lands ───────────────────────────
 // verifyOtp with the token_hash proves the email and mints the session (the
@@ -14,6 +15,13 @@ import type { BetaClaimStatus } from '@/lib/betaInvite'
 // whatever browser the email opened in). Then claim_beta_invite() redeems the
 // invite — the step that licenses business_settings creation — and we hand off
 // to /setup.
+//
+// A PUBLIC sign-up lands here too (GoTrue's own confirmation email). It holds
+// no invite, so the claim answers 'no-invite' — which is not a verdict any
+// more: provisioning_status() is, and it says setup / closed / crew. A GoTrue
+// default-template link arrives as ?code= instead of a token hash; that is
+// exchanged in place (same browser only — the path-form template is the one
+// that works from any device, see the runtime prerequisites).
 //
 // The canonical link shape is PATH segments — /signup/confirm/<type>/<hash> —
 // because an emailed query string is at the mercy of every quoted-printable
@@ -34,7 +42,7 @@ export default function SignupConfirmPage() {
 const OTP_TYPES = ['signup', 'magiclink', 'recovery', 'invite', 'email'] as const
 type OtpType = (typeof OTP_TYPES)[number]
 
-type Phase = 'working' | 'dead' | 'revoked' | 'no-invite' | 'error'
+type Phase = 'working' | 'dead' | 'revoked' | 'closed' | 'crew' | 'error'
 
 function ConfirmFlow() {
   const router = useRouter()
@@ -47,6 +55,7 @@ function ConfirmFlow() {
   const tokenHash = seg.length >= 2 ? seg[1] : search.get('token_hash')
   const rawType = (seg.length >= 2 ? seg[0] : search.get('type')) ?? 'signup'
   const type: OtpType = (OTP_TYPES as readonly string[]).includes(rawType) ? (rawType as OtpType) : 'signup'
+  const pkceCode = search.get('code')
 
   const [phase, setPhase] = useState<Phase>('working')
 
@@ -60,6 +69,12 @@ function ConfirmFlow() {
     let { data: { user } } = await supabase.auth.getUser()
 
     if (!user) {
+      if (!tokenHash && pkceCode) {
+        // GoTrue's default confirmation template redirects with a PKCE code.
+        const { data, error } = await supabase.auth.exchangeCodeForSession(pkceCode)
+        if (error || !data.user) { setPhase('dead'); return }
+        user = data.user
+      } else {
       if (!tokenHash) { setPhase('dead'); return }
       const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type })
       if (error || !data.user) {
@@ -70,6 +85,7 @@ function ConfirmFlow() {
         user = again.data.user
       } else {
         user = data.user
+      }
       }
     }
 
@@ -85,11 +101,23 @@ function ConfirmFlow() {
       return
     }
     if (s === 'revoked') { setPhase('revoked'); return }
-    if (s === 'no-invite') { setPhase('no-invite'); return }
+    if (s === 'no-invite') {
+      // No invite is the ORDINARY case for a public sign-up. Ask the database
+      // what this verified account may do — the same function the INSERT
+      // policy derives from, so the screen and the write cannot disagree.
+      const { data: st, error: stErr } = await supabase.rpc('provisioning_status')
+      if (stErr) { setPhase('error'); return }
+      const step = registrationNextStep(parseProvisioningStatus(st))
+      if (step === 'setup') { router.replace('/setup'); router.refresh(); return }
+      if (step === 'crew') { setPhase('crew'); return }
+      if (step === 'closed') { setPhase('closed'); return }
+      setPhase('error')
+      return
+    }
     // 'email-unverified' / 'not-signed-in' right after a successful verify means
     // something transient went wrong between the two calls — offer a retry.
     setPhase('error')
-  }, [tokenHash, type, router])
+  }, [tokenHash, type, pkceCode, router])
 
   useEffect(() => { void run() }, [run])
 
@@ -118,11 +146,18 @@ function ConfirmFlow() {
         </Card>
       )}
 
-      {phase === 'no-invite' && (
-        <Card icon={<ShieldCheck className="w-6 h-6 text-amber-300" aria-hidden />} title="No beta invite on this account">
+      {phase === 'closed' && (
+        <Card icon={<ShieldCheck className="w-6 h-6 text-amber-300" aria-hidden />} title={REGISTRATION_CLOSED.title}>
+          <p className="text-sm text-ink-muted">Your email is confirmed. {REGISTRATION_CLOSED.body}</p>
+          <a href="/login" className="mt-5 inline-block text-sm font-medium text-accent-text hover:underline">{REGISTRATION_CLOSED.signIn}</a>
+        </Card>
+      )}
+
+      {phase === 'crew' && (
+        <Card icon={<ShieldCheck className="w-6 h-6 text-amber-300" aria-hidden />} title="This email belongs to a crew account">
           <p className="text-sm text-ink-muted">
-            Your email is confirmed, but this account isn’t attached to a beta invite,
-            so it can’t create a business. If you were invited, open the invite link you were sent.
+            Your email is confirmed, and this account is linked to an employer’s crew — it can’t also own a business.
+            Sign in to reach your crew tools, or use a different email to start a business.
           </p>
           <a href="/login" className="mt-5 inline-block text-sm font-medium text-accent-text hover:underline">Sign in</a>
         </Card>

@@ -216,6 +216,7 @@ export type GoogleAuthError =
   | 'provider-config'  // the provider refused OUR credentials — see below
   | 'unverified'       // Google would not vouch for the address
   | 'no-invite'        // authenticated fine; holds no licence to create a business
+  | 'closed'           // public registration is switched off — not about this person
   | 'invite-invalid'   // the invite is expired, revoked or already used
   | 'invite-mismatch'  // the invite names a different address than Google returned
   | 'invite-taken'     // that invite is already being redeemed by another account
@@ -229,6 +230,8 @@ export const GOOGLE_AUTH_ERROR_TEXT: Record<GoogleAuthError, string> = {
   'provider-config': 'Google sign-in isn’t working right now — that’s a problem on our side, not with your account or your Google password. Use your email and password for now; we’ve been told about it.',
   unverified: 'Google did not confirm that email address, so we can’t use it to sign in. Try email and password instead.',
   'no-invite': 'That Google account isn’t part of the EdgeHQ beta yet. Use the invite link you were sent, or sign in with the account you already have.',
+  // The platform owner's words for the closed state (root owns login strings).
+  closed: 'Account creation is temporarily unavailable. Please try again later. If you already have an account, sign in with it.',
   'invite-invalid': 'That invite is no longer valid — it may have expired or already been used. Ask EdgeHQ for a new one.',
   'invite-mismatch': 'This invite was issued for a different email address. Sign in with that address, or ask for a new invite.',
   'invite-taken': 'That invite already has a signup in progress under a different account.',

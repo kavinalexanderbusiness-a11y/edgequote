@@ -178,5 +178,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // stranger who found the login page, and it must stay ordinary: no business is
   // created, no invite is consumed, no capability is granted, and the account is
   // not left signed in to a product it has no place in.
+  //
+  // One case is nobody's fault and says so: public registration exists but is
+  // switched off. The database names it; every other answer keeps the old word.
+  const { data: status } = await supabase.rpc('provisioning_status')
+  if (status === 'closed') return abandon('closed')
   return abandon('no-invite')
 }

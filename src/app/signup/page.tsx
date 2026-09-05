@@ -8,15 +8,25 @@ import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Zap, MailCheck, ShieldCheck, KeyRound } from 'lucide-react'
-import { BETA_TOKEN_RE, MIN_PASSWORD, type BetaInviteState, type BetaSignupResponse } from '@/lib/betaInvite'
+import { BETA_TOKEN_RE, MIN_PASSWORD, SIGNUP_CONFIRM_PATH, type BetaInviteState, type BetaSignupResponse } from '@/lib/betaInvite'
+import { REGISTER_STATUS_PATH, REGISTRATION_CLOSED, RESEND_COOLDOWN_SECONDS, signUpOutcome } from '@/lib/registration'
 import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
 
-// ── /signup — the invite-only front door ─────────────────────────────────────
-// Reached only from an invite URL (/signup?invite=eqb_…) handed out by the
-// EdgeQuote operator. Without a valid token this page is a dead end on purpose:
-// there is no open registration, and the business_settings INSERT policy would
-// refuse a tenant anyway — this page is the honest face of that rule, not the
-// enforcement of it.
+// ── /signup — two front doors, one gate ──────────────────────────────────────
+// With ?invite=eqb_… this is the private-beta door, unchanged: the operator's
+// route creates the account and the invite licenses the business.
+//
+// Without an invite it is PUBLIC self-service — when the platform's switch is
+// open. The page asks a server route for that one fact (open or closed; the
+// switch table is unreadable to every client role) and, when open, creates the
+// account through GoTrue's own auth.signUp on the anon key: GoTrue's limits
+// (per IP, per address, per hour) are enforced server-side and project-wide,
+// an existing address comes back obfuscated, and nothing here can delete an
+// account. The business itself is still licensed by the database
+// (provisioning_status → the business_settings INSERT policy) — this page is
+// the honest face of that rule, not the enforcement of it. When the switch is
+// closed the page says so in the owner's words and offers sign-in; it never
+// tells a member of the public they lack an invite.
 //
 // One screen, three fields, one button. After POST the account exists but is
 // UNVERIFIED — the next stop is the confirmation email → /signup/confirm.
@@ -33,12 +43,15 @@ type Phase =
   | 'form'                // invite is good — collect email + password
   | 'sent'                // verification email is out
   | 'signed-in'           // an authenticated session is already on this device
+  | 'closed'              // no invite, and public registration is switched off
   | BetaInviteState       // every dead/waiting state renders its own card
 
 function SignupFlow() {
   const router = useRouter()
   const rawToken = useSearchParams().get('invite') ?? ''
   const token = BETA_TOKEN_RE.test(rawToken) ? rawToken : null
+  // No invite on the URL = the public door. Fixed for the life of the page.
+  const selfService = token === null
 
   const [phase, setPhase] = useState<Phase>('checking')
   const [email, setEmail] = useState('')
@@ -61,7 +74,15 @@ function SignupFlow() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!alive) return
       if (user) { setPhase('signed-in'); return }
-      if (!token) { setPhase('invalid'); return }
+      if (!token) {
+        // The public door: one server-answered fact. Unreachable = closed.
+        const status = await fetch(REGISTER_STATUS_PATH, { cache: 'no-store' })
+          .then(r => r.json() as Promise<{ open?: unknown }>)
+          .catch(() => ({ open: false }))
+        if (!alive) return
+        setPhase(status.open === true ? 'form' : 'closed')
+        return
+      }
       const res = await fetch(`/api/beta/signup?token=${encodeURIComponent(token)}`, { cache: 'no-store' })
         .then(r => r.json() as Promise<{ state: BetaInviteState }>)
         .catch(() => ({ state: 'invalid' as BetaInviteState }))
@@ -90,6 +111,20 @@ function SignupFlow() {
     if (pw.length < MIN_PASSWORD) { setError(`Use at least ${MIN_PASSWORD} characters.`); return }
     if (pw !== pw2) { setError('Those two don’t match.'); return }
     setBusy(true)
+    if (selfService) {
+      // Provider-native. The confirmation email is GoTrue's; its link lands on
+      // /signup/confirm, where the existing page verifies and moves on to /setup.
+      const supabase = createClient()
+      const out = signUpOutcome(await supabase.auth.signUp({
+        email, password: pw,
+        options: { emailRedirectTo: `${window.location.origin}${SIGNUP_CONFIRM_PATH}` },
+      }))
+      setBusy(false)
+      if (out.kind === 'sent') { setSentTo(email); setPhase('sent'); startCooldown(RESEND_COOLDOWN_SECONDS); return }
+      if (out.kind === 'closed') { setPhase('closed'); return }
+      setError(out.message)
+      return
+    }
     const res = await fetch('/api/beta/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -113,6 +148,18 @@ function SignupFlow() {
 
   async function resend() {
     setResendNote('')
+    if (selfService) {
+      // GoTrue's own resend, under its own per-address window.
+      const supabase = createClient()
+      const { error: resendErr } = await supabase.auth.resend({
+        type: 'signup', email: sentTo,
+        options: { emailRedirectTo: `${window.location.origin}${SIGNUP_CONFIRM_PATH}` },
+      })
+      const out = resendErr ? signUpOutcome({ error: resendErr }) : { kind: 'sent' as const }
+      setResendNote(out.kind === 'sent' ? 'Sent — the new link replaces any earlier one.' : out.kind === 'closed' ? REGISTRATION_CLOSED.body : out.message)
+      if (out.kind === 'sent') startCooldown(RESEND_COOLDOWN_SECONDS)
+      return
+    }
     const res = await fetch('/api/beta/resend', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -141,7 +188,7 @@ function SignupFlow() {
 
       {phase === 'form' && (
         <>
-          <Brand sub="You’ve been invited to the private beta" />
+          <Brand sub={selfService ? 'Create your business account' : 'You’ve been invited to the private beta'} />
           <div className="bg-surface border border-border-strong rounded-card p-8 shadow-2xl">
             <h2 className="text-base font-semibold text-ink mb-6">Create your account</h2>
 
@@ -176,7 +223,7 @@ function SignupFlow() {
         <Card icon={<MailCheck className="w-6 h-6 text-emerald-400" aria-hidden />} title="Check your email">
           <p className="text-sm text-ink-muted">
             We sent a confirmation link to <span className="text-ink font-medium">{sentTo}</span>.
-            Open it on any device to finish creating your business.
+            {selfService ? ' Open it to finish creating your business.' : ' Open it on any device to finish creating your business.'}
           </p>
           <p className="mt-3 text-xs text-ink-faint">Nothing arriving? Check spam, then resend.</p>
           {resendNote && <p className="mt-3 text-xs text-ink-muted">{resendNote}</p>}
@@ -196,6 +243,13 @@ function SignupFlow() {
           <Button variant="secondary" className="w-full mt-5" type="button" onClick={resend} disabled={cooldown > 0}>
             {cooldown > 0 ? `Resend email (${cooldown}s)` : 'Resend email'}
           </Button>
+        </Card>
+      )}
+
+      {phase === 'closed' && (
+        <Card icon={<ShieldCheck className="w-6 h-6 text-amber-300" aria-hidden />} title={REGISTRATION_CLOSED.title}>
+          <p className="text-sm text-ink-muted">{REGISTRATION_CLOSED.body}</p>
+          <a href="/login" className="mt-5 inline-block text-sm font-medium text-accent-text hover:underline">{REGISTRATION_CLOSED.signIn}</a>
         </Card>
       )}
 

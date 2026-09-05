@@ -180,7 +180,8 @@
     "verify:day-view-tomorrow": "tsx scripts/verify-day-view-tomorrow.ts",
     "verify:client-cache-isolation": "tsx scripts/verify-client-cache-isolation.ts",
     "verify:shared-unread": "tsx scripts/verify-shared-unread.ts",
-    "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts"
+    "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts",
+    "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
