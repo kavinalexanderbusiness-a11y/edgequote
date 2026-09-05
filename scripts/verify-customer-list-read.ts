@@ -117,8 +117,14 @@ function section4() {
   check('⭐ the error card replaces the list ONLY when there are no rows to show',
     /loadError && customers\.length === 0 \?/.test(page),
     "search and the consent filter are CustomerList's own useState — unmounting it discards them")
+  check('refresh errors remain visible even when cached rows exist',
+    /\{loadError && \(/.test(page) && /role="alert"/.test(page))
+  check('retry does not unmount existing customer filters behind a skeleton',
+    !/onClick=\{[^\n]*setLoading\(true\)[^\n]*fetchCustomers/.test(page))
+  check('a failed first read does not claim there are zero customers',
+    /description=\{loadError \?/.test(page))
   check('the error state offers a retry rather than dead-ending',
-    /Try again/.test(page) && /setLoading\(true\); fetchCustomers\(\)/.test(page))
+    /Try again/.test(page) && /void fetchCustomers\(\)/.test(page))
 }
 
 function section5() {

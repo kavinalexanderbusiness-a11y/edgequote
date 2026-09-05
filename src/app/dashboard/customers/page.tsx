@@ -270,7 +270,7 @@ export default function CustomersPage() {
     <PageContainer>
       <PageHeader
         title="Customers"
-        description={`${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
+        description={loadError ? 'Customer list could not be refreshed.' : `${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
             <ButtonLink href="/dashboard/customers/import" variant="secondary">
@@ -320,29 +320,24 @@ export default function CustomersPage() {
         </Card>
       )}
 
-      {loading ? (
-        <SkeletonRows count={6} />
-      ) : loadError && customers.length === 0 ? (
-        // ⭐⭐ ONLY when there is nothing to show. If rows are already on screen —
-        // from the cache, or from a load that succeeded before a later refresh
-        // failed — CustomerList STAYS MOUNTED, because the search box and the
-        // consent filter are its own useState. Swapping it out for an error card
-        // would silently discard what the owner had typed, so a recoverable
-        // failure would cost them their filters. Same reasoning as the Growth
-        // view extraction: state in a conditionally-rendered child only survives
-        // while the parent keeps rendering it.
+      {loadError && (
         <Card>
           <CardBody>
-            <p className="text-sm text-ink">{loadError}</p>
-            <p className="text-sm text-ink-muted mt-1">
-              This isn’t a picture of your book — nothing has changed.
-            </p>
-            <Button className="mt-3" variant="secondary" onClick={() => { setLoading(true); fetchCustomers() }}>
+            <p role="alert" className="text-sm text-ink">{loadError}</p>
+            {customers.length > 0 && (
+              <p className="text-sm text-ink-muted mt-1">Showing the last loaded customers.</p>
+            )}
+            <Button className="mt-3" variant="secondary" onClick={() => { void fetchCustomers() }}>
               Try again
             </Button>
           </CardBody>
         </Card>
-      ) : (
+      )}
+
+      {/* Keep existing rows mounted during refresh and retry so filters survive. */}
+      {loading ? (
+        <SkeletonRows count={6} />
+      ) : loadError && customers.length === 0 ? null : (
         <CustomerList
           customers={customers}
           onEdit={openEdit}
