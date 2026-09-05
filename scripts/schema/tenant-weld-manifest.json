@@ -172,6 +172,7 @@
     "portal_set_consent",
     "portal_set_scheduling_preference",
     "portal_submit_request",
+    "provisioning_status",
     "public_availability",
     "public_services",
     "push_dispatch",

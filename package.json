@@ -182,7 +182,9 @@
     "verify:client-cache-isolation": "tsx scripts/verify-client-cache-isolation.ts",
     "verify:shared-unread": "tsx scripts/verify-shared-unread.ts",
     "verify:first-use-setup": "tsx scripts/verify-first-use-setup.ts",
-    "verify:customer-card-recovery": "tsx scripts/verify-customer-card-recovery.ts"
+    "verify:customer-card-recovery": "tsx scripts/verify-customer-card-recovery.ts",
+    "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts",
+    "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

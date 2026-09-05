@@ -3,9 +3,10 @@ import { createServerClient } from '@supabase/ssr'
 import { sessionCookieOptions } from '@/lib/supabase/cookieSecurity'
 import { appOrigin } from '@/lib/appOrigin'
 import { BETA_TOKEN_RE } from '@/lib/betaInvite'
+import { INTENT_PARAM, REGISTER_INTENT } from '@/lib/registration'
 import {
   GOOGLE_PROVIDER, GOOGLE_SCOPES, AUTH_ERROR_PARAM,
-  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH,
+  OAUTH_INVITE_COOKIE, OAUTH_INVITE_TTL_SECONDS, OAUTH_START_PATH, registerIntentCookie,
   buildCallbackUrl, safeReturnPath,
 } from '@/lib/googleAuth'
 
@@ -46,6 +47,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const next = safeReturnPath(req.nextUrl.searchParams.get('next'))
   const rawInvite = req.nextUrl.searchParams.get('invite') ?? ''
   const invite = BETA_TOKEN_RE.test(rawInvite) ? rawInvite : null
+  // The sign-up page's stated intent to register. Shape-checked only, like the
+  // invite: it authorizes nothing — the callback still asks the database.
+  const registerIntent = req.nextUrl.searchParams.get(INTENT_PARAM) === REGISTER_INTENT
 
   const failure = (code: string) =>
     NextResponse.redirect(`${origin}/login?${AUTH_ERROR_PARAM}=${code}`, {
@@ -141,5 +145,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       maxAge: OAUTH_INVITE_TTL_SECONDS,
     })
   }
+  // The intent marker belongs to THIS round trip only: written when the sign-up
+  // page asked, and otherwise CLEARED with the same attributes (S110 FIX FIRST
+  // at 54498a59) — an abandoned sign-up leaves its cookie behind for up to
+  // 600 s, and a plain sign-in started inside that window must not inherit a
+  // consent nobody gave. Always written, never conditional. The invite cookie
+  // keeps its own contract: bound and cleared at the callback.
+  const intentCookie = registerIntentCookie(registerIntent, origin.startsWith('https://'))
+  res.cookies.set(intentCookie.name, intentCookie.value, intentCookie.options)
   return res
 }

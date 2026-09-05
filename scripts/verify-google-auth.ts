@@ -171,10 +171,17 @@ H('3. The beta gate is untouched (SQL, apply path)')
   check(`baseline located (${baselineName ?? 'NONE'})`, !!SQL, 'no *_baseline.sql under supabase/migrations')
 
   const canProvision = /CREATE OR REPLACE FUNCTION public\.can_provision_business\(\)[\s\S]*?\$function\$([\s\S]*?)\$function\$/.exec(SQL)?.[1] ?? ''
+  // The licence is stated inline (the invite-era body) or delegated to
+  // provisioning_status() (the self-service-era body, migration
+  // 20260905191549). Whichever body decides must still carry BOTH original
+  // licences: an owner already, or a REDEEMED invite.
+  const decider = /provisioning_status\(\)/.test(canProvision)
+    ? (/CREATE OR REPLACE FUNCTION public\.provisioning_status\(\)[\s\S]*?\$function\$([\s\S]*?)\$function\$/.exec(SQL)?.[1] ?? '')
+    : canProvision
   check('can_provision_business() still requires owner OR a REDEEMED invite',
-    /current_app_role\(\)\s*=\s*'owner'/.test(canProvision) &&
-    /beta_invites/.test(canProvision) && /redeemed_by\s*=\s*auth\.uid\(\)/.test(canProvision),
-    'this is the predicate a new Google account must fail')
+    (/current_app_role\(\)\s*=\s*'owner'/.test(decider) || /business_settings b where b\.user_id = v_uid/.test(decider)) &&
+    /beta_invites/.test(decider) && /redeemed_by\s*=\s*(auth\.uid\(\)|v_uid)/.test(decider),
+    'this is the predicate a new Google account must fail while the sign-up switch is closed')
 
   check('the business_settings INSERT policy still carries can_provision_business()',
     /auth\.uid\(\)\s*=\s*user_id\)?\s*AND\s*can_provision_business\(\)/i.test(SQL),

@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Banner } from '@/components/ui/Banner'
 import { TRADE_PACKS, tradePack, type TradePack } from '@/lib/trades'
 import { loadSeedState, seedPlan, applyTradeSelection, type SeedState, type SeedResult } from '@/lib/onboarding/seed'
+import { REGISTRATION_CLOSED, hasRegisterIntent, parseProvisioningStatus, registrationNextStep, type ProvisioningStatus, type RegistrationStep } from '@/lib/registration'
 import { cn } from '@/lib/utils'
 import { Zap, Check, ArrowRight, Sparkles, Wrench, ShieldCheck } from 'lucide-react'
 
@@ -33,6 +34,16 @@ export default function SetupPage() {
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<SeedResult | null>(null)
   const [error, setError] = useState('')
+  // What the database says this account may do here. 'setup' is the normal
+  // case; the other three each get one honest screen instead of a refused write.
+  const [gate, setGate] = useState<RegistrationStep>('setup')
+  // The licence's NAME. A self-service licence is not consent (S110 §4.1–4.3):
+  // a row-less account that merely signed in sees a clean "no business yet"
+  // screen, and only an explicit act — arriving from sign-up with ?intent=
+  // register, or pressing "Create a business" here — reveals the picker.
+  const [status, setStatus] = useState<ProvisioningStatus | null>(null)
+  const [consented, setConsented] = useState(false)
+  const [email, setEmail] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -46,6 +57,21 @@ export default function SetupPage() {
       // INSERT policy below with no way through.
       await supabase.rpc('claim_beta_invite')
       if (!alive) return
+      // Then ask whether this account may create a business at all — the same
+      // function the business_settings INSERT policy derives from. A public
+      // sign-up while the switch is closed, or a crew-linked account, is told so
+      // HERE, calmly, instead of by a refused upsert. If the question itself
+      // fails, carry on exactly as before: the database still gates the write.
+      const { data: gateAnswer, error: gateErr } = await supabase.rpc('provisioning_status')
+      if (!alive) return
+      if (!gateErr) {
+        const parsed = parseProvisioningStatus(gateAnswer)
+        setStatus(parsed)
+        const step = registrationNextStep(parsed)
+        if (step !== 'setup') { setGate(step); return }
+        if (parsed === 'self-service' && hasRegisterIntent(window.location.search)) setConsented(true)
+      }
+      setEmail(user.email ?? '')
       setUid(user.id)
       const [st, biz] = await Promise.all([
         loadSeedState(supabase, user.id),
@@ -65,6 +91,20 @@ export default function SetupPage() {
   const plan = state && pack ? seedPlan(state, pack) : null
   const configured = !!state && (state.serviceTemplateCount > 0 || state.seasonsConfigured)
 
+  // A refused write is RE-ASKED, never echoed (S110 §4.4). The switch can close
+  // between the page loading and the click, and a crew link can be made in
+  // between too; the database's word is the one that is current, and each word
+  // has its own screen. Only a transient fault falls through to a sentence —
+  // ours, never the driver's.
+  async function explainRefusal(fallback: string) {
+    const { data, error: askErr } = await supabase.rpc('provisioning_status')
+    if (!askErr) {
+      const step = registrationNextStep(parseProvisioningStatus(data))
+      if (step !== 'setup') { setGate(step); return }
+    }
+    setError(fallback)
+  }
+
   async function apply() {
     if (!uid || !picked) return
     setApplying(true); setError('')
@@ -77,12 +117,69 @@ export default function SetupPage() {
     if (trimmed) {
       const { error: nameErr } = await supabase.from('business_settings')
         .upsert({ user_id: uid, company_name: trimmed, business_type: picked }, { onConflict: 'user_id' })
-      if (nameErr) { setError(`Could not save the business name: ${nameErr.message}`); setApplying(false); return }
+      if (nameErr) { await explainRefusal('Couldn’t save the business name — nothing was changed. Please try again.'); setApplying(false); return }
     }
     const res = await applyTradeSelection(supabase, uid, picked)
     setApplying(false)
-    if (!res.ok) { setError(res.error || 'Something went wrong.'); setResult(res); return }
+    if (!res.ok) {
+      // Seeding fills emptiness only, so trying again is always safe.
+      await explainRefusal('Couldn’t finish setting up. Trying again is safe — seeding never overwrites what is already there.')
+      setResult(res)
+      return
+    }
     setResult(res)
+  }
+
+  // ── Not licensed to set up a business — one honest screen each ──
+  if (gate !== 'setup') {
+    const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }).catch(() => {}); router.replace('/login') }
+    return (
+      <Shell>
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-bg-secondary border border-border flex items-center justify-center mx-auto mb-3"><ShieldCheck className="w-6 h-6 text-amber-300" /></div>
+          <h1 className="text-xl font-bold text-ink">
+            {gate === 'crew' ? 'This account belongs to a crew' : gate === 'unverified' ? 'Confirm your email first' : REGISTRATION_CLOSED.title}
+          </h1>
+          <p className="text-sm text-ink-muted mt-1">
+            {gate === 'crew'
+              ? 'This account is linked to an employer’s crew, so it can’t also own a business. Use your join code to reach your crew tools, or start a business with a different email.'
+              : gate === 'unverified'
+                ? 'Open the confirmation link we emailed you, then come back here.'
+                : REGISTRATION_CLOSED.body}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {gate === 'crew' && <Link href="/crew/join" className="flex-1"><Button className="w-full" type="button">Enter your join code</Button></Link>}
+          <Button variant="secondary" className="flex-1" type="button" onClick={signOut}>Sign out</Button>
+        </div>
+      </Shell>
+    )
+  }
+
+  // ── Signed in, not registering — the clean row-less state ──
+  // A self-service licence reached by a plain sign-in. Nothing is created until
+  // this person says so; "Sign out" leaves no trace.
+  if (status === 'self-service' && !consented) {
+    const signOut = async () => { await supabase.auth.signOut({ scope: 'local' }).catch(() => {}); router.replace('/login') }
+    return (
+      <Shell>
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center mx-auto mb-3 shadow-lg shadow-accent/20"><Zap className="w-6 h-6 text-black fill-black" /></div>
+          <h1 className="text-xl font-bold text-ink">No business yet</h1>
+          <p className="text-sm text-ink-muted mt-1">
+            You’re signed in{email ? <> as <span className="text-ink font-medium">{email}</span></> : null}, and no business is set up for this account. Create one now, or sign out — nothing is created until you choose.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button className="flex-1" size="lg" type="button" onClick={() => setConsented(true)}>Create a business <ArrowRight className="w-4 h-4" /></Button>
+          <Button variant="secondary" className="flex-1" type="button" onClick={signOut}>Sign out</Button>
+        </div>
+        <p className="mt-6 text-center text-xs text-ink-faint">
+          Joining a crew instead?{' '}
+          <Link href="/crew/join" className="font-medium text-accent-text underline-offset-2 hover:underline">Enter your code</Link>
+        </p>
+      </Shell>
+    )
   }
 
   if (!state) {
@@ -215,9 +312,13 @@ export default function SetupPage() {
             // gate would bounce them straight back here. Surface the error and stay
             // put rather than navigate into a redirect loop.
             const { error: skipErr } = await supabase.from('business_settings').upsert(row, { onConflict: 'user_id' })
-            if (skipErr) { setError(`Couldn’t save — please try again. (${skipErr.message})`); return }
+            if (skipErr) { await explainRefusal('Couldn’t save — please try again.'); return }
             router.push('/dashboard'); router.refresh()
-          }} className="text-sm text-ink-faint hover:text-ink transition-colors">Skip for now</button>
+          }} className="text-sm text-ink-faint hover:text-ink transition-colors">
+            {/* Under public registration this control creates the tenant, so it
+                says so (S110 §4.2). An invited owner keeps the familiar label. */}
+            {status === 'self-service' ? 'Create my business without a starter catalogue' : 'Skip for now'}
+          </button>
         )}
       </div>
       {/* The escape hatch for an EMPLOYEE who landed here. This page is reached

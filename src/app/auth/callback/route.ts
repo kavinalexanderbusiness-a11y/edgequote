@@ -5,8 +5,9 @@ import { appOrigin } from '@/lib/appOrigin'
 import { landingFor, OWNER_ROOT, type AppRole } from '@/lib/crewAccess'
 import { readUser } from '@/lib/authState'
 import { bindBetaInviteToGoogleUser } from '@/lib/googleAuthServer'
+import { SETUP_REGISTER_PATH, parseProvisioningStatus } from '@/lib/registration'
 import {
-  AUTH_ERROR_PARAM, OAUTH_INVITE_COOKIE,
+  AUTH_ERROR_PARAM, OAUTH_INVITE_COOKIE, OAUTH_REGISTER_COOKIE,
   classifyProviderError, safeReturnPath, hasPkceVerifier, type GoogleAuthError,
 } from '@/lib/googleAuth'
 
@@ -46,6 +47,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const params = req.nextUrl.searchParams
   const next = safeReturnPath(params.get('next'))
   const inviteToken = req.cookies.get(OAUTH_INVITE_COOKIE)?.value ?? null
+  // Did THIS round trip start from the public sign-up page? A sign-in never
+  // carries it, and a sign-in never creates a business (S110 §4.1).
+  const registerIntent = req.cookies.get(OAUTH_REGISTER_COOKIE)?.value === '1'
 
   const jar: { name: string; value: string; options?: Record<string, unknown> }[] = []
   const send = (path: string) => {
@@ -55,6 +59,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // exit from this route, success or failure, so an abandoned attempt cannot
     // leave an entitlement sitting in the browser for the next person.
     res.cookies.set(OAUTH_INVITE_COOKIE, '', CLEARED)
+    res.cookies.set(OAUTH_REGISTER_COOKIE, '', CLEARED)
     return res
   }
   const fail = (code: GoogleAuthError) => send(`/login?${AUTH_ERROR_PARAM}=${code}`)
@@ -172,11 +177,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // here and the answer at the moment of tenant creation cannot drift apart.
   const { data: canProvision, error: provisionError } = await supabase.rpc('can_provision_business')
   if (provisionError) return fail('unavailable')
-  if (canProvision === true) return send(next ?? OWNER_ROOT)
+  // ⭐ Licensed is not the same as registering. The word says WHICH licence:
+  // an invite is a stated intent (they opened the link they were sent) and
+  // lands on /setup as it always has; the self-service licence lands there
+  // only when this round trip began on the sign-up page. A verified stranger
+  // who pressed "Sign in with Google" is signed out and told how to sign up —
+  // no business is created by a sign-in, ever.
+  const { data: statusData, error: statusError } = await supabase.rpc('provisioning_status')
+  if (statusError) return fail('unavailable')
+  const status = parseProvisioningStatus(statusData)
+  if (canProvision === true) {
+    if (status === 'invited' || status === 'already-owner') return send(next ?? OWNER_ROOT)
+    if (status === 'self-service' && registerIntent) return send(SETUP_REGISTER_PATH)
+    return abandon('not-registered')
+  }
 
   // Authenticated, and entitled to nothing. This is the ordinary outcome for a
   // stranger who found the login page, and it must stay ordinary: no business is
   // created, no invite is consumed, no capability is granted, and the account is
   // not left signed in to a product it has no place in.
+  //
+  // One case is nobody's fault and says so: public registration exists but is
+  // switched off. The database names it; every other answer keeps the old word.
+  if (registerIntent && status === 'closed') return abandon('closed')
   return abandon('no-invite')
 }

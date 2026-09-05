@@ -69,6 +69,35 @@ export const OAUTH_INVITE_TTL_SECONDS = 600
  *  silently drop, leaving a legitimate invited owner unbindable. */
 export const OAUTH_INVITE_COOKIE = 'eq-oauth-invite'
 
+/** The self-service "I am registering" marker for the Google round trip — set
+ *  by the start route only when the sign-up page asked for it, read once by
+ *  the callback, cleared on every exit. Same shape and TTL as the invite
+ *  cookie, for the same reason: a plain sign-in must never be mistaken for
+ *  consent to create a business (S110 §4.1). */
+export const OAUTH_REGISTER_COOKIE = 'eq-oauth-register'
+
+/** The intent cookie for ONE round trip, as the start route writes it: SET
+ *  when the sign-up page asked, otherwise CLEARED — with the same attributes,
+ *  so the browser replaces the very cookie an earlier attempt left behind.
+ *
+ *  ⭐ Why the clear is not optional (S110, FIX FIRST at 54498a59): an abandoned
+ *  sign-up — consent screen closed, tab closed — never reaches the callback,
+ *  the only other place that clears, so its cookie lives on for up to
+ *  OAUTH_INVITE_TTL_SECONDS. A plain "Sign in with Google" started inside that
+ *  window would inherit consent nobody gave and land on /setup?intent=register.
+ *  Pure, so the guard can execute both branches and the stale-jar sequence. */
+export function registerIntentCookie(registerIntent: boolean, secure: boolean): {
+  name: string
+  value: string
+  options: { httpOnly: true; sameSite: 'lax'; secure: boolean; path: '/'; maxAge: number }
+} {
+  return {
+    name: OAUTH_REGISTER_COOKIE,
+    value: registerIntent ? '1' : '',
+    options: { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: registerIntent ? OAUTH_INVITE_TTL_SECONDS : 0 },
+  }
+}
+
 /**
  * Does this browser still hold the PKCE verifier that STARTED the flow?
  *
@@ -216,6 +245,8 @@ export type GoogleAuthError =
   | 'provider-config'  // the provider refused OUR credentials — see below
   | 'unverified'       // Google would not vouch for the address
   | 'no-invite'        // authenticated fine; holds no licence to create a business
+  | 'not-registered'   // licensed to register, but this was a SIGN-IN, not a sign-up
+  | 'closed'           // public registration is switched off — not about this person
   | 'invite-invalid'   // the invite is expired, revoked or already used
   | 'invite-mismatch'  // the invite names a different address than Google returned
   | 'invite-taken'     // that invite is already being redeemed by another account
@@ -229,6 +260,9 @@ export const GOOGLE_AUTH_ERROR_TEXT: Record<GoogleAuthError, string> = {
   'provider-config': 'Google sign-in isn’t working right now — that’s a problem on our side, not with your account or your Google password. Use your email and password for now; we’ve been told about it.',
   unverified: 'Google did not confirm that email address, so we can’t use it to sign in. Try email and password instead.',
   'no-invite': 'That Google account isn’t part of the EdgeHQ beta yet. Use the invite link you were sent, or sign in with the account you already have.',
+  // The platform owner's words for the closed state (root owns login strings).
+  'not-registered': 'That Google account isn’t set up with an EdgeHQ business yet. To create one, start from Sign up — signing in on its own never creates a business.',
+  closed: 'Account creation is temporarily unavailable. Please try again later. If you already have an account, sign in with it.',
   'invite-invalid': 'That invite is no longer valid — it may have expired or already been used. Ask EdgeHQ for a new one.',
   'invite-mismatch': 'This invite was issued for a different email address. Sign in with that address, or ask for a new invite.',
   'invite-taken': 'That invite already has a signup in progress under a different account.',
