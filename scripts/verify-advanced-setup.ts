@@ -22,7 +22,10 @@
 
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { FEATURE_MODULES, CATEGORY_ORDER, moduleByKey } from '../src/lib/modules'
+import { FEATURE_MODULES, CATEGORY_ORDER, moduleByKey, visibleModules, readMeta } from '../src/lib/modules'
+// esbuild is tsx's own compiler and this guard runs under tsx, so it is always
+// installed alongside the runner. Used only to erase types from lifted source.
+import { transformSync } from 'esbuild'
 import { AUTOMATION_RULES } from '../src/lib/automation/rules'
 
 let failures = 0
@@ -169,13 +172,242 @@ check('the upsert is keyed on user_id', /onConflict: 'user_id'/.test(hook))
 check('a save is refused when the current composition is unknown',
   /if \(prev\?\.unknown\) return/.test(hook),
   'install/uninstall both compute the next set FROM the current one — saving on top of a failed read re-installs everything the owner switched off')
-check('a failed read still fails OPEN for navigation',
-  /store = store \?\? \{ enabled: null, meta: \{\}, unknown: true \}/.test(hook),
-  'hiding a page because a query blipped is worse than showing one too many')
+// ── 6b. …and a read that FAILED still draws navigation OPEN ─────────────────
+//
+// ⛔⛔ WHY THIS IS EXECUTED AND NOT MATCHED. This check used to pin one literal:
+//     store = store ?? { enabled: null, meta: {}, unknown: true }
+// The account-isolation work legitimately rewrote that line to
+//     store = storeOwner === uid && store ? store : { enabled: null, meta: {}, unknown: true }
+// — retain OUR last good snapshot, not ANY account's — and CI went red on a
+// behaviour that had NOT changed. That was a stale pin, not a defect, and the
+// repair is not a looser regex: a regex could not tell the two apart on the one
+// thing the check is actually about, which is what NAVIGATION DRAWS. So the
+// hook's own store and loader are lifted verbatim out of the file already read
+// above and driven against a fake client, and every answer is read through the
+// REAL `visibleModules()` — the same projection the sidebar uses.
+//
+// ⭐ Offline and synthetic: no auth, no session, no network, no business data,
+// no write. The only injected parts are the client and WHEN it answers.
+const src6b = hook.replace(/\r\n/g, '\n')
 
-console.log('\n── Summary ────────────────────────────────────────────────────')
-if (failures) {
-  console.log(`\n❌ verify:advanced-setup — ${failures} failure${failures === 1 ? '' : 's'}\n`)
-  process.exit(1)
+function balanced6b(s: string, from: number): string {
+  let depth = 0
+  for (let i = s.indexOf('{', from); i < s.length; i++) {
+    if (s[i] === '{') depth++
+    else if (s[i] === '}' && --depth === 0) return s.slice(from, i + 1)
+  }
+  throw new Error('unbalanced braces')
 }
-console.log(`\n✅ verify:advanced-setup — ${FEATURE_MODULES.length} modules, advanced tools ranked as setup and honest about it\n`)
+
+interface Store6b {
+  loadModules: () => Promise<void>
+  persist: (e: string[] | null, m: Record<string, unknown>) => Promise<string | null>
+  served: () => { enabled?: unknown; unknown?: boolean } | null
+  raw: () => { enabled?: unknown; unknown?: boolean } | null
+  ensureAuthWatch: () => void
+}
+
+/** Compile the hook's own statements into a fresh module scope. */
+function liftStore(create: () => unknown, mutate?: (s: string) => string): Store6b {
+  const top = src6b.indexOf('let store')
+  const loadAt = src6b.indexOf('function loadModules')
+  const persistAt = src6b.indexOf('const persist = useCallback(')
+  if (top < 0 || loadAt < 0 || persistAt < 0) throw new Error('useModules was restructured — the lift failed')
+  let body = src6b.slice(top, loadAt) + balanced6b(src6b, loadAt)
+  let persistFn = balanced6b(src6b, src6b.indexOf('async (', persistAt))
+  if (mutate) { body = mutate(body); persistFn = mutate(persistFn) }
+  const code = [
+    'const __factory = function (createClient, readMeta, window) {',
+    body.replace(/^export /gm, ''),
+    'const persist = ' + persistFn + ';',
+    // `served` is what a RENDER would get; `raw` is the stored snapshot itself.
+    'return { loadModules, persist, ensureAuthWatch, served: getSnapshot, raw: () => store }',
+    '}',
+  ].join('\n')
+  const js = transformSync(code, { loader: 'ts' }).code
+  return (new Function(js + '\nreturn __factory')() as
+    (c: unknown, r: unknown, w: unknown) => Store6b)(create, readMeta, { dispatchEvent() {} })
+}
+
+/** A fake Supabase client that answers only when the test says so. */
+function fake6b() {
+  let session: { user: { id: string } } | null = null
+  let onAuth: ((e: string, s: unknown) => void) | null = null
+  const reads: ((v: { data: unknown; error: unknown }) => void)[] = []
+  const writes: ((v: { error: unknown }) => void)[] = []
+  const defer = <T,>(sink: ((v: T) => void)[]) =>
+    new Promise<T>(res => { sink.push(res) })
+  const client = {
+    auth: {
+      getSession: async () => ({ data: { session } }),
+      onAuthStateChange: (cb: (e: string, s: unknown) => void) => {
+        onAuth = cb
+        return { data: { subscription: { unsubscribe() {} } } }
+      },
+    },
+    from: () => {
+      const q: Record<string, unknown> = {}
+      q.select = () => q; q.eq = () => q
+      q.maybeSingle = () => defer<{ data: unknown; error: unknown }>(reads)
+      q.upsert = () => defer<{ error: unknown }>(writes)
+      return q
+    },
+  }
+  return {
+    create: () => client,
+    /** Deliver the auth event the app delivers, through the hook's own listener. */
+    signIn(uid: string | null) {
+      session = uid ? { user: { id: uid } } : null
+      onAuth?.(uid ? 'SIGNED_IN' : 'SIGNED_OUT', session)
+    },
+    answer: (v: { data: unknown; error: unknown }) => reads.shift()?.(v),
+    answerWrite: (v: { error: unknown }) => writes.shift()?.(v),
+  }
+}
+
+const settle = () => new Promise(r => setTimeout(r, 0))
+
+// ⛔⛔ THE EXIT CODE IS WHAT CI READS, AND AN ASYNC SECTION CAN SKIP IT.
+// A promise that never settles does NOT hold the event loop open: Node drains,
+// runs no more of the async body, and exits 0 — with ✗ lines already on screen.
+// This guard measured exactly that during its own repair. So completion is
+// asserted, not assumed: anything that ends the process before the summary is a
+// FAILURE, never a silent pass.
+let sectionFinished = false
+process.on('exit', code => {
+  if (!sectionFinished && code === 0) {
+    console.log('\n❌ verify:advanced-setup — the navigation section did not finish (the event loop drained before the summary). Treating as FAILURE.\n')
+    process.exitCode = 1
+  }
+})
+const ALL = FEATURE_MODULES.length
+const ONE_NON_CORE = FEATURE_MODULES.filter(m => !m.core)[0].key
+const good = (keys: string[] | null) =>
+  ({ data: { enabled_modules: keys, module_meta: {} }, error: null })
+const blipped = { data: null, error: { message: 'read failed' } }
+/** How many modules navigation would draw for what a render is served. */
+const drawn = (s: Store6b) => visibleModules(s.served()?.enabled ?? null).length
+
+async function navigationCases(mutate?: (s: string) => string) {
+  const out: Record<string, string | number | boolean | null> = {}
+
+  // A read that FAILS with nothing cached — the case the old literal guarded.
+  {
+    const w = fake6b(); const s = liftStore(w.create, mutate)
+    s.ensureAuthWatch(); w.signIn('acct-A'); await settle()
+    w.answer(blipped); await settle()
+    out.failOpenDrawn = drawn(s)
+    out.failOpenMarked = s.raw()?.unknown === true
+    // ⛔ Do NOT `await` this bare. With the guess flag present, persist refuses
+    // before it touches the client. With the flag MISSING (the mutation below)
+    // it goes on to upsert — and an unanswered request would leave this await
+    // pending forever, which in CommonJS lets the event loop drain and Node
+    // exit 0 with failures already printed. Answering it makes "the write was
+    // allowed" observable instead of invisible.
+    const refusal = s.persist([ONE_NON_CORE], {})
+    await settle()
+    w.answerWrite({ error: null })
+    out.failOpenWriteRefused = await refusal
+    out.failOpenStoreAfterWrite = JSON.stringify(s.raw()?.enabled ?? null)
+  }
+
+  // A read that FAILS after a GOOD one for the SAME account — last good is kept.
+  {
+    const w = fake6b(); const s = liftStore(w.create, mutate)
+    s.ensureAuthWatch(); w.signIn('acct-A'); await settle()
+    w.answer(good([ONE_NON_CORE])); await settle()
+    out.goodDrawn = drawn(s)
+    void s.loadModules(); await settle()
+    w.answer(blipped); await settle()
+    out.retainedEnabled = JSON.stringify(s.served()?.enabled ?? null)
+    out.retainedNotGuess = s.raw()?.unknown === undefined
+  }
+
+  // A FOREIGN snapshot is never served — and the fallback is still fail-OPEN.
+  {
+    const w = fake6b(); const s = liftStore(w.create, mutate)
+    s.ensureAuthWatch(); w.signIn('acct-A'); await settle()
+    w.answer(good([ONE_NON_CORE])); await settle()
+    w.signIn('acct-B'); await settle()
+    out.foreignServed = s.served() === null
+    out.foreignDrawn = drawn(s)
+  }
+  return out
+}
+
+
+// Section 6b is asynchronous, so the summary — and the EXIT CODE CI reads —
+// must run after it. Anything thrown inside fails the guard rather than
+// resolving quietly to a green exit 0.
+void (async () => {
+  console.log('\n═══ A read that failed still draws navigation OPEN ═══')
+
+  const nav = await navigationCases()
+
+  check('a FAILED read draws every module — navigation fails OPEN',
+    nav.failOpenDrawn === ALL,
+    `hiding a page because a query blipped is worse than showing one too many — drew ${nav.failOpenDrawn} of ${ALL}`)
+  check('…and the snapshot is marked a guess', nav.failOpenMarked === true)
+  check('…so the WRITE fails CLOSED on that guess',
+    typeof nav.failOpenWriteRefused === 'string' && nav.failOpenWriteRefused.length > 0
+    && nav.failOpenStoreAfterWrite === 'null',
+    'install/uninstall compute the next set FROM the current one, so saving on top of a failed read re-installs everything the owner switched off')
+  check('a failed read after a GOOD one keeps OUR last good composition',
+    nav.retainedEnabled === JSON.stringify([ONE_NON_CORE]) && nav.retainedNotGuess === true,
+    'the account-isolation rewrite kept this; it only stopped retaining ANOTHER account\'s snapshot')
+  check('⛔ a snapshot belonging to another account is never served',
+    nav.foreignServed === true)
+  check('…and that fallback is fail-OPEN too, not an empty nav',
+    nav.foreignDrawn === ALL, `drew ${nav.foreignDrawn} of ${ALL}`)
+  check('[positive control] a GOOD read narrows navigation, so "all" is not constant',
+    typeof nav.goodDrawn === 'number' && nav.goodDrawn < ALL && nav.goodDrawn > 0,
+    `a successful read drew ${nav.goodDrawn} of ${ALL}`)
+
+  // ── the three ways this could regress, each executed ────────────────────────
+  //
+  // ⛔ THE FAULTS ARE INJECTED BY SHAPE, NOT BY LITERAL — this is the same
+  // mistake that produced the CI failure being repaired. An injector anchored on
+  // one exact spelling silently does nothing the next time that line is reworded,
+  // and a mutation that does nothing makes its own check vacuous: the "mutated"
+  // run equals the clean run, so the check reports a problem that is really just
+  // a moved anchor. So each injection is counted, and a miss is its own failure.
+  const injected: Record<string, number> = {}
+  const inject = (label: string, re: RegExp, repl: string) => (s: string) => {
+    const out = s.replace(re, repl)
+    if (out !== s) injected[label] = (injected[label] ?? 0) + 1
+    return out
+  }
+
+  // Matches both the pre-isolation `store = store ?? { … }` and the current
+  // `store = storeOwner === uid && store ? store : { … }`.
+  const closedOnFail = await navigationCases(inject('empty-nav',
+    /store = [^\n]*\{ enabled: null, meta: \{\}, unknown: true \}/,
+    'store = { enabled: [], meta: {}, unknown: true }'))
+  check('[mutation] drawing an EMPTY nav on a failed read is caught',
+    closedOnFail.failOpenDrawn !== ALL,
+    'the fail-open check would not have noticed the regression')
+
+  const noGuessFlag = await navigationCases(inject('no-guess-flag',
+    /, unknown: true \}/, ' }'))
+  check('[mutation] forgetting to mark the guess is caught',
+    noGuessFlag.failOpenMarked !== true || noGuessFlag.failOpenWriteRefused === null,
+    'a write would then be allowed on top of a failed read')
+
+  const bareSnapshot = await navigationCases(inject('bare-snapshot',
+    /return mayServeOwner\([^)]*\) \? store : null/, 'return store'))
+  check('[mutation] serving the store without checking the owner is caught',
+    bareSnapshot.foreignServed !== true,
+    'this is the account-isolation property the rewrite exists for')
+
+  check('every fault above actually reached the source — no vacuous mutation',
+    ['empty-nav', 'no-guess-flag', 'bare-snapshot'].every(k => (injected[k] ?? 0) > 0),
+    `injected: ${JSON.stringify(injected)} — a missing key means the anchor moved and that check proved nothing`)
+
+  sectionFinished = true
+  console.log('\n── Summary ────────────────────────────────────────────────────')
+  if (failures) {
+    console.log(`\n❌ verify:advanced-setup — ${failures} failure${failures === 1 ? '' : 's'}\n`)
+    process.exit(1)
+  }
+  console.log(`\n✅ verify:advanced-setup — ${FEATURE_MODULES.length} modules, advanced tools ranked as setup and honest about it\n`)
+})().catch(err => { console.error(err); process.exit(1) })
