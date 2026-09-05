@@ -74,6 +74,12 @@ import {
 
 const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
 
+// The four reads this page issues itself whose rows every figure below stands
+// on. A slice whose LAST live read failed is NAMED here, never coerced to [] —
+// `[]` is the answer "this customer has none"; a failed read has no answer.
+type ReadSlice = 'Properties' | 'Quotes' | 'Jobs' | 'Invoices'
+const ALL_SLICES: ReadSlice[] = ['Properties', 'Quotes', 'Jobs', 'Invoices']
+
 // Presentation for the engine's verbs. The engine owns WHAT to do; this file
 // only decides how it looks — the same split the dashboard queue makes.
 const ACTION_ICON: Partial<Record<string, typeof FileText>> = {
@@ -146,6 +152,16 @@ export default function CustomerDetailPage() {
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // ── Read honesty ──────────────────────────────────────────────────────────
+  // Which of this page's own slices the figures are allowed to stand on, and
+  // where the rows on screen came from. A cached snapshot is a memory of the
+  // last visit — shown, labelled, and never presented as today's answer until a
+  // live read replaces it. (S111 audit: a failed quotes/jobs/invoices read used
+  // to paint as $0 · "Nothing needs action" · a red retention alarm, and was
+  // then CACHED as empty for two minutes; a failed refresh after a cached paint
+  // was silent because loadError rendered only when no customer was on screen.)
+  const [readMissing, setReadMissing] = useState<ReadSlice[]>([])
+  const [source, setSource] = useState<'none' | 'cache' | 'live'>('none')
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
@@ -270,6 +286,8 @@ export default function CustomerDetailPage() {
       setQuotes(cached.quotes)
       setJobs(cached.jobs)
       setInvoices(cached.invoices)
+      setReadMissing([])          // a snapshot is only ever written clean (see load)
+      setSource('cache')          // …and is a memory until the live read lands
       setLoading(false)
     }
   }, [id])
@@ -322,10 +340,19 @@ export default function CustomerDetailPage() {
       // still restores from the freshly-loaded `customer`). The rest of the page
       // stays live — this guards the one editable draft, nothing else.
       if (!editingNotesRef.current) setNotesValue(cust?.notes || '')
-      setProperties((pRes.data as Property[]) || [])
-      setQuotes((qRes.data as Quote[]) || [])
-      setJobs((jRes.data as Job[]) || [])
-      setInvoices((iRes.data as Invoice[]) || [])
+      // ⭐ A failed slice keeps whatever is on screen (last known good, or
+      // nothing) and is NAMED in readMissing; the figures it feeds render as
+      // "not loaded", not as zero. The realtime narrow path below already kept
+      // last-known-good — the full load now follows the same rule.
+      if (!pRes.error) setProperties((pRes.data as Property[]) || [])
+      if (!qRes.error) setQuotes((qRes.data as Quote[]) || [])
+      if (!jRes.error) setJobs((jRes.data as Job[]) || [])
+      if (!iRes.error) setInvoices((iRes.data as Invoice[]) || [])
+      const failedSlices = ALL_SLICES.filter(s =>
+        (s === 'Properties' && pRes.error) || (s === 'Quotes' && qRes.error) ||
+        (s === 'Jobs' && jRes.error) || (s === 'Invoices' && iRes.error))
+      setReadMissing(failedSlices)
+      setSource('live')
       // A FAILED read stays null (gate skipped), never an empty map — an empty map
       // would claim every gated booking is unpaid.
       if (depRes.error) { setDepositRows(null) } else {
@@ -335,8 +362,11 @@ export default function CustomerDetailPage() {
         }
         setDepositRows(byQuote)
       }
-      // Warm the cache so the next open (or a back-nav) paints instantly.
-      if (cust) writeCache<CustomerPrefetch>(custCacheKey(id), {
+      // Warm the cache so the next open (or a back-nav) paints instantly — but
+      // ONLY a clean snapshot. A failed slice cached as [] replayed as "no
+      // quotes" for two minutes, on every hover and back-nav, after the network
+      // was back. (The lease, taken at fetch start, still decides the owner.)
+      if (cust && failedSlices.length === 0) writeCache<CustomerPrefetch>(custCacheKey(id), {
         customer: cust, properties: (pRes.data as Property[]) || [], quotes: (qRes.data as Quote[]) || [],
         jobs: (jRes.data as Job[]) || [], invoices: (iRes.data as Invoice[]) || [],
       }, { lease })
@@ -369,13 +399,9 @@ export default function CustomerDetailPage() {
       // Hand the engine the rows; it decides what an event is. The page no longer
       // knows how a credit differs from a refund.
       setTlSources({ ...tlCustomer.sources, ...tlJob.sources })
-      // quotes/jobs/invoices are fetched by this page, not the loader, so their
-      // failures are named here — they are the three the timeline can least afford
-      // to drop silently.
-      setTlMissing([
-        ...(qRes.error ? ['Quotes'] : []), ...(jRes.error ? ['Jobs'] : []),
-        ...(iRes.error ? ['Invoices'] : []), ...tlCustomer.missing, ...tlJob.missing,
-      ])
+      // The loader's own missing sources. quotes/jobs/invoices are this page's
+      // slices and are named in readMissing; the Timeline card receives both.
+      setTlMissing([...tlCustomer.missing, ...tlJob.missing])
       if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
       if (referredRevRes?.data) {
         // Referral revenue: the same exclusion rule as every other money
@@ -417,12 +443,17 @@ export default function CustomerDetailPage() {
 
   const narrowRefetch = useCallback(async (scopes: Set<string>) => {
     const tasks: PromiseLike<unknown>[] = []
+    // A narrow refetch that fails must say so too, and one that succeeds must
+    // clear the name — the same two-way rule the timeline warning follows.
+    const noteSlice = (slice: ReadSlice, ok: boolean) =>
+      setReadMissing(prev => ok ? prev.filter(s => s !== slice) : prev.includes(slice) ? prev : [...prev, slice])
     if (scopes.has('quotes')) tasks.push(
       supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false })
-        .then(r => { if (!r.error) setQuotes((r.data as Quote[]) || []) }),
+        .then(r => { noteSlice('Quotes', !r.error); if (!r.error) setQuotes((r.data as Quote[]) || []) }),
     )
     if (scopes.has('jobs')) tasks.push((async () => {
       const r = await supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true })
+      noteSlice('Jobs', !r.error)
       if (r.error) return
       const rows = (r.data as Job[]) || []
       setJobs(rows)
@@ -431,7 +462,7 @@ export default function CustomerDetailPage() {
     })())
     if (scopes.has('invoices') || scopes.has('payments')) tasks.push(
       supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false })
-        .then(r => { if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
+        .then(r => { noteSlice('Invoices', !r.error); if (!r.error) setInvoices((r.data as Invoice[]) || []) }),
     )
     if (scopes.has('payments') || scopes.has('messages') || scopes.has('service_requests')) tasks.push((async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -441,10 +472,7 @@ export default function CustomerDetailPage() {
       setTlSources(prev => ({ ...prev, ...tlCust.sources }))
       // A realtime refetch that drops a source must state it too — and a clean
       // refetch must clear a stale warning, or the card cries wolf forever.
-      setTlMissing(prev => {
-        const own = prev.filter(m => m === 'Quotes' || m === 'Jobs' || m === 'Invoices')
-        return [...own, ...tlCust.missing]
-      })
+      setTlMissing(tlCust.missing)
     })())
     await Promise.all(tasks)
   }, [supabase, id])
@@ -725,6 +753,20 @@ export default function CustomerDetailPage() {
 
   const today = localTodayISO()
 
+  // ── Read status ────────────────────────────────────────────────────────────
+  // What each figure below may stand on. A slice in readMissing has no current
+  // answer, so anything derived from it is shown as "not loaded" — never as 0,
+  // never as "none", never as a retention alarm.
+  const missing = new Set<ReadSlice>(readMissing)
+  const unknownFrom = (...slices: ReadSlice[]) => slices.some(s => missing.has(s))
+  const quotesUnknown = unknownFrom('Quotes')
+  const jobsUnknown = unknownFrom('Jobs')
+  const moneyUnknown = unknownFrom('Invoices')
+  const openUnknown = (['Quotes', 'Jobs', 'Invoices'] as ReadSlice[]).filter(s => missing.has(s))
+  const notLoaded = (slice: string) => `${slice} could not be loaded`
+  // The Timeline card names both this page's failed slices and the loader's.
+  const timelineMissing = [...readMissing.filter(s => s !== 'Properties'), ...tlMissing]
+
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => isWon(q.status))
   // ⛔ WAS `s + Number(q.total || 0)` across every won quote. An unpriced won
@@ -772,12 +814,14 @@ export default function CustomerDetailPage() {
     jobs.filter(j => j.recurrence_id === rid && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress')).length
 
   const warnings: { tone: 'red' | 'amber'; text: string }[] = []
-  if (hasRecurring && upcoming.length === 0) {
+  // Every one of these is a statement about the JOBS slice; with that slice
+  // missing, "no future visits" is not known, so no alarm is raised.
+  if (!jobsUnknown && hasRecurring && upcoming.length === 0) {
     warnings.push({ tone: 'red', text: 'Recurring customer with no future visits scheduled — their series has run out.' })
-  } else if (upcoming.length === 0 && completed.length > 0) {
+  } else if (!jobsUnknown && upcoming.length === 0 && completed.length > 0) {
     warnings.push({ tone: 'amber', text: 'No upcoming visits scheduled.' })
   }
-  if (lastServicedDays != null && lastServicedDays > 60) {
+  if (!jobsUnknown && lastServicedDays != null && lastServicedDays > 60) {
     warnings.push({ tone: 'amber', text: `Last serviced ${lastServicedDays} days ago — may be worth a check-in.` })
   }
 
@@ -845,19 +889,21 @@ export default function CustomerDetailPage() {
     // ⭐ The subtitle carries the exclusion. A total that quietly dropped records
     // is the same lie as one that counted them as zero — the reader cannot tell
     // either from a complete figure unless the figure says so.
+    // A figure whose slice did not load is "—" with the reason as its subtitle:
+    // the same honesty as the exclusion note, for the case where nothing came.
     {
       label: 'Booked Revenue',
-      value: formatCurrency(bookedRevenue),
-      sub: excludedNote(wonUnpriced, 'quote') ?? 'Won quotes',
+      value: quotesUnknown ? '—' : formatCurrency(bookedRevenue),
+      sub: quotesUnknown ? notLoaded('Quotes') : (excludedNote(wonUnpriced, 'quote') ?? 'Won quotes'),
       icon: DollarSign,
       color: 'text-accent-text',
     },
-    { label: 'Collected', value: formatCurrency(collectedRevenue), sub: 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
-    { label: 'Outstanding', value: formatCurrency(outstandingRevenue), sub: 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
+    { label: 'Collected', value: moneyUnknown ? '—' : formatCurrency(collectedRevenue), sub: moneyUnknown ? notLoaded('Invoices') : 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
+    { label: 'Outstanding', value: moneyUnknown ? '—' : formatCurrency(outstandingRevenue), sub: moneyUnknown ? notLoaded('Invoices') : 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
     {
       label: 'Service History',
-      value: `${completed.length} visit${completed.length !== 1 ? 's' : ''}`,
-      sub: `${avgDuration != null ? `~${avgDuration} min avg` : 'No timed visits yet'}${lastServicedDate ? ` · last ${formatDate(lastServicedDate)}` : ''}`,
+      value: jobsUnknown ? '—' : `${completed.length} visit${completed.length !== 1 ? 's' : ''}`,
+      sub: jobsUnknown ? notLoaded('Jobs') : `${avgDuration != null ? `~${avgDuration} min avg` : 'No timed visits yet'}${lastServicedDate ? ` · last ${formatDate(lastServicedDate)}` : ''}`,
       icon: Timer, color: 'text-sky-400',
     },
   ]
@@ -895,6 +941,31 @@ export default function CustomerDetailPage() {
           </div>
         }
       />
+
+      {/* ── Read status — BEFORE any figure below claims to be the answer ──
+          Three honest states, one banner each: a refresh that failed (the rows
+          stay, labelled as the last visit's or the last loaded, with Retry —
+          what the customers list does); a cached snapshot still refreshing (a
+          memory, not today's answer); a live read with slices missing (named,
+          and the figures they feed say "not loaded"). */}
+      {loadError ? (
+        <Banner tone="danger" icon={AlertTriangle}
+          action={<Button size="sm" variant="secondary" onClick={reload}>Try again</Button>}>
+          {loadError}{' '}
+          {source === 'cache'
+            ? 'Showing details from your last visit — they may be out of date.'
+            : 'Showing the last loaded details — they may be out of date.'}
+        </Banner>
+      ) : source === 'cache' ? (
+        <Banner tone="info" icon={RotateCw}>
+          Showing details from your last visit — refreshing now.
+        </Banner>
+      ) : readMissing.length > 0 ? (
+        <Banner tone="warn" icon={AlertTriangle}
+          action={<Button size="sm" variant="secondary" onClick={reload}>Try again</Button>}>
+          {readMissing.join(', ')} could not be loaded — the figures that depend on {readMissing.length > 1 ? 'them are' : 'it is'} shown as not loaded, not as zero.
+        </Banner>
+      ) : null}
 
       {/* Retention warnings — top, highly visible (THE shared Banner) */}
       {warnings.map((w, i) => (
@@ -989,17 +1060,25 @@ export default function CustomerDetailPage() {
                 {/* The answer strip — the two phone-call questions ("how much do I
                     owe?", "when are you coming?") were already computed on this page
                     but rendered many cards down. Same figures, beside the name. */}
-                {outstandingRevenue > 0 && (
+                {moneyUnknown ? (
+                  <span className="text-xs text-ink-faint flex items-center gap-1" title={notLoaded('Invoices')}>
+                    <DollarSign className="w-3 h-3" /> Owed: not loaded
+                  </span>
+                ) : outstandingRevenue > 0 && (
                   <a href="#customer-revenue" className="text-xs text-amber-400 hover:underline flex items-center gap-1">
                     <DollarSign className="w-3 h-3" /> Owes {formatCurrency(outstandingRevenue)}
                   </a>
                 )}
-                {nextVisit && (
+                {jobsUnknown ? (
+                  <span className="text-xs text-ink-faint flex items-center gap-1" title={notLoaded('Jobs')}>
+                    <CalendarClock className="w-3 h-3" /> Next visit: not loaded
+                  </span>
+                ) : nextVisit && (
                   <span className="text-xs text-ink-muted flex items-center gap-1">
                     <CalendarClock className="w-3 h-3" /> Next visit {formatDate(nextVisit.scheduled_date)}
                   </span>
                 )}
-                {openQuotesAll.length > 0 && (
+                {!quotesUnknown && openQuotesAll.length > 0 && (
                   <span className="text-xs text-ink-muted flex items-center gap-1">
                     <FileText className="w-3 h-3" /> {openQuotesAll.length} open quote{openQuotesAll.length !== 1 ? 's' : ''} · {formatCurrency(openQuoteValue)}
                     {/* The count and the money come from DIFFERENT sets when a
@@ -1078,8 +1157,15 @@ export default function CustomerDetailPage() {
           {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
         </CardHeader>
         <CardBody className="p-0">
+          {/* "Nothing needs action" is a claim about quotes, jobs and invoices
+              together; with any of them missing it is not known. */}
+          {openUnknown.length > 0 && (
+            <p className="px-5 py-2 text-xs text-amber-400 border-b border-border">
+              {openUnknown.join(', ')} could not be loaded — items from {openUnknown.length > 1 ? 'those' : 'it'} may be missing here.
+            </p>
+          )}
           {openItems.length === 0 ? (
-            <InlineEmpty className="py-6">Nothing needs action right now.</InlineEmpty>
+            <InlineEmpty className="py-6">{openUnknown.length > 0 ? 'Could not check what needs action — use Try again above.' : 'Nothing needs action right now.'}</InlineEmpty>
           ) : (
             <div className="divide-y divide-border">
               {openItems.map(item => {
@@ -1164,8 +1250,8 @@ export default function CustomerDetailPage() {
         })}
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-ink-muted -mt-2">
-        <span>Accepted jobs: <span className="text-ink font-medium">{wonQuotes.length}</span> of {quotes.length}</span>
-        <span>Avg job value: <span className="text-ink font-medium">{formatCurrency(avgJobValue)}</span></span>
+        <span>Accepted jobs: <span className="text-ink font-medium">{quotesUnknown ? '—' : wonQuotes.length}</span> of {quotesUnknown ? '—' : quotes.length}</span>
+        <span>Avg job value: <span className="text-ink font-medium">{quotesUnknown ? '—' : formatCurrency(avgJobValue)}</span></span>
       </div>
 
       {/* Current Service Plan — the recurring schedule at a glance */}
@@ -1263,11 +1349,12 @@ export default function CustomerDetailPage() {
           {properties.length > 1 && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
-              <RollupStat icon={Repeat} label="Active services" value={String(rollupTotals.activeServices)} />
-              <RollupStat icon={CalendarClock} label="Upcoming visits" value={String(rollupTotals.upcoming)} />
-              <RollupStat icon={FileText} label="Open quotes" value={String(rollupTotals.openQuotes)} />
-              {rollupTotals.outstanding > 0.01 && (
-                <RollupStat icon={DollarSign} label="Outstanding" value={formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
+              {/* Each stat stands on one slice; a slice that did not load is "—". */}
+              <RollupStat icon={Repeat} label="Active services" value={jobsUnknown ? '—' : String(rollupTotals.activeServices)} />
+              <RollupStat icon={CalendarClock} label="Upcoming visits" value={jobsUnknown ? '—' : String(rollupTotals.upcoming)} />
+              <RollupStat icon={FileText} label="Open quotes" value={quotesUnknown ? '—' : String(rollupTotals.openQuotes)} />
+              {(moneyUnknown || rollupTotals.outstanding > 0.01) && (
+                <RollupStat icon={DollarSign} label="Outstanding" value={moneyUnknown ? '—' : formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
               )}
             </div>
           )}
@@ -1291,7 +1378,9 @@ export default function CustomerDetailPage() {
               </div>
             </div>
           )}
-          {properties.length === 0 && !addingProperty ? (
+          {unknownFrom('Properties') && properties.length === 0 && !addingProperty ? (
+            <InlineEmpty className="py-6">Properties could not be loaded — use Try again above.</InlineEmpty>
+          ) : properties.length === 0 && !addingProperty ? (
             // Properties are created from the customer's address, so "none" almost
             // always means "this customer has no address" — which is why they can't
             // be scheduled, measured or priced. Say that, and offer the fix.
@@ -1474,7 +1563,7 @@ export default function CustomerDetailPage() {
           Keyed by customer: navigating profile→profile (via "Referred by") keeps this
           component mounted, and a search typed for one customer must not silently
           filter the next one's history. */}
-      <TimelineCard key={id} events={allEvents} missing={tlMissing} onRetry={reload} />
+      <TimelineCard key={id} events={allEvents} missing={timelineMissing} onRetry={reload} />
 
       {/* The comms cluster — health, AI brief, live thread, then consent + reference.
           It follows the daily-use cards above: the phone-call answers (owed · notes ·

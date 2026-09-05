@@ -36,7 +36,9 @@ export async function prefetchCustomer(id: string): Promise<void> {
       supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true }),
       supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
     ])
-    if (c.data) {
+    // Cache ONLY a clean snapshot: a slice that failed must not be replayed as
+    // "none" for the next two minutes (customers/[id] applies the same rule).
+    if (c.data && !p.error && !q.error && !j.error && !i.error) {
       writeCache<CustomerPrefetch>(custCacheKey(id), {
         customer: c.data as Customer,
         properties: (p.data as Property[]) || [],
