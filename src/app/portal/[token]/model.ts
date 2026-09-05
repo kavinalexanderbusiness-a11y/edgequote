@@ -38,7 +38,10 @@ import { sortedOptions } from '@/lib/quoteOptions'
 // "$5,500 + $575 = $6,075" is one calculation with two audiences, not two.
 import { authorizedValue } from '@/lib/changeOrders'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
-import { isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
+import {
+  isAcceptedOrBeyond, acceptedPresentation, customerFacingQuote,
+  acceptedAmountNote, depositChargeBlockedNote, type AcceptanceKind,
+} from '@/lib/quoteAcceptance'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
 // THE request engine (lib/portalRequests) — the same module the owner's request
 // card reads. The kinds, the media contract and the "a request is an ask, not an
@@ -69,7 +72,7 @@ export interface PortalQuoteOption { id: string; name: string; description: stri
 // derived from the ledger by lib/payments/depositGate, never stored anywhere.
 // `preferred_*` is the customer's own scheduling REQUEST — a preference, never
 // an appointment — echoed back so a reload keeps what they told us.
-export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
+export interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null; options?: PortalQuoteOption[] | null; selected_option_id?: string | null; accepted_price?: number | null; acceptance_kind?: string | null; deposit_type?: string | null; deposit_value?: number | null; preferred_date?: string | null; preferred_date_2?: string | null; preferred_timing?: string | null; preferred_note?: string | null }
 // `property_id` null is the HONEST answer for an invoice spanning several properties —
 // never infer one, or a combined invoice prints one address as if it were the whole bill.
 export interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null; deposit_amount?: number | null; deposit_requested_at?: string | null }
@@ -707,7 +710,21 @@ export interface DocItem { id: string; rawId: string; kind: DocKind; number: str
   schedulingDeposit?: {
     required: number; collected: number; outstanding: number
     percent: number | null; satisfied: boolean
+    /**
+     * ⛔⛔ May this be paid ONLINE right now? The deposit is still OWED when this
+     * is false — the scheduling gate holds and an e-transfer still satisfies it —
+     * but the card route will refuse, because only an actor-named acceptance may
+     * authorise taking money (lib/quoteAcceptance.depositChargeBlock).
+     *
+     * ⭐ It rides INSIDE the figure rather than beside it so that no surface can
+     * render the amount without meeting the verdict. A "Pay $250" button whose
+     * door refuses is a worse failure than no button at all.
+     */
+    payable: boolean
   }
+  /** Why the online deposit is withheld, in the customer's words. Present exactly
+   *  when a deposit is owed and `schedulingDeposit.payable` is false. */
+  depositBlockedLine?: string
   /**
    * ⭐ WHEN this quote's money is due, in words — lib/payments/paymentTiming's
    * one sentence, computed HERE so every surface that mentions timing renders
@@ -824,6 +841,49 @@ export function buildDocItems(opts: {
           isRecommended: !!o.is_recommended,
         }))
       : undefined
+    // ── ⭐⭐ MAY WE CALL THIS AN ACCEPTED PRICE AT ALL? ───────────────────────
+    // A red-team found EPS-2026-0152 live: status=accepted, accepted_price=1400,
+    // current total=500, and ZERO quote_acceptances rows — with this screen
+    // telling the customer "This is the price you accepted" over $1,400.
+    //
+    // ⛔ Status is not evidence and neither is accepted_price. The only thing
+    // that can support that sentence is a quote_acceptances row, and
+    // get_portal_data does not carry one — so the kind is `undefined` here and
+    // the rule FAILS CLOSED: no consent claim, and the customer-facing figure is
+    // the quote's CURRENT price.
+    //
+    // ⚠️ That deliberately gives up S121's consent snapshot for the moment,
+    // because S121's protection and this one point opposite ways and only one of
+    // them can be right without evidence in the payload. Showing a stale figure
+    // AS AGREED is the worse failure: it is a false statement about what someone
+    // consented to, where the other is merely a less useful true one. The
+    // payload widening that restores the snapshot for evidenced quotes is
+    // supabase/proposals/RUN-S122C-portal-acceptance-evidence.sql — until it is
+    // applied, the evidenced states are unreachable and every accepted quote
+    // reads current.
+    //
+    // ⭐⭐ THIS BLOCK RUNS FIRST, AND THAT ORDERING IS LOAD-BEARING. It used to
+    // sit ~60 lines below, so `paymentTiming` — computed here — was handed the
+    // RAW quote while only the deposit gate got the stripped one. The customer
+    // saw a $250 deposit card above the sentence "A 50% deposit ($700.00) is
+    // required before we schedule your visit": two figures, same screen, same
+    // quote, same engine. Anything that reads money off this quote belongs
+    // BELOW this point and takes `moneyQuote`.
+    const presentation = acceptedPresentation(qq.status, qq.acceptance_kind as AcceptanceKind | null | undefined)
+    // ⭐ ONE call, BOTH halves — the figure the customer is shown and the quote
+    // every money reader is allowed to see. There is deliberately no way to ask
+    // for one without the other (lib/quoteAcceptance).
+    const facing = customerFacingQuote(presentation, qq)
+    // ⛔ THE quote for every money engine and every money sentence below. Without
+    // proven evidence, `accepted_price` is not a consent snapshot — it is a
+    // number a past state believed — and `depositBasis` prefers it over `total`
+    // whenever it is non-zero, so the only way to keep it out of a figure is to
+    // hand the engine a quote that does not carry one. ⛔ Do not pass `qq` to a
+    // deposit or timing call below; that is exactly the bug this closes.
+    const moneyQuote = facing.moneyQuote
+    const acceptedFigure = facing.isAcceptedAmount ? facing.amount : null
+    const priceMovedSinceAccepted =
+      acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
     // ⭐ THE payment-timing interpretation of this quote — computed ONCE, read by
     // the explain list below, by `paymentTimingLine` on the row, and (through
     // that field) by every component that tells this customer when money is due.
@@ -833,7 +893,7 @@ export function buildDocItems(opts: {
     // dollar figure belonging to an option they may not pick. The moment a choice
     // exists — or acceptance snapshots accepted_price — the figure is real and
     // the same call prints it.
-    const timing = paymentTiming(qq, { basisSettled: !(options && !qq.selected_option_id) })
+    const timing = paymentTiming(moneyQuote, { basisSettled: !(options && !qq.selected_option_id) })
     const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
     const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
     const explainBits = [
@@ -866,11 +926,9 @@ export function buildDocItems(opts: {
     ].filter((s): s is string => !!s)
     // THE shared expiry engine — the same call the owner's screens make.
     const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, todayISO)
-    // The consented figure, and whether the document has moved away from it.
-    // Both derived here, once, so the amount and the note can never disagree.
-    const acceptedFigure = isAcceptedOrBeyond(qq.status) ? (Number(qq.accepted_price) || null) : null
-    const priceMovedSinceAccepted =
-      acceptedFigure != null && Math.abs(acceptedFigure - (Number(qq.total) || 0)) > 0.005
+    // ⭐ `presentation` / `facing` / `moneyQuote` are derived ABOVE, before the
+    // first money reader — see the block by that name. They used to be derived
+    // here, and everything above them read the raw quote.
     const expired = display === 'expired'
     // ── The scheduling-deposit gate ──────────────────────────────────────────
     // THE engine's answer (lib/payments/depositGate — the same call the charge
@@ -879,11 +937,20 @@ export function buildDocItems(opts: {
     // quote gates nothing. A quote with no rule carries no gate at all — it
     // renders exactly as it did before this feature existed.
     const gateActive = qq.status === 'accepted' || qq.status === 'scheduled'
-    const gate = gateActive ? schedulingGate(qq, depositRowsByQuote.get(qq.id)) : null
+    // ⛔ The deposit basis follows the SAME rule as the headline figure and the
+    // timing sentence — literally the same object, so the three cannot disagree.
+    const gate = gateActive ? schedulingGate(moneyQuote, depositRowsByQuote.get(qq.id)) : null
+    // ⭐ The SAME verdict the charge door will reach, from the SAME call that
+    // produced the basis — so the button and the door can never disagree about
+    // whether this money may be taken.
     const schedulingDeposit = gate && gate.required > 0 ? {
       required: gate.required, collected: gate.collected, outstanding: gate.outstanding,
       percent: gate.percent, satisfied: gate.status === 'satisfied',
+      payable: facing.depositChargeBlock === null,
     } : undefined
+    const depositBlockedLine = schedulingDeposit && !schedulingDeposit.payable && facing.depositChargeBlock
+      ? depositChargeBlockedNote(facing.depositChargeBlock)
+      : undefined
     // The preference travels on any live approved/scheduled quote (so a reload
     // shows it back); the FORM only opens while the RPC will still accept a
     // write — status exactly 'accepted'.
@@ -911,21 +978,37 @@ export function buildDocItems(opts: {
       // accepted before this feature existed may carry no snapshot, and for them
       // the current total is genuinely the best the record can offer.
       // Un-accepted quotes are untouched — `total` is the offer.
-      amount: acceptedFigure ?? (Number(qq.total) || 0),
+      amount: facing.amount,
       // ⭐ And when the two DISAGREE, say so rather than quietly showing the old
       // number beside new work. The customer is told a revision is coming; they
       // are never shown a price they have not agreed to as though they had.
       amountNote: [
-        priceMovedSinceAccepted
+        // ⛔⛔ "YOU accepted" is reachable ONLY from `evidenced_customer`. It is
+        // the one claim on this screen about what the customer PERSONALLY did,
+        // so it may never be made from a status flag — and never from an
+        // owner's attestation either. An on-behalf acceptance is real evidence
+        // of an agreed figure, and it gets its own sentence below saying so;
+        // borrowing the customer's voice for it would undo the whole reason S121
+        // keeps the kinds apart.
+        priceMovedSinceAccepted && presentation === 'evidenced_customer'
           ? 'This is the price you accepted — we’ve made changes since and will send you an updated quote to look over.'
           : null,
+        // Status says accepted, the record cannot show it. Named plainly rather
+        // than left silent: the customer can see the badge, and an unexplained
+        // "Accepted" they never remember agreeing to is its own small alarm.
+        acceptedAmountNote(presentation),
         gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : null,
       ].filter(Boolean).join(' · ') || undefined,
       balance: 0,
       payAmount: 0, payIsDeposit: false,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(qq), lines, planOptions,
+      // ⛔ The PDF gets `moneyQuote`, not `qq`. The customer's own downloadable
+      // copy runs the SAME paymentTiming reader (QuotePDF → pdfTimingLine) off
+      // the SAME accepted_price, so handing it the raw quote would print the
+      // $700 sentence onto the document they keep, under the $250 card they were
+      // just shown. `accepted_price` feeds nothing else in that renderer.
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderers.quote(moneyQuote), lines, planOptions,
       options, selectedOptionId: qq.selected_option_id ?? null,
-      schedulingDeposit, preference, canEditPreference: qq.status === 'accepted',
+      schedulingDeposit, depositBlockedLine, preference, canEditPreference: qq.status === 'accepted',
       paymentTimingLine: quoteTimingLine(timing),
       // Gate-aware, so it can only exist where a gate does. `scheduled` is the
       // override case: the owner booked the visit anyway and the money is still
@@ -1265,7 +1348,11 @@ export function primaryPortalAction(
   // ordinary balance (which has its own due date) and sits only behind overdue.
   // The figure is the gate's `outstanding` (the same number the charge route
   // will ask for), so a partial payment shrinks the headline honestly.
-  const depositDue = docItems.find(d => d.kind === 'quote' && d.schedulingDeposit && !d.schedulingDeposit.satisfied && d.schedulingDeposit.outstanding > 0)
+  // ⛔ `payable` is part of the predicate, not an afterthought inside the branch:
+  // this is the customer's single headline CTA, and pointing it at a door that
+  // will refuse is the same class of defect as a card that names a figure the
+  // charge route won't honour.
+  const depositDue = docItems.find(d => d.kind === 'quote' && d.schedulingDeposit?.payable && !d.schedulingDeposit.satisfied && d.schedulingDeposit.outstanding > 0)
   if (depositDue?.schedulingDeposit) {
     return {
       key: `qdeposit:${depositDue.schedulingDeposit.outstanding}:${depositDue.rawId}`, kind: 'pay-deposit',

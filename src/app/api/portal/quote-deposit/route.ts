@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createQuoteDepositCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
 import { schedulingGate, type GateLedgerRow } from '@/lib/payments/depositGate'
+import {
+  acceptedPresentation, customerFacingQuote, depositChargeBlockedNote,
+  type AcceptanceKind,
+} from '@/lib/quoteAcceptance'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
 import { portalUrl } from '@/lib/portal'
@@ -71,6 +75,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'This quote isn’t accepted yet — accept it first, then pay the deposit.' }, { status: 409 })
   }
 
+  // ── ⭐⭐⭐ WHOSE ACCEPTANCE AUTHORISES THIS CHARGE? ────────────────────────
+  // ⭐ ASKED FIRST, because it is the more specific question. The S121 fence
+  // below asks whether the accepted deal has DRIFTED; it does not ask whether
+  // anyone is NAMED on it — quote_acceptance_is_current takes the latest row and
+  // compares fingerprints, never the kind — so a `legacy_unrecorded` backfill row
+  // sails through it. That row says a deal exists and that WHO agreed to it was
+  // never captured, and there is nobody to point at if this customer later asks
+  // who authorised the charge.
+  //
+  // ⚠️ Both refuse a quote with no evidence at all, so the ORDER is about the
+  // sentence, not the safety: asking about drift first told a customer with no
+  // acceptance on file that their quote "has changed since it was accepted",
+  // which is a confident description of something that never happened.
+  //
+  // ⛔ A kind too weak to say "you accepted" is too weak to take money.
+  //
+  // ⚠️ A FAILED READ IS NOT "no evidence" in the permissive direction — it lands
+  // on `undefined`, which the presentation rule treats as unproven and refuses.
+  // Never answer "couldn't check" as "go ahead", the same contract the token and
+  // ledger reads above already follow.
+  const { data: accRow, error: accErr } = await admin.from('quote_acceptances')
+    .select('kind').eq('quote_id', quote.id).eq('user_id', quote.user_id)
+    .order('seq', { ascending: false }).limit(1).maybeSingle()
+  if (accErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
+  const kind = (accRow as { kind: string } | null)?.kind as AcceptanceKind | null | undefined
+
+  // ⭐ ONE call for BOTH halves — the same function the portal card, the timing
+  // sentence and the customer's PDF read. The basis and the permission to charge
+  // it come out together, so this door cannot price a quote it is not allowed to
+  // charge, and the figure it charges is the figure that was displayed.
+  const facing = customerFacingQuote(acceptedPresentation(quote.status, kind), quote)
+  if (facing.depositChargeBlock) {
+    // ⛔ Neither figure is substituted. Charging the sanitized total would take
+    // money for a version nobody confirmed; charging the backfilled snapshot
+    // would treat a number the migration COPIED as though someone had agreed to
+    // it. The honest ending is a refusal plus a way out — which the customer's
+    // own portal card states in the same words.
+    return NextResponse.json({ error: depositChargeBlockedNote(facing.depositChargeBlock) }, { status: 409 })
+  }
+
   // ── ⭐⭐ THE ACCEPTANCE GATE (Session 121) ─────────────────────────────────
   // Asking a customer for money is acting on the commercial terms, so it asks
   // the same question scheduling and invoicing do — through the DATABASE's half
@@ -99,8 +143,9 @@ export async function POST(req: NextRequest) {
     .eq('quote_id', quote.id).eq('user_id', quote.user_id)
   if (payErr) return NextResponse.json({ error: 'We couldn’t start the payment — please try again in a moment.' }, { status: 502 })
 
-  // THE one gate — the same call the portal row and the owner's panel make.
-  const gate = schedulingGate(quote, (payRows as GateLedgerRow[]) || [])
+  // THE one gate — the same call the portal row and the owner's panel make, over
+  // the SAME basis object they were handed.
+  const gate = schedulingGate(facing.moneyQuote, (payRows as GateLedgerRow[]) || [])
   if (gate.required <= 0) return NextResponse.json({ error: 'This quote doesn’t require a deposit.' }, { status: 409 })
   if (gate.outstanding <= 0) return NextResponse.json({ error: 'This deposit is already paid — nothing more is needed.' }, { status: 409 })
 

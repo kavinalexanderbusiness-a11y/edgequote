@@ -221,6 +221,320 @@ export function isAcceptedOrBeyond(status: QuoteStatus | string): boolean {
   return status === 'accepted' || status === 'scheduled' || status === 'completed' || status === 'paid'
 }
 
+// ── ⭐⭐ WHAT A CUSTOMER MAY BE TOLD ABOUT THEIR OWN ACCEPTANCE ───────────────
+//
+// A live red-team found EPS-2026-0152 in this state:
+//   status = accepted · accepted_price = 1400 · current total = 500
+//   quote_acceptances = 0
+// and the portal told the customer "This is the price you accepted", showing
+// $1,400. Nothing in the record supported that sentence. The payment route
+// refused the charge, but the CLAIM had already been made — and a false claim
+// about what someone agreed to is the failure, not the charge that follows it.
+//
+// ⭐⭐⭐ STATUS IS NOT EVIDENCE, AND NEITHER IS accepted_price. `accepted_price`
+// is written inside the acceptance window, but an administrative status flip
+// leaves it standing with no evidence row behind it — so it records what SOME
+// past state believed, not what any customer agreed to. The only thing that can
+// support the sentence is a `quote_acceptances` row.
+//
+// ⛔ FAILS CLOSED ON UNKNOWN. `hasEvidence: undefined` means the caller could not
+// establish it — the portal payload does not carry acceptance rows — and an
+// unprovable claim must not be made. Silence costs the customer nothing; a false
+// "you accepted this" costs them the ability to trust the number.
+
+export type AcceptedPresentation =
+  /** Not accepted at all — the quote is an offer, show the live price. */
+  | 'offer'
+  /**
+   * The CUSTOMER's own acceptance is on record. Only this state may say "you
+   * accepted": it is the only one where the customer performed the act.
+   */
+  | 'evidenced_customer'
+  /**
+   * The OWNER attested that the customer accepted, off-platform
+   * (kind='owner_on_behalf'). Real, durable evidence of an agreed amount — so
+   * the snapshot may be shown — but it is the BUSINESS's record of a
+   * conversation, not something the customer did here.
+   *
+   * ⛔ NEVER worded as "you accepted". S121 built these kinds to be different
+   * facts, and collapsing them at the last surface would undo that: a customer
+   * reading "you accepted this" about a call they half-remember has no way to
+   * tell whose claim they are looking at.
+   */
+  | 'evidenced_on_behalf'
+  /**
+   * A MIGRATED acceptance (kind='legacy_unrecorded') — the backfill's note that
+   * a quote was already accepted before this product recorded acceptances.
+   *
+   * ⛔ IT NAMES NOBODY. The migration says so in its own words: "a deal exists
+   * here, and WHO accepted it, WHEN, and against WHICH terms was never recorded
+   * … no surface may render it as consent from a named person." Its shape CHECK
+   * welds that shut — actor_type='system', actor_id null, no reason, no terms
+   * acknowledgement.
+   *
+   * ⭐⭐ And it corroborates no FIGURE either, because the backfill wrote
+   * `accepted_amount = coalesce(accepted_price, total)` — it COPIED whatever the
+   * row already claimed. Treating it as evidence FOR accepted_price is circular:
+   * the evidence was minted from the very number it would be justifying. A quote
+   * in EPS-2026-0152's exact shape that happened to predate the backfill would
+   * have been handed a legacy row and shown $1,400 as an agreed figure; the only
+   * thing separating those two quotes is the date a migration ran.
+   */
+  | 'evidenced_legacy'
+  /** Status says accepted, evidence does not exist or cannot be proven. */
+  | 'unevidenced'
+
+/**
+ * How a customer-facing surface may present an accepted quote.
+ *
+ * `hasEvidence` is deliberately a THREE-state input (true / false / undefined):
+ * "no evidence" and "we could not look" are different facts, and both must
+ * refuse the claim, but only the first is a defect worth naming to the owner.
+ */
+export function acceptedPresentation(
+  status: QuoteStatus | string, evidence: AcceptanceKind | null | undefined,
+): AcceptedPresentation {
+  if (!isAcceptedOrBeyond(status)) return 'offer'
+  if (evidence === 'customer') return 'evidenced_customer'
+  // ⭐ An owner's attestation is a deliberate, named, reasoned act, and the
+  // on-behalf sentence asserts exactly that and nothing more.
+  if (evidence === 'owner_on_behalf') return 'evidenced_on_behalf'
+  // ⛔ A legacy row does NOT earn that sentence. It used to land here too, and an
+  // S121 red-team caught it before RUN-S122C could make it reachable: production
+  // holds 75 evidence rows and EVERY ONE of them is legacy, so on the day the
+  // portal starts projecting the kind, 100% of live on-behalf sentences would
+  // have been claims about a business act that nobody can point to.
+  if (evidence === 'legacy_unrecorded') return 'evidenced_legacy'
+  // null = no evidence · undefined = we could not look. Both refuse the claim;
+  // only the first is a defect worth naming to the owner.
+  return 'unevidenced'
+}
+
+/**
+ * THE customer-facing figure for a quote, and whether it may be called accepted.
+ *
+ * ⛔ `acceptedPrice` is consulted ONLY in the `evidenced` branch. In every other
+ * state the answer is the CURRENT total — which is honest in both directions: an
+ * offer is worth what it says today, and an unevidenced "accepted" row is worth
+ * what the document currently says, because nobody can show what was agreed.
+ */
+export function customerFacingQuoteAmount(
+  presentation: AcceptedPresentation,
+  // ⚠️ `string` is not sloppiness: PostgREST returns numeric columns as strings,
+  // and the charge door reads this row straight off the wire. Narrowing here
+  // would push a cast to the call site, which is where a `Number()` gets
+  // forgotten.
+  acceptedPrice: number | string | null | undefined,
+  currentTotal: number,
+): { amount: number; isAcceptedAmount: boolean } {
+  // ⭐ TWO of the evidenced states may show the snapshot: the customer's own
+  // acceptance, and an owner's attestation — real, durable evidence of an agreed
+  // figure. What differs between those two is whose ACT it was, and that is the
+  // SENTENCE's job (see acceptedAmountNote), not the number's. Conflating them
+  // here would have re-introduced the stale-figure bug for on-behalf
+  // acceptances; conflating them in the wording would tell a customer they did
+  // something they did not do.
+  //
+  // ⛔ `evidenced_legacy` is deliberately NOT among them. A backfilled row's
+  // accepted_amount is `coalesce(accepted_price, total)` — the migration COPIED
+  // the claim rather than corroborating it — so reading accepted_price back out
+  // of it would be circular. Legacy quotes therefore show the CURRENT total,
+  // which is also exactly what they show today: the portal cannot see the kind
+  // at all until RUN-S122C lands, so all 75 live legacy quotes keep rendering
+  // unchanged and this split introduces no new figure anywhere.
+  if (presentation === 'evidenced_customer' || presentation === 'evidenced_on_behalf') {
+    const a = Number(acceptedPrice)
+    if (Number.isFinite(a) && a > 0) return { amount: a, isAcceptedAmount: true }
+  }
+  return { amount: Number(currentTotal) || 0, isAcceptedAmount: false }
+}
+
+/** The two fields every money engine reads off a quote. */
+export interface QuoteMoneyFields {
+  accepted_price?: number | string | null
+  total?: number | string | null
+}
+
+/**
+ * ⛔⛔ WHY AN ONLINE DEPOSIT WAS WITHHELD. Null means it may be charged.
+ *
+ * `not_accepted`        nothing to secure yet.
+ * `no_evidence`         the status says accepted and the record cannot show it.
+ * `unknown_provenance`  a MIGRATED acceptance: a deal exists, but who agreed to
+ *                       it was never captured.
+ */
+export type DepositChargeBlock = 'not_accepted' | 'no_evidence' | 'unknown_provenance'
+
+/**
+ * The kinds that NAME AN ACTOR — the only evidence that may authorize money, and
+ * the only evidence whose absence the owner can repair.
+ *
+ * ⛔ Kept as a list because a database query needs one (`.in('kind', …)`), and
+ * kept in step with depositChargeBlock by assertion rather than by hope:
+ * verify:acceptance-presentation walks every kind and requires membership here to
+ * agree exactly with a null block. Two spellings of one rule is how this lane's
+ * defects have started.
+ */
+export const ACTOR_NAMED_ACCEPTANCE_KINDS: AcceptanceKind[] = ['customer', 'owner_on_behalf']
+
+/**
+ * ⭐⭐⭐ MAY WE TAKE THIS CUSTOMER'S MONEY?
+ *
+ * ⛔ ONLY actor-named evidence authorizes a charge. A kind too weak to say "you
+ * accepted" is too weak to take money — that is the whole rule, and it is why
+ * `evidenced_legacy` is refused here even though it is real evidence of
+ * something. A backfilled row says a deal exists and that WHO agreed was never
+ * recorded; there is nobody to point at if the customer later asks who
+ * authorised the charge.
+ *
+ * THE DEFECT THIS CLOSES. The portal card, the timing sentence and the PDF all
+ * priced an unevidenced quote off `total`, while the charge route priced the
+ * same quote off the raw `accepted_price` — so a customer could read "$250
+ * deposit", tap Pay, and meet a different figure at the checkout. Two fixes were
+ * proposed and both were wrong: charging the sanitized figure takes money for a
+ * version nobody confirmed, and showing the backfilled `accepted_amount` puts an
+ * uncorroborated number on the card AS AGREED — re-introducing in the number the
+ * falsehood `evidenced_legacy` exists to remove from the wording.
+ *
+ * ⭐ So neither figure is substituted. The CHARGE is refused, and the ending is
+ * a real one: the customer accepts, or the owner records how they accepted.
+ * Refusing also removes the only kind on which display and charge could disagree
+ * — for every remaining state both read `moneyQuote`, so they agree by
+ * construction rather than by two derivations happening to match.
+ */
+export function depositChargeBlock(p: AcceptedPresentation): DepositChargeBlock | null {
+  if (p === 'evidenced_customer' || p === 'evidenced_on_behalf') return null
+  if (p === 'offer') return 'not_accepted'
+  if (p === 'evidenced_legacy') return 'unknown_provenance'
+  return 'no_evidence'
+}
+
+/**
+ * What the CUSTOMER is told when the online deposit is withheld.
+ *
+ * ⚠️ The deposit itself is NOT cancelled and the sentence must not imply it is —
+ * the scheduling gate still holds and the business can still take an e-transfer,
+ * exactly as it does for a tenant with no online payments configured. What is
+ * withheld is the online charge, and the reason is ours, not the customer's.
+ */
+export function depositChargeBlockedNote(b: DepositChargeBlock): string {
+  if (b === 'not_accepted') return 'Accept this quote first — the deposit comes after that.'
+  if (b === 'unknown_provenance') {
+    return 'This quote was accepted before we started keeping acceptance records, so we can’t take its deposit online. Message us and we’ll confirm the details with you.'
+  }
+  return 'We don’t have a record of your acceptance on file, so we can’t take a deposit for this quote online. Message us and we’ll confirm the details with you.'
+}
+
+/** The same fact for the OWNER, with the action that clears it. */
+export function depositChargeBlockedOwnerNote(b: DepositChargeBlock): string {
+  if (b === 'not_accepted') return 'This quote isn’t accepted yet, so there is no deposit to collect.'
+  if (b === 'unknown_provenance') {
+    return 'This acceptance predates EdgeHQ’s acceptance records, so its online deposit link is off. Record how the customer accepted it — the link turns back on and the amount stops depending on a figure nobody can vouch for.'
+  }
+  return 'No customer acceptance is on record, so this quote’s online deposit link is off. Record how they accepted it and the link turns back on.'
+}
+
+export interface CustomerFacingQuote<T> {
+  /** The figure the customer is shown. */
+  amount: number
+  /** Whether that figure may be called an ACCEPTED amount. */
+  isAcceptedAmount: boolean
+  /**
+   * ⭐⭐ THE quote every money engine and every money SENTENCE must read.
+   * Identical to the one passed in, except that an unproven `accepted_price` has
+   * been removed — so no engine downstream can accidentally price against it.
+   */
+  moneyQuote: T
+  /**
+   * ⛔ Why an online deposit may NOT be taken, or null when it may. Carried here
+   * on purpose: the charge door computes its basis from this same call, so it
+   * cannot obtain a figure without also being handed the verdict on whether it
+   * is allowed to charge one. See depositChargeBlock.
+   */
+  depositChargeBlock: DepositChargeBlock | null
+}
+
+/**
+ * ⭐⭐ THE ONE DECISION, RETURNING BOTH HALVES OF ITS ANSWER.
+ *
+ * THE DEFECT THIS EXISTS TO CLOSE. The portal made this decision correctly and
+ * then applied it to one caller. `depositBasis` prefers `accepted_price` over
+ * `total` whenever it is non-zero, so the ONLY way to keep an unproven snapshot
+ * out of a figure is to hand the engine a quote that does not carry one — and
+ * the portal did that for `schedulingGate` and nothing else. `paymentTiming`,
+ * two dozen lines earlier, still got the raw row. The customer saw a $250
+ * deposit card and, on the same screen, the sentence "A 50% deposit ($700.00) is
+ * required before we schedule your visit". Both numbers came from our own code,
+ * from the same quote, from the same engine — which is the exact contradiction
+ * class S122 was built to end, reproduced by stripping in one place only.
+ *
+ * ⛔ SO THE FIGURE AND THE QUOTE COME OUT TOGETHER, FROM ONE CALL. A caller
+ * cannot take the headline amount and forget the strip, because there is no way
+ * to ask for one without the other. Every quote-side money reader — the deposit
+ * gate, the timing sentences, and the PDF the customer downloads — takes
+ * `moneyQuote`; a raw quote reaching any of them is the bug returning.
+ */
+export function customerFacingQuote<T extends QuoteMoneyFields>(
+  presentation: AcceptedPresentation, q: T,
+): CustomerFacingQuote<T> {
+  const { amount, isAcceptedAmount } = customerFacingQuoteAmount(
+    presentation, q.accepted_price, Number(q.total) || 0,
+  )
+  return {
+    amount,
+    isAcceptedAmount,
+    // The spread is `T & { accepted_price: null }`, which TS will not narrow back
+    // to T on a generic. The cast is sound: the only field replaced is one T
+    // already declares as nullable, and nothing else is touched.
+    moneyQuote: isAcceptedAmount ? q : ({ ...q, accepted_price: null } as T),
+    depositChargeBlock: depositChargeBlock(presentation),
+  }
+}
+
+/**
+ * What the customer is told about an accepted figure — whose act it was.
+ *
+ * ⛔ Only `evidenced_customer` says "you accepted". An owner's attestation says
+ * the BUSINESS recorded it on their behalf — true, checkable, and never the
+ * customer's own act. A legacy migrated row says neither: it names nobody, so it
+ * gets the narrowest sentence of the four.
+ */
+export function acceptedAmountNote(presentation: AcceptedPresentation): string | null {
+  if (presentation === 'evidenced_customer') return null   // the existing wording covers it
+  if (presentation === 'evidenced_on_behalf') {
+    return 'This is the amount your acceptance was recorded at by the business, on your behalf.'
+  }
+  if (presentation === 'evidenced_legacy') return legacyAcceptanceNote()
+  if (presentation === 'unevidenced') return unevidencedAcceptanceNote()
+  return null
+}
+
+/**
+ * The honest sentence for a quote whose status says accepted but whose record
+ * cannot show it. Names the state without accusing the owner of anything — an
+ * owner repairing a stuck row is a real and legitimate need.
+ */
+export function unevidencedAcceptanceNote(): string {
+  return 'Marked accepted by the business — we don’t have a record of your acceptance on file. The price above is this quote’s current price.'
+}
+
+/**
+ * The sentence for a MIGRATED acceptance, which is a different fact again.
+ *
+ * ⛔ It must not say "we have no record" — there IS one, and saying otherwise
+ * would understate the deal to a customer whose job is real. And it must not say
+ * the business recorded it on their behalf — nobody did; the row was written by
+ * a migration, names no actor, and carries no reason. The honest statement is
+ * the narrow one: a deal exists, and its provenance is not on file.
+ *
+ * ⚠️ It names the figure as CURRENT for the same reason the note above does —
+ * see customerFacingQuoteAmount for why a backfilled amount cannot license the
+ * snapshot it was copied from.
+ */
+export function legacyAcceptanceNote(): string {
+  return 'Accepted before we started keeping acceptance records — who accepted it, and when, isn’t on file. The price above is this quote’s current price.'
+}
+
 // ── What changed ─────────────────────────────────────────────────────────────
 //
 // ⭐⭐ THE MATERIALITY LIST, stated once. The database answers "did it change?"

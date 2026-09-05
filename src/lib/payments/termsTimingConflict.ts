@@ -345,5 +345,38 @@ export function termsClaimPatch(termsText: string | null | undefined): {
  * change with it or every acceptance fails closed; the guard compares the two.
  */
 export function termsFingerprint(termsText: string | null | undefined): string {
-  return md5(String(termsText ?? '').trim())
+  return md5(pgBtrim(String(termsText ?? '')))
+}
+
+/**
+ * ⭐⭐⭐ Postgres `btrim(str)` — and it is NOT JavaScript's `.trim()`.
+ *
+ * With no second argument `btrim` strips **spaces only** (U+0020). `.trim()`
+ * strips ALL whitespace: newlines, tabs, CR, NBSP, the lot. For terms that begin
+ * with a newline — which is most terms an owner pastes, and exactly what the
+ * live tenant had — the two produce DIFFERENT strings and therefore different
+ * md5s.
+ *
+ * ⛔⛔ THAT DIVERGENCE TOOK ACCEPTANCE DOWN IN PRODUCTION. The stored
+ * fingerprint could never equal `quote_terms_fingerprint()`, so:
+ *   • the invalidation trigger judged every write incoherent and nulled the
+ *     claim the instant the Settings save wrote it, and
+ *   • the acceptance gate saw an unclassified tenant forever and failed closed.
+ * The owner could not record a real customer's acceptance, and no amount of
+ * re-saving their terms could fix it — the self-heal wrote the same wrong
+ * fingerprint every time.
+ *
+ * ⚠️ The guard that was supposed to catch this asserted
+ * `termsFingerprint('  x  ') === md5('x')` — padded with SPACES, the one kind of
+ * whitespace where the two functions agree. The corpus was blind to the only
+ * case that mattered. It now tests newline, tab and CR explicitly.
+ *
+ * ⛔ If `quote_terms_fingerprint()`'s definition ever changes, this must change
+ * with it or every acceptance under terms fails closed again.
+ */
+function pgBtrim(s: string): string {
+  let a = 0, b = s.length
+  while (a < b && s.charCodeAt(a) === 32) a++
+  while (b > a && s.charCodeAt(b - 1) === 32) b--
+  return s.slice(a, b)
 }

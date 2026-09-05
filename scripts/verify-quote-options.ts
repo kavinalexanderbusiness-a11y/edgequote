@@ -313,10 +313,20 @@ check('PORTAL HOME — the one-tap accept shortcut stands down on an options quo
 // was or how it reached the owner. Same three contracts, re-pointed at the
 // component that now owns them — never deleted.
 const ACCEPT_DIALOG = read('src/components/quotes/RecordAcceptanceDialog.tsx')
+// ⚠️ RE-POINTED AGAIN (S122b), for the same reason it was re-pointed the first
+// time. The owner path now runs through app/api/quotes/record-acceptance, which
+// reclassifies stale terms server-side before calling the SAME canonical RPC —
+// so the dialog no longer names it. The contract is unchanged: the owner's
+// acceptance reaches the database through the RPC and NEVER through a table
+// write. It is asserted across both halves of the path, so neither can quietly
+// grow a second implementation of the money rule.
+const ACCEPT_ROUTE = read('src/app/api/quotes/record-acceptance/route.ts')
 check('OWNER — accept-on-behalf goes through the canonical contract',
-  /owner_record_customer_acceptance/.test(ACCEPT_DIALOG)
-  && !/from\('quotes'\)\s*\.update/.test(ACCEPT_DIALOG),
-  'a direct table update would be a SECOND implementation of the money rule')
+  /owner_record_customer_acceptance/.test(ACCEPT_ROUTE)
+  && !/from\('quotes'\)\s*\.update/.test(ACCEPT_ROUTE)
+  && !/from\('quotes'\)\s*\.update/.test(ACCEPT_DIALOG)
+  && !/from\('quote_acceptances'\)\s*\.insert/.test(ACCEPT_ROUTE),
+  'a direct table write would be a SECOND implementation of the money rule')
 check('OWNER — the quote page reaches that dialog rather than writing its own acceptance',
   /RecordAcceptanceDialog/.test(QUOTE_DETAIL) && !/markWonPatch/.test(QUOTE_DETAIL))
 // ⭐ This rule got STRONGER, not weaker: the app-side check the old "Won" button
@@ -327,8 +337,12 @@ check('OWNER — an options quote cannot be accepted with no option named',
   /options\.length > 0/.test(ACCEPT_DIALOG) && /needsOption/.test(ACCEPT_DIALOG))
 check('OWNER — …and the DATABASE refuses it too, not just the dialog',
   /the accepted one must be named/.test(schemaSources()))
+// Same re-pointing: the RPC's falsy result is now judged by the route, and the
+// route's refusal is judged by the dialog. Both halves asserted — a "recorded"
+// toast over a row that was never written is the failure either could cause.
 check('OWNER — a falsy RPC result is never reported as success',
-  /if \(error \|\| !data\)/.test(ACCEPT_DIALOG))
+  /if \(!acceptanceId\)/.test(ACCEPT_ROUTE)
+  && /if \(!res\.ok \|\| !out\?\.ok\)/.test(ACCEPT_DIALOG))
 
 // ── 4. The schema is what enforces it, not the app ───────────────────────────
 console.log('\n═══ The database refuses what no screen should have to remember ═══')
