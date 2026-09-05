@@ -16,7 +16,8 @@
 --
 -- Derived from what the baseline actually references — not from guesswork:
 --   auth.uid()          390 policy predicates
---   auth.users          93 foreign keys + crew_access_states reads last_sign_in_at
+--   auth.users          93 foreign keys + crew_access_states reads last_sign_in_at;
+--                       claim_beta_invite/provisioning_status read email_confirmed_at
 --   storage.objects     21 storage policies (bucket_id, name, owner)
 --   storage.buckets     bucket rows
 --   storage.foldername()20 policy predicates
@@ -56,6 +57,9 @@ create table if not exists auth.users (
   email text,
   raw_user_meta_data jsonb,
   last_sign_in_at timestamptz,
+  -- GoTrue sets this server-side on verification; it is the ONLY identity fact
+  -- the provisioning gate reads (never raw_user_meta_data).
+  email_confirmed_at timestamptz,
   created_at timestamptz not null default now()
 );
 
