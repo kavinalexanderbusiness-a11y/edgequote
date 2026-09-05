@@ -265,14 +265,17 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
                 — it IS how the advisor ranks), but the number beside it used to
                 read "61%" with a tooltip saying "likelihood this play lands",
                 which is a measured-probability claim this heuristic score
-                cannot support. `/100` (never `%`) plus the shared tooltip
-                (priorityScoreTooltip, same sentence the hero card uses) is what
-                makes the honest reading unambiguous at a glance. */}
+                cannot support. The chip now says "Priority score N/100" in
+                full (priorityScoreLabel — the same words the hero line uses;
+                never `%`), VISIBLY: the fixture run at 375/390/430 measured
+                that a title tooltip never appears on a touch screen, so a
+                bare "61/100" was a number with no name for every phone user.
+                The tooltip keeps the longer sentence for pointer users. */}
             <span className="inline-flex items-center gap-1.5 text-[10px] text-ink-faint tabular-nums" title={priorityScoreTooltip(o.score)}>
               <span className="w-10 h-1 rounded-full bg-border overflow-hidden">
                 <span className="block h-full rounded-full bg-accent/80" style={{ width: `${Math.min(100, Math.max(4, o.score))}%` }} />
               </span>
-              {o.score}/100
+              {priorityScoreLabel(o.score)}
             </span>
           </div>
           {/* break-words: measured at 375/390/430 — an unbroken customer name painted past the card (growth-visual-fixture run 1). */}

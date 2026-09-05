@@ -58,13 +58,16 @@ console.log('\n── 1. THE SCORE IS A PRIORITY, NEVER A PROBABILITY ──')
   // Architecture: ONE shared function at both call sites, not two copies that
   // can drift independently.
   check('the hero line and every OppCard use the shared label/tooltip functions',
-    /priorityScoreLabel\(summary\.topAction\.score\)/.test(CODE.page) && /title=\{priorityScoreTooltip\(o\.score\)\}/.test(CODE.page), '')
+    /priorityScoreLabel\(summary\.topAction\.score\)/.test(CODE.page) && /title=\{priorityScoreTooltip\(o\.score\)\}/.test(CODE.page)
+    && /\{priorityScoreLabel\(o\.score\)\}/.test(CODE.page), '')
 
   // Regression: none of these has any legitimate use on this screen.
   check('page.tsx renders none of likely/likelihood/chance/odds anywhere',
     !BANNED.some(rx => rx.test(CODE.page)), '')
-  check('the OppCard meter shows N/100, never N%',
-    /\{o\.score\}\/100/.test(CODE.page) && !/\{o\.score\}%/.test(CODE.page), '')
+  // ⭐ VISIBLE on the chip, not tooltip-only: measured at 375/390/430 that a
+  // title never shows on touch, leaving a bare "61/100" with no name.
+  check('the OppCard meter shows the visible "Priority score N/100" label, never N% and never a bare N/100',
+    /\{priorityScoreLabel\(o\.score\)\}/.test(CODE.page) && !/\{o\.score\}%/.test(CODE.page) && !/\{o\.score\}\/100/.test(CODE.page), '')
 }
 
 console.log('\n── 2. A DISCLOSURE THAT WRAPS ──')
