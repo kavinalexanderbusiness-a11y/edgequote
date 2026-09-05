@@ -142,7 +142,9 @@ async function main() {
   for (const k of installed) g[k] = stubs[k]
   const fns = new Function(`${js}\nreturn { __effect, __narrow }`)() as { __effect: () => () => void; __narrow: (scopes: Set<string>) => Promise<void> }
   const reset = () => { pending.length = 0; calls.length = 0; writes.length = 0; (stubs.loadGen as { current: number }).current = 0 }
-  const runEffect = (run: string) => { currentRun = run; return fns.__effect() }
+  // An effect with no cleanup (the mutation this guard exists to catch) returns
+  // undefined; treat that as "nothing retires" so the ORDERING cases judge it.
+  const runEffect = (run: string) => { currentRun = run; const c = fns.__effect() as unknown; return typeof c === 'function' ? (c as () => void) : () => {} }
 
   console.log('\n── §2 executed against the real effect text ──')
   // Positive control: one run, three rounds, everything lands, in order.
@@ -228,7 +230,14 @@ async function main() {
   for (const k of installed) delete g[k]
 }
 
+// A read that never settles would drain the event loop and exit 0 with no
+// summary; ending without the summary is a failure, never a pass.
+let finished = false
+process.on('exit', code => {
+  if (!finished) { console.log(`\n✗ verify:customer-load-ordering — ended before its summary; ${pass} passed, ${fail} failed so far`); process.exitCode = code || 1 }
+})
 main().then(() => {
+  finished = true
   console.log(`\n${fail ? '✗' : '✅'} verify:customer-load-ordering — one full load owns the customer screen: ${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)
-}).catch(e => { console.error(e); process.exit(1) })
+}).catch(e => { finished = true; console.error(e); process.exit(1) })
