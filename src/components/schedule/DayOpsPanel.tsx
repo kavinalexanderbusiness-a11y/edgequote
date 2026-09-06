@@ -216,7 +216,7 @@ export function DayOpsPanel({
   // Unread crew messages per visit, so a card can say "2 new" without opening
   // every visit to find out. One pair of queries for the whole day.
   const [chatUnread, setChatUnread] = useState<Record<string, number>>({})
-  // "Message today's customers" dialog (day-level bulk send).
+  // "Message this day's customers" dialog (day-level bulk send).
   const [showDayMsg, setShowDayMsg] = useState(false)
   // Job currently sending a one-tap "On my way" (locks the button against double-tap).
   const [sendingEta, setSendingEta] = useState<string | null>(null)
@@ -374,7 +374,7 @@ export function DayOpsPanel({
   const active = jobs.filter(j => j.status !== 'cancelled')
   const completed = active.filter(j => j.status === 'completed')
   const remaining = active.filter(j => j.status !== 'completed')
-  // Recipients for "Message today's customers" — one per customer scheduled today.
+  // Recipients for "Message this day's customers" — one per customer scheduled this day.
   const dayRecipients: MessageRecipient[] = (() => {
     const seen = new Set<string>()
     const out: MessageRecipient[] = []
@@ -887,9 +887,9 @@ export function DayOpsPanel({
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
-      {/* Message today's customers — the shared Send-Message dialog, prefilled with the day's recipients */}
+      {/* Message this day's customers — the shared Send-Message dialog, prefilled with the day's recipients */}
       {showDayMsg && (
-        <SendMessageDialog open recipients={dayRecipients} title="Message today's customers" onClose={() => setShowDayMsg(false)} />
+        <SendMessageDialog open recipients={dayRecipients} title="Message this day's customers" onClose={() => setShowDayMsg(false)} />
       )}
       {/* Header: date + add */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
@@ -915,7 +915,7 @@ export function DayOpsPanel({
         <div className="flex items-center gap-2 shrink-0">
           {dayRecipients.length > 0 && (
             <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)}
-              title="Message everyone scheduled today" aria-label="Message everyone scheduled today">
+              title={`Message customers scheduled for ${dateLabel}`} aria-label={`Message customers scheduled for ${dateLabel}`}>
               <MessageSquare className="w-4 h-4" /> <span className="hidden sm:inline">Message all</span>
             </Button>
           )}
@@ -955,7 +955,7 @@ export function DayOpsPanel({
       {active.length === 0 ? (
         <EmptyState icon={CalendarDays} className="py-12"
           title="No jobs scheduled"
-          description="This day is open. Add a visit, or drag one here from another day."
+          description="Add a job to this day."
           action={{ label: 'Add job', onClick: onAddJob }} />
       ) : (
         <div className="p-4 space-y-4">
