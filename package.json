@@ -21,6 +21,7 @@
     "verify:platform-billing-transport": "tsx scripts/verify-platform-billing-transport.ts",
     "verify:merchant-connections": "tsx scripts/verify-merchant-connections.ts",
     "verify:signup-resume": "tsx scripts/verify-signup-resume.ts",
+    "verify:browser-monitoring": "tsx scripts/verify-browser-monitoring.ts",
     "verify:v1-tenant-scoping": "tsx scripts/verify-v1-tenant-scoping.ts",
     "verify:comms-governor": "tsx scripts/verify-comms-governor.ts",
     "verify:comm-prefs": "tsx scripts/verify-comm-prefs.ts",

@@ -53,6 +53,11 @@ const nextConfig: NextConfig = {
 
   poweredByHeader: false,   // don't advertise the framework version
 
+  // Next natively loads instrumentation-client before hydration. Define the
+  // already-public browser DSN even when absent so its conditional SDK import
+  // can be removed at build time. Server DSNs and auth tokens stay private.
+  env: { NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN ?? '' },
+
   async headers() {
     return [
       // Everything: dashboard, /portal, /book, and the API routes.
@@ -67,12 +72,10 @@ const nextConfig: NextConfig = {
 // local builds are unaffected, and a deploy that hasn't been given the env vars
 // behaves exactly as it does today.
 //
-// …but "never initialises" is not "never ships": measured on this repo, the
-// wrapper injects the client SDK into the shared-by-all bundle — 187 kB → 106 kB
-// First Load JS on EVERY page (login, portal, booking, all of the dashboard)
-// with nothing to initialise it. So the wrap is gated on the env that makes it
-// do anything. The day the Sentry vars land in Vercel, this activates exactly
-// as written below — until then, no page pays for an inert SDK.
+// The wrapper is gated on configuration, but Next 15.3+ discovers the browser
+// instrumentation file independently. That file therefore also gates its SDK
+// load on the explicit browser DSN above. A server DSN or source-map token alone
+// must not load browser monitoring; each configured runtime keeps its own gate.
 const sentryEnabled = !!(
   process.env.SENTRY_AUTH_TOKEN || process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN
 )

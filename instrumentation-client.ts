@@ -8,14 +8,18 @@
 // Sentry DSN is designed to be public (it can only submit events, not read them),
 // which is why this is safe and the server DSN is kept separate.
 
-import * as Sentry from '@sentry/nextjs'
 import { scrubEvent, isIgnorable } from '@/lib/observability/scrub'
 
-const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN
+type RouterTransitionStart = typeof import('@sentry/nextjs')['captureRouterTransitionStart']
+let captureRouterTransitionStart: RouterTransitionStart | undefined
 
-if (dsn) {
+// next.config supplies an explicit empty value when unconfigured, so this branch
+// and its SDK dependency disappear from the browser build. Keep the configured
+// load synchronous: monitoring must be ready before hydration and navigation.
+if (process.env.NEXT_PUBLIC_SENTRY_DSN) {
+  const Sentry: typeof import('@sentry/nextjs') = require('@sentry/nextjs')
   Sentry.init({
-    dsn,
+    dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
     environment: process.env.NEXT_PUBLIC_VERCEL_ENV ?? 'development',
     release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
 
@@ -54,7 +58,8 @@ if (dsn) {
       return crumb
     },
   })
+  captureRouterTransitionStart = Sentry.captureRouterTransitionStart
 }
 
-// Required by Sentry to instrument client-side navigations.
-export const onRouterTransitionStart = Sentry.captureRouterTransitionStart
+// Next always receives a callable hook; unconfigured builds do no SDK work.
+export const onRouterTransitionStart: RouterTransitionStart = (...args) => captureRouterTransitionStart?.(...args)
