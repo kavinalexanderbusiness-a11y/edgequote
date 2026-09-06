@@ -135,7 +135,7 @@ export default function QuotesPage() {
         }
       />
       {!loading && quotes.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
           <StatTile label="Open value" value={formatCurrency(pipeline.open)} />
           <StatTile label="Awaiting reply" value={formatCurrency(pipeline.awaiting)} />
           <StatTile label="Accepted" value={formatCurrency(pipeline.accepted)} />
