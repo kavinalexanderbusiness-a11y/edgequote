@@ -1,15 +1,18 @@
-// Actual config + compiled browser startup module, with a synthetic SDK only.
-// Checks removal from this startup module and configured startup/navigation.
+// Actual config + compiled browser/server startup modules, with synthetic SDKs.
+// Checks disabled browser startup, configured hooks and transaction-name privacy.
 // This does not measure the whole Next bundle or the real Sentry build wrapper.
 // No application environment file, Sentry provider or network is used.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { buildSync, transformSync } from 'esbuild'
+import ts from 'typescript'
 
 type Environment = Record<string, string | undefined>
 const configSource = readFileSync('next.config.ts', 'utf8')
 const clientSource = readFileSync('instrumentation-client.ts', 'utf8')
+const serverSource = readFileSync('instrumentation.ts', 'utf8')
 const browserDsn = 'https://synthetic@example.invalid/1'
 const compile = (source: string) => transformSync(source, { loader: 'ts', format: 'cjs', target: 'es2022' }).code
 
@@ -54,8 +57,98 @@ function browserFor(env: Environment) {
   return { config, built, sdkLoads, initializations, transitions, hook: testModule.exports.onRouterTransitionStart }
 }
 
+async function serverFor(env: Environment) {
+  const built = buildSync({
+    stdin: { contents: serverSource, loader: 'ts', sourcefile: 'instrumentation.ts', resolveDir: process.cwd() },
+    bundle: true, write: false, platform: 'node', format: 'cjs', target: 'es2022',
+    external: ['@sentry/nextjs'], logLevel: 'silent',
+  }).outputFiles[0].text
+  const initializations: Record<string, any>[] = []
+  const captureRequestError = () => { throw new Error('Real error reporting is forbidden in this guard') }
+  const testModule = { exports: {} as Record<string, any> }
+  runInNewContext(built, {
+    module: testModule, process: { env }, fetch: () => assert.fail('Network is forbidden'),
+    require(id: string) {
+      assert.equal(id, '@sentry/nextjs', 'server code can load only the synthetic SDK')
+      return { init: (options: Record<string, any>) => { initializations.push(options) }, captureRequestError }
+    },
+  })
+  await testModule.exports.register()
+  assert.equal(testModule.exports.onRequestError, captureRequestError, 'request-error forwarding remains the SDK hook')
+  return initializations
+}
+
+// Read the installed SDK's actual header constructor without executing its
+// imports, initializing a client or creating a transport. This is the boundary
+// that copies dynamicSamplingContext into the envelope, outside the event body.
+const envelopeSource = ts.createSourceFile('envelope.js',
+  readFileSync(join(dirname(require.resolve('@sentry/core')), 'utils/envelope.js'), 'utf8'),
+  ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+const headerFunction = envelopeSource.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'createEventEnvelopeHeaders')
+assert.ok(headerFunction, 'installed SDK must retain a reviewable event-envelope header boundary')
+const envelopeHeaders = runInNewContext(`(${headerFunction.getText(envelopeSource)})`, {
+  randomSafeContext: { safeDateNow: () => 1_700_000_000_000 },
+  dsn: { dsnToString: () => assert.fail('No DSN or tunnel is used in the envelope fixture') },
+}) as (event: Record<string, any>) => Record<string, any>
+
 let passed = 0
 function check(name: string, fn: () => void) { fn(); passed++; console.log(`PASS ${name}`) }
+
+function verifyTransactionNames(options: Record<string, any>, runtime: string) {
+  const names = [
+    ['/portal/private-name', '/portal/[token]'],
+    ['/book/private-booking-name', '/book/[token]'],
+    ['GET /portal/private-method?token=private-query&view=week', 'GET /portal/[token]?token=[redacted]&view=week'],
+    ['https://fixture.invalid/book/private-absolute?code=private-code#details', 'https://fixture.invalid/book/[token]?code=[redacted]#details'],
+    ['Page Server Component (/portal/private-component)', 'Page Server Component (/portal/[token])'],
+    ['handler (/book/private-handler?signature=private-signature)', 'handler (/book/[token]?signature=[redacted])'],
+    ['/portal/[token]', '/portal/[token]'],
+    ['GET /book/[token]', 'GET /book/[token]'],
+    ['Page Server Component (/portal/[token])', 'Page Server Component (/portal/[token])'],
+    ['GET /dashboard?view=week', 'GET /dashboard?view=week'],
+    ['', ''],
+  ]
+  for (const hook of ['beforeSend', 'beforeSendTransaction']) {
+    check(`${runtime} ${hook}: route names and envelope copies are scrubbed; safe names retain their identity`, () => {
+      for (const [input, expected] of names) {
+        const sampling = Object.freeze({ transaction: input, trace_id: 'synthetic-trace', public_key: 'synthetic-public', sampled: 'true', sample_rate: '0.1' })
+        const retained = { spanCountBeforeProcessing: 3 }
+        const metadata = Object.freeze({ dynamicSamplingContext: sampling, retained })
+        const event = { type: hook === 'beforeSendTransaction' ? 'transaction' : undefined,
+          message: 'synthetic error', transaction: input, sdkProcessingMetadata: metadata }
+        const clean = options[hook](event, {})
+        assert.equal(clean, event, 'scrubbing returns the same event rather than dropping useful telemetry')
+        assert.equal(clean.transaction, expected)
+        const headers = envelopeHeaders(clean)
+        assert.equal(headers.trace.transaction, expected, 'the envelope trace must not retain a second private name')
+        assert.doesNotMatch(JSON.stringify({ transaction: clean.transaction, trace: headers.trace }), /private-/)
+        assert.equal(headers.trace.trace_id, sampling.trace_id)
+        assert.equal(headers.trace.public_key, sampling.public_key)
+        assert.equal(headers.trace.sampled, sampling.sampled)
+        assert.equal(headers.trace.sample_rate, sampling.sample_rate)
+        assert.equal(clean.sdkProcessingMetadata.retained, retained)
+        assert.equal(sampling.transaction, input, 'SDK-shared sampling metadata must not be mutated')
+        assert.equal(options[hook](clean, {}).transaction, expected, 'name scrubbing is idempotent')
+      }
+    })
+    check(`${runtime} ${hook}: name copies are independent and absent names stay absent`, () => {
+      const clean = options[hook]({ transaction: '/dashboard', sdkProcessingMetadata: {
+        dynamicSamplingContext: { transaction: '/book/private-independent' },
+      } }, {})
+      assert.equal(clean.transaction, '/dashboard')
+      assert.equal(envelopeHeaders(clean).trace.transaction, '/book/[token]')
+      const withoutName = options[hook]({ extra: { note: 'safe' } }, {})
+      assert.equal(Object.hasOwn(withoutName, 'transaction'), false)
+      assert.equal(Object.hasOwn(withoutName, 'sdkProcessingMetadata'), false)
+    })
+    check(`${runtime} ${hook}: a sensitive prefix cannot bypass scrubbing via a wrapper suffix`, () => {
+      for (const input of ['/portal/private-prefix (/book/private-suffix)', 'label?code=private-prefix (/book/private-suffix)', 'label&code=private-prefix (/book/private-suffix)']) {
+        const clean = options[hook]({ transaction: input, sdkProcessingMetadata: { dynamicSamplingContext: { transaction: input } } }, {})
+        assert.doesNotMatch(JSON.stringify({ transaction: clean.transaction, trace: envelopeHeaders(clean).trace }), /private-/)
+      }
+    })
+  }
+}
 
 for (const [name, env] of [
   ['absent browser DSN', {}],
@@ -115,11 +208,42 @@ check('configured privacy options and existing request/breadcrumb scrubbing surv
   assert.doesNotMatch(JSON.stringify(clean), /private-portal|private-token|private-password/)
   assert.match(JSON.stringify(clean), /\[token\]|\[redacted\]/)
   const transaction = options.beforeSendTransaction({ transaction: '/book/private-booking', request: { url: 'https://fixture.invalid/book/private-booking' } })
-  // Existing scrubEvent handles request URLs; transaction-name scrubbing is a
-  // separate known gap. Do not mistake this loading regression for full coverage.
-  assert.doesNotMatch(transaction.request.url, /private-booking/)
+  assert.doesNotMatch(JSON.stringify(transaction), /private-booking/)
   const crumb = options.beforeBreadcrumb({ data: { url: 'https://fixture.invalid/portal/private-crumb' } })
   assert.doesNotMatch(JSON.stringify(crumb), /private-crumb/)
 })
 
-console.log(`Browser monitoring: ${passed} passed, 0 failed. Compiled startup module only; synthetic SDK and config wrapper.`)
+verifyTransactionNames(browserFor({ NEXT_PUBLIC_SENTRY_DSN: browserDsn }).initializations[0], 'browser')
+
+async function verifyServerMonitoring() {
+  for (const runtime of ['nodejs', 'edge']) {
+    for (const env of [{}, { SENTRY_DSN: '' }, { NEXT_PUBLIC_SENTRY_DSN: browserDsn }, { SENTRY_AUTH_TOKEN: 'synthetic-source-map-token' }]) {
+      const options = await serverFor({ ...env, NEXT_RUNTIME: runtime })
+      check(`${runtime}: absent server DSN never initializes monitoring`, () => assert.equal(options.length, 0))
+    }
+    for (const deployment of ['production', 'preview', undefined]) {
+      const options = await serverFor({ SENTRY_DSN: browserDsn, NEXT_RUNTIME: runtime,
+        VERCEL_ENV: deployment, VERCEL_GIT_COMMIT_SHA: 'synthetic-server-release' })
+      check(`${runtime} ${deployment ?? 'local'}: configured registration preserves privacy and sampling options`, () => {
+        assert.equal(options.length, 1)
+        assert.equal(options[0].dsn, browserDsn)
+        assert.equal(options[0].environment, deployment ?? 'development')
+        assert.equal(options[0].release, 'synthetic-server-release')
+        assert.equal(options[0].sendDefaultPii, false)
+        assert.equal(options[0].sampleRate, 1)
+        assert.equal(options[0].tracesSampleRate, deployment === 'production' ? 0.1 : 0)
+        assert.equal(options[0].beforeSend({ message: 'NEXT_REDIRECT: synthetic control flow' }, {}), null)
+        const clean = options[0].beforeSend({ request: { url: '/portal/private-server', headers: { authorization: 'private-header' } },
+          breadcrumbs: [{ message: '/book/private-crumb' }], extra: { password: 'private-password' } }, {})
+        assert.doesNotMatch(JSON.stringify(clean), /private-/)
+      })
+      if (deployment === 'production') verifyTransactionNames(options[0], runtime)
+    }
+  }
+  const unknownRuntime = await serverFor({ SENTRY_DSN: browserDsn, NEXT_RUNTIME: 'synthetic-unknown' })
+  check('unknown runtime does not implicitly activate monitoring', () => assert.equal(unknownRuntime.length, 0))
+}
+
+verifyServerMonitoring().then(() => {
+  console.log(`Monitoring: ${passed} passed, 0 failed. Actual startup hooks and SDK envelope-header constructor; synthetic SDKs only.`)
+}).catch(error => { console.error(error); process.exitCode = 1 })

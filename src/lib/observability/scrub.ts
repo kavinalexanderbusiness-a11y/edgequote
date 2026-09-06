@@ -32,6 +32,14 @@ export function scrubUrl(input: string): string {
   return out
 }
 
+/** SDK labels can wrap a route: `Page Server Component (/portal/[token])`. */
+function scrubTransactionName(input: string): string {
+  // Keep the label and closing delimiter outside the URL token match. Applying
+  // scrubUrl to the entire wrapper would consume its closing parenthesis too.
+  const wrapped = /^([^/?#&]*\()(.+)\)$/.exec(input)
+  return wrapped ? `${wrapped[1]}${scrubUrl(wrapped[2])})` : scrubUrl(input)
+}
+
 /** Keys whose VALUE must never be sent, wherever they appear. */
 const SENSITIVE_KEY_RE = /(token|secret|password|authorization|cookie|api[-_]?key|access[-_]?key|service[-_]?role|card|cvc|iban|sin|ssn)/i
 
@@ -57,6 +65,8 @@ export function scrubObject(value: unknown, depth = 0): unknown {
 // Minimal shape of what we touch on a Sentry event — typed locally so this module
 // stays dependency-free and testable without importing the SDK.
 interface ScrubbableEvent {
+  transaction?: string
+  sdkProcessingMetadata?: { dynamicSamplingContext?: { transaction?: string } }
   request?: { url?: string; headers?: Record<string, string>; cookies?: unknown; data?: unknown; query_string?: unknown }
   breadcrumbs?: { data?: Record<string, unknown>; message?: string }[]
   extra?: Record<string, unknown>
@@ -71,6 +81,16 @@ interface ScrubbableEvent {
  * of under-scrubbing is a customer's portal key sitting in a third-party SaaS.
  */
 export function scrubEvent<T extends ScrubbableEvent>(event: T): T {
+  if (typeof event.transaction === 'string') event.transaction = scrubTransactionName(event.transaction)
+  // Sentry copies this second name into the envelope's trace header before
+  // removing SDK metadata from the event body. Do not mutate a shared context.
+  const sampling = event.sdkProcessingMetadata?.dynamicSamplingContext
+  if (typeof sampling?.transaction === 'string') {
+    event.sdkProcessingMetadata = {
+      ...event.sdkProcessingMetadata,
+      dynamicSamplingContext: { ...sampling, transaction: scrubTransactionName(sampling.transaction) },
+    }
+  }
   if (event.request) {
     if (event.request.url) event.request.url = scrubUrl(event.request.url)
     // Headers and cookies carry auth wholesale. There is no version of these we
