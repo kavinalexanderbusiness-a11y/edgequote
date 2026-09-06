@@ -190,7 +190,7 @@ export function CustomerPicker({
               r.type === 'customer' ? (
                 <button key={r.c.id} type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
                   onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface-raised ring-2 ring-inset ring-accent/60' : 'hover:bg-surface-raised')}>
                   <User className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-ink truncate">{r.c.name}</span>
@@ -201,7 +201,7 @@ export function CustomerPicker({
               ) : (
                 <button key="manual" type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
                   onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface-raised ring-2 ring-inset ring-accent/60' : 'hover:bg-surface-raised')}>
                   {/* Name the action after what they typed — "Add 'Jane Smith' as a
                       new customer" says the typed name is KEPT, not thrown away. */}
                   <Plus className="w-3.5 h-3.5 shrink-0" /> {query.trim() ? <>Add &ldquo;{query.trim()}&rdquo; as a new customer</> : 'Enter manually'}
