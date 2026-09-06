@@ -73,17 +73,17 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
     // the first keystroke starts filtering.
     const [query, setQuery] = useState('')
     const [filtering, setFiltering] = useState(false)
-    // -1 = nothing highlighted, and that is the DEFAULT even while filtering.
+    // null = nothing highlighted, and that is the DEFAULT even while filtering.
     // Auto-highlighting the first match would make Enter adopt a catalogue
     // service — with its price — from an owner who was typing a custom name that
     // merely shares a word with one. Arrow keys (or the mouse) are consent.
-    const [hi, setHi] = useState(-1)
+    const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null)
     const boxRef = useRef<HTMLDivElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
     // The INPUT's wrapper, not boxRef — boxRef includes the label, and the list
     // is anchored to the box you can see, not to the words above it.
     const anchorRef = useRef<HTMLDivElement>(null)
-    const place = useDropdownPlacement(anchorRef, open)
+    const place = useDropdownPlacement(anchorRef, open, { clipToAncestors: true })
 
     useEffect(() => {
       function onDoc(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false) }
@@ -98,6 +98,30 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
     )
 
     const pickable = rows.map((r, i) => (r.type === 'template' ? i : -1)).filter(i => i >= 0)
+    // Recent/category changes can move a service or replace its menu row key.
+    // Follow its identity; a removed service leaves nothing for Enter to adopt.
+    const hi = activeTemplateId === null ? -1 : rows.findIndex(r => r.type === 'template' && r.t.id === activeTemplateId)
+    const optionId = (templateId: string) => `${listId}-${encodeURIComponent(templateId)}`
+    const activeRow = rows[hi]
+    const activeId = open && activeRow?.type === 'template' ? optionId(activeRow.t.id) : undefined
+
+    useEffect(() => {
+      // Removal withdraws the old navigation choice. Reintroducing that service
+      // later must not restore consent without fresh pointer/arrow movement.
+      if (activeTemplateId !== null && hi < 0) setActiveTemplateId(null)
+    }, [activeTemplateId, hi])
+
+    useEffect(() => {
+      const list = listRef.current
+      const active = activeId ? document.getElementById(activeId) : null
+      if (!list || !active || !list.contains(active)) return
+      // Scroll only the suggestion list, keeping the surrounding draft/Save in
+      // place. scrollIntoView also scrolls the enclosing modal and page.
+      const top = active.offsetTop
+      const bottom = top + active.offsetHeight
+      if (top < list.scrollTop) list.scrollTop = top
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
+    }, [activeId, hi, rows.length, place.maxHeight, place.side])
 
     // Opening always shows the WHOLE catalogue and selects what's in the field.
     // Filtering a list down to the one row it already holds is a dead end, and
@@ -105,7 +129,7 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
     // to the name of the last one. Choosing is the primary act here; renaming is
     // secondary and still reachable — a second tap drops the caret in the text.
     function openMenu(el: HTMLInputElement) {
-      setOpen(true); setFiltering(false); setQuery(''); setHi(-1)
+      setOpen(true); setFiltering(false); setQuery(''); setActiveTemplateId(null)
       el.select()
     }
 
@@ -113,7 +137,7 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
       const r = rows[i]
       if (!r || r.type !== 'template') return
       onPick(r.t)
-      setOpen(false); setFiltering(false); setQuery(''); setHi(-1)
+      setOpen(false); setFiltering(false); setQuery(''); setActiveTemplateId(null)
     }
 
     function move(dir: 1 | -1) {
@@ -121,11 +145,8 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
       const at = pickable.indexOf(hi)
       const next = at < 0 ? (dir === 1 ? pickable[0] : pickable[pickable.length - 1])
         : pickable[Math.min(Math.max(at + dir, 0), pickable.length - 1)]
-      setHi(next)
-      // Keep the highlight on screen — arrowing through five categories is the
-      // whole point of a keyboard path, and it stops working at row seven if the
-      // list never scrolls.
-      requestAnimationFrame(() => listRef.current?.querySelector('[data-hi="1"]')?.scrollIntoView({ block: 'nearest' }))
+      const row = rows[next]
+      if (row.type === 'template') setActiveTemplateId(row.t.id)
     }
 
     return (
@@ -142,17 +163,14 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
             id={inputId}
             role="combobox"
             aria-expanded={open}
-            // The two older comboboxes here (CustomerPicker, PropertySelect) omit
-            // this and carry the lint warning for it. A screen reader that can't
-            // reach the list is reading a plain text box.
-            aria-controls={listId}
-            aria-activedescendant={open && hi >= 0 ? `${listId}-${hi}` : undefined}
+            aria-controls={open ? listId : undefined}
+            aria-activedescendant={activeId}
             aria-autocomplete="list"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? errorId : hint ? hintId : undefined}
             autoComplete="off"
             placeholder={placeholder}
-            onChange={e => { setQuery(e.target.value); setFiltering(true); setOpen(true); setHi(-1); onChange?.(e) }}
+            onChange={e => { setQuery(e.target.value); setFiltering(true); setOpen(true); setActiveTemplateId(null); onChange?.(e) }}
             onFocus={e => { openMenu(e.currentTarget); onFocus?.(e) }}
             // A tap on an ALREADY-FOCUSED field fires no focus event, so after
             // picking a service (which closes the menu but keeps focus) tapping
@@ -162,7 +180,7 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
             onClick={e => { if (!open) openMenu(e.currentTarget); onClick?.(e) }}
             onKeyDown={e => {
               onKeyDown?.(e)
-              if (e.key === 'Escape') { setOpen(false); return }
+              if (e.key === 'Escape') { if (open) e.stopPropagation(); setOpen(false); return }
               if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) setOpen(true); move(1); return }
               if (e.key === 'ArrowUp') { e.preventDefault(); if (open) move(-1); return }
               // A combobox owns Enter while its menu is open — the same rule
@@ -201,14 +219,14 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
                 <p key={r.key} className="px-3.5 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{r.label}</p>
               ) : (
                 <button key={r.key} type="button" data-hi={i === hi ? '1' : undefined}
-                  id={`${listId}-${i}`} role="option" aria-selected={templateId === r.t.id}
-                  onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
+                  id={optionId(r.t.id)} role="option" aria-selected={i === hi}
+                  onPointerMove={() => setActiveTemplateId(r.t.id)} onClick={() => choose(i)}
                   className={cn('w-full text-left px-3.5 py-2.5 flex items-center gap-2 transition-colors',
                     // -raised, not `surface`: this popover's own fill IS the card
                     // rung, so highlighting a row with `surface` painted it the
-                    // colour it already was. Keyboard-active and pointer-hover
-                    // must also match — they mean the same thing.
-                    i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
+                    // colour it already was. The inset marker distinguishes the
+                    // active choice from a stationary pointer over another row.
+                    i === hi ? 'bg-surface-raised ring-2 ring-inset ring-accent/60' : 'hover:bg-surface-raised')}>
                   <span className="min-w-0 flex-1">
                     {/* The NAME carries the row. Price is the supporting fact, one
                         step down in size and colour, so a scan reads services
@@ -230,7 +248,7 @@ const ServicePicker = forwardRef<HTMLInputElement, ServicePickerProps>(
                   competes with the list it follows. */}
               {selected && onDetach && (
                 <button type="button"
-                  onClick={() => { onDetach(); setOpen(false); setFiltering(false); setQuery(''); setHi(-1) }}
+                  onClick={() => { onDetach(); setOpen(false); setFiltering(false); setQuery(''); setActiveTemplateId(null) }}
                   className="w-full text-left px-3.5 py-2.5 text-xs text-accent-text border-t border-border hover:bg-surface-raised transition-colors">
                   This isn’t “{selected.name}” — save it as one-off work
                 </button>

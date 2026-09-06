@@ -26,7 +26,9 @@ const OPEN_DEFAULT: DropdownPlacement = { side: 'below', maxHeight: DROPDOWN_MAX
 export function useDropdownPlacement(
   anchorRef: RefObject<HTMLElement | null>,
   open: boolean,
+  options?: { clipToAncestors?: boolean },
 ): DropdownPlacement {
+  const clipToAncestors = options?.clipToAncestors ?? false
   const [placement, setPlacement] = useState<DropdownPlacement>(OPEN_DEFAULT)
   // Read inside the listener rather than closed over, so the rAF callback can
   // bail after unmount without the listener being re-bound on every change.
@@ -40,7 +42,22 @@ export function useDropdownPlacement(
       const el = anchorRef.current
       if (!el || !openRef.current) return
       const r = el.getBoundingClientRect()
-      const next = placeDropdown({ top: r.top, bottom: r.bottom }, usableBand())
+      const band = usableBand()
+      if (clipToAncestors) {
+        // A list inside a scrolling dialog must fit its visible body, even when
+        // the viewport has room below the dialog's footer. Root scrolling is
+        // already represented by usableBand; body overflow can propagate there.
+        for (let ancestor = el.parentElement; ancestor && ancestor !== document.body && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
+          if (!/^(auto|scroll|hidden|clip|overlay)$/.test(getComputedStyle(ancestor).overflowY)) continue
+          const bounds = ancestor.getBoundingClientRect()
+          const top = bounds.top + ancestor.clientTop
+          band.top = Math.max(band.top, top)
+          band.bottom = Math.min(band.bottom, top + ancestor.clientHeight)
+        }
+      }
+      const next = placeDropdown({ top: r.top, bottom: r.bottom }, band)
+      // Disjoint/zero-height clipping ancestors offer no visible list space.
+      if (clipToAncestors && band.bottom <= band.top) next.maxHeight = 0
       // Bail on an unchanged answer: this runs from a layout effect, and a
       // fresh object every scroll frame would re-render the whole list.
       setPlacement(prev => (prev.side === next.side && prev.maxHeight === next.maxHeight ? prev : next))
@@ -61,7 +78,7 @@ export function useDropdownPlacement(
       vv?.removeEventListener('resize', schedule)
       vv?.removeEventListener('scroll', schedule)
     }
-  }, [open, anchorRef])
+  }, [open, anchorRef, clipToAncestors])
 
   // A closed dropdown reports the default so the first paint of an opening list
   // is never a stale height from wherever the field used to be.

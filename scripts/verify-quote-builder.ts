@@ -21,8 +21,11 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 import { buildServiceMenu, serviceMatches, RECENT_MAX } from '../src/lib/servicePicker'
 import { recentTemplateIdsFrom } from '../src/lib/quoteServices'
+import { placeDropdown } from '../src/lib/dropdownPlacement'
 import type { ServiceTemplate } from '../src/types'
 
 let failures = 0
@@ -353,6 +356,155 @@ check('the form column can go narrower than its content',
   /className="lg:col-span-2 space-y-4 min-w-0"/.test(CODE),
   'a grid item defaults to min-width:auto, and a Collapsible summary counts UN-WRAPPED toward min-content — ' +
   'measured: one longer summary pushed this column to 423px inside a 390px viewport')
+
+// Execute the actual ServicePicker module with a small hook/JSX host. The real
+// menu model runs here; DOM geometry and browser input behavior are checked by
+// the independent browser fixture. No app provider or environment is loaded.
+console.log('\n═══ Service adoption requires an explicit choice ═══')
+{
+  type Node = { type: unknown; props: Record<string, any> }
+  const compiled = ts.transpileModule(read('src/components/ui/ServicePicker.tsx'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  let slots: unknown[] = [], cursor = 0, changed = false, effects: (() => unknown)[] = []
+  const hooks = {
+    forwardRef: (fn: unknown) => fn,
+    useState(initial: unknown) {
+      const i = cursor++
+      if (!(i in slots)) slots[i] = initial
+      return [slots[i], (next: unknown) => {
+        const value = typeof next === 'function' ? next(slots[i]) : next
+        if (!Object.is(slots[i], value)) { slots[i] = value; changed = true }
+      }]
+    },
+    useRef: () => ({ current: null }), useMemo: (fn: () => unknown) => fn(),
+    useEffect: (fn: () => unknown) => { effects.push(fn) },
+  }
+  const testModule = { exports: {} as Record<string, any> }
+  const jsx = (type: unknown, props: Record<string, any>) => ({ type, props })
+  runInNewContext(compiled, {
+    module: testModule, exports: testModule.exports,
+    document: { addEventListener() {}, removeEventListener() {}, getElementById() { return null } },
+    require(id: string) {
+      if (id === 'react') return hooks
+      if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx }
+      if (id === '@/lib/utils') return { cn: (...values: unknown[]) => values.filter(Boolean).join(' ') }
+      if (id === './fieldStyles') return { fieldBorder: () => '' }
+      if (id === './useFieldIds') return { useFieldIds: () => ({ id: 'service-fixture', errorId: 'error', hintId: 'hint' }) }
+      if (id === '@/lib/servicePricing') return { formatServicePrice: () => 'fixture price' }
+      if (id === '@/lib/servicePicker') return { buildServiceMenu }
+      if (id === '@/hooks/useDropdownPlacement') return { useDropdownPlacement: () => ({ maxHeight: 288, side: 'below' }), dropdownStyle: () => ({}) }
+      if (id === 'lucide-react') return {}
+      throw new Error(`Unexpected ServicePicker dependency: ${id}`)
+    },
+  })
+  const nodes = (node: any): Node[] => Array.isArray(node) ? node.flatMap(nodes)
+    : node && typeof node === 'object' && node.props ? [node, ...nodes(node.props.children)] : []
+  let picked: string[] = [], detached = 0, typed = '', forwardedKeys = 0, forwardedFocus = 0, forwardedClick = 0
+  let props: Record<string, any> = {}, view: Node = { type: null, props: {} }
+  function render() {
+    let rounds = 0
+    do {
+      changed = false; cursor = 0; effects = []
+      view = testModule.exports.ServicePicker(props, null)
+      effects.forEach(fn => fn())
+      if (++rounds > 10) throw new Error('ServicePicker did not settle')
+    } while (changed)
+  }
+  function reset() {
+    slots = []; picked = []; detached = 0; typed = ''; forwardedKeys = 0; forwardedFocus = 0; forwardedClick = 0
+    props = { templates: CAT, recentIds: [], onPick: (t: ServiceTemplate) => { picked.push(t.id) },
+      onDetach: () => { detached++ }, onChange: (e: any) => { typed = e.target.value },
+      onKeyDown: () => { forwardedKeys++ }, onFocus: () => { forwardedFocus++ }, onClick: () => { forwardedClick++ } }
+    render()
+  }
+  const input = () => nodes(view).find(n => n.type === 'input')!
+  const active = () => input().props['aria-activedescendant']
+  const focus = () => { input().props.onFocus({ currentTarget: { select() {} } }); render() }
+  function press(key: string) {
+    let prevented = false, stopped = false
+    input().props.onKeyDown({ key, preventDefault() { prevented = true }, stopPropagation() { stopped = true } })
+    render(); return { prevented, stopped }
+  }
+  reset(); focus()
+  check('focusing offers services without activating or adopting one', !active() && picked.length === 0 && forwardedFocus === 1)
+  for (const text of ['Mow', 'Weekly Mowing', 'Mowing with a custom scope']) {
+    reset(); focus(); input().props.onChange({ target: { value: text } }); render()
+    check(`typing ${text} keeps text without activating a service`, typed === text && !active() && picked.length === 0)
+    check(`Enter on unselected ${text} closes suggestions without adopting or submitting`, press('Enter').prevented && picked.length === 0 && !input().props['aria-expanded'])
+  }
+  reset(); focus()
+  const firstEscape = press('Escape'), secondEscape = press('Escape')
+  check('only the open picker consumes Escape; caller receives each key once', firstEscape.stopped && !secondEscape.stopped && forwardedKeys === 2)
+  for (const change of ['reorder', 'remove', 'recent', 'category', 'reintroduce']) {
+    reset(); focus()
+    const option = nodes(view).find(n => n.props.role === 'option' && n.props.id.endsWith('-t10'))!
+    option.props.onPointerMove(); render()
+    if (change === 'reorder') props.templates = [...CAT].reverse()
+    if (change === 'remove' || change === 'reintroduce') props.templates = CAT.filter(t => t.id !== 't10')
+    if (change === 'recent') props.recentIds = ['t10', 't4']
+    if (change === 'category') props.templates = CAT.map(t => ({ ...t, category: '' }))
+    render()
+    if (change === 'reintroduce') { props.templates = CAT; render() }
+    const forbidden = change === 'remove' || change === 'reintroduce'
+    const hasActive = !!active(), enter = press('Enter')
+    check(`${change}: Enter never adopts a replacement or restores withdrawn consent`, enter.prevented &&
+      (forbidden ? !hasActive && picked.length === 0 : hasActive && picked.join() === 't10'))
+  }
+  reset(); props.templateId = 't0'; focus()
+  input().props.onChange({ target: { value: 'Renamed for this quote' } }); render()
+  const detach = nodes(view).find(n => n.type === 'button' && !n.props.role)!
+  detach.props.onClick(); render()
+  check('explicit detachment calls its callback once and preserves the typed name', detached === 1 && typed === 'Renamed for this quote' && picked.length === 0)
+  input().props.onClick({ currentTarget: { select() {} } }); render()
+  check('reopening forwards the click and starts with no service active', forwardedClick === 1 && input().props['aria-expanded'] && !active())
+}
+
+// Exercise the real placement hook's opt-in measurement with synthetic element
+// bounds. Existing pickers retain their viewport-only default; the service menu
+// intersects clipping ancestors and still delegates to canonical placeDropdown.
+console.log('\n═══ Service suggestions fit the visible dialog body ═══')
+{
+  const compiled = ts.transpileModule(read('src/hooks/useDropdownPlacement.ts'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  function measure(enabled: boolean | undefined, open = true, height = 690) {
+    let measured: { side: string; maxHeight: number } | undefined, styleReads = 0
+    const body = {}, html = {}
+    const ancestor = { parentElement: body, clientTop: 2, clientHeight: height, getBoundingClientRect: () => ({ top: 88 }) }
+    const anchor = { parentElement: ancestor, getBoundingClientRect: () => ({ top: 620, bottom: 666 }) }
+    const testModule = { exports: {} as Record<string, any> }
+    const effect = (fn: () => unknown) => { fn() }
+    runInNewContext(compiled, {
+      module: testModule, exports: testModule.exports,
+      document: { body, documentElement: html },
+      window: { addEventListener() {}, removeEventListener() {} },
+      getComputedStyle() { styleReads++; return { overflowY: 'auto' } },
+      require(id: string) {
+        if (id === 'react') return { useEffect: effect, useLayoutEffect: effect, useRef: (current: unknown) => ({ current }),
+          useState: (initial: unknown) => [initial, (fn: (value: unknown) => { side: string; maxHeight: number }) => { measured = fn(initial) }] }
+        if (id === '@/lib/dropdownPlacement') return { DROPDOWN_GAP: 4, DROPDOWN_MAX_HEIGHT: 288, placeDropdown, usableBand: () => ({ top: 0, bottom: 900 }) }
+        throw new Error(`Unexpected placement dependency: ${id}`)
+      },
+    })
+    const returned = testModule.exports.useDropdownPlacement({ current: anchor }, open,
+      enabled === undefined ? undefined : { clipToAncestors: enabled })
+    return { placement: measured ?? returned, styleReads }
+  }
+  for (const enabled of [undefined, false]) {
+    const result = measure(enabled)
+    check(`ancestor clipping ${enabled === undefined ? 'omitted' : 'disabled'} preserves the existing viewport result`,
+      JSON.stringify(result.placement) === JSON.stringify(placeDropdown({ top: 620, bottom: 666 }, { top: 0, bottom: 900 })) && result.styleReads === 0)
+  }
+  const clipped = measure(true)
+  check('opt-in clipping respects the ancestor border/client area', clipped.placement.side === 'below' && clipped.placement.maxHeight === 110 && clipped.styleReads === 1)
+  const above = measure(true, true, 590)
+  check('a field near the dialog footer opens above using canonical placement', above.placement.side === 'above' && above.placement.maxHeight === 288)
+  const closed = measure(true, false)
+  check('a closed menu retains the default without measuring ancestors', closed.placement.side === 'below' && closed.placement.maxHeight === 288 && closed.styleReads === 0)
+  const zero = measure(true, true, 0)
+  check('a fully clipped body invents no visible menu space', zero.placement.maxHeight === 0)
+}
 
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
