@@ -177,13 +177,14 @@ export default function CustomerDetailPage() {
   async function copyPortalLink() {
     if (!customer) return
     setPortalBusy(true)
+    setPortalCopied(false)
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
       const token = await ensurePortalToken(supabase, user.id, customer.id)
       if (!token) { toast.error('Could not create the portal link. Run the customer-portal migration first.'); return }
       const url = portalUrl(token)
-      try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }) }
+      try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }); return }
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }
   }
@@ -201,6 +202,7 @@ export default function CustomerDetailPage() {
     })
     if (!ok) return
     setPortalBusy(true)
+    setPortalCopied(false)
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
@@ -209,7 +211,7 @@ export default function CustomerDetailPage() {
       // the owner a leaked link was closed when it wasn't.
       if (!token) { toast.error('Could not reset the link — the old one is still active. Try again.'); return }
       const url = portalUrl(token)
-      try { await navigator.clipboard.writeText(url) } catch { toast('New portal link (copy manually): ' + url, { duration: 20000 }) }
+      try { await navigator.clipboard.writeText(url) } catch { toast('Old link is off. Copy the new link manually: ' + url, { duration: 20000 }); return }
       toast.success('Old link is off. The new link is on your clipboard.')
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }

@@ -237,7 +237,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd, in
       const token = await getToken(customerId)
       if (!token) { notify.error('Could not create the portal link — run the customer-portal migration first.'); return }
       const url = portalUrl(token)
-      try { await navigator.clipboard.writeText(url) } catch { notify('Portal link (copy manually): ' + url, { duration: 20000 }) }
+      try { await navigator.clipboard.writeText(url) } catch { notify('Portal link (copy manually): ' + url, { duration: 20000 }); return }
       notify.success('Portal link copied to clipboard')
     } finally { setPortalBusy(null) }
   }
