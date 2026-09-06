@@ -86,6 +86,7 @@ export function SendMessageDialog({
   const [eta, setEta] = useState('15')
   const [text, setText] = useState('')
   const [edited, setEdited] = useState(false)
+  const draftContext = useRef({ open: false, active, pendingReset: false })
   const [ch, setCh] = useState<{ sms: boolean; email: boolean }>({ sms: true, email: true })
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -101,6 +102,11 @@ export function SendMessageDialog({
 
   const chosen = useMemo(() => all.filter(r => selected.has(r.customerId)), [all, selected])
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+
+  function markEdited() {
+    draftContext.current.pendingReset = false
+    setEdited(true)
+  }
 
   // AI writer — drafts/rewrites INTO the editable box; sending still goes
   // through the same consent-gated route, so the model never sends anything.
@@ -124,10 +130,10 @@ export function SendMessageDialog({
       vars: { ...vars, ...(needsEta && eta ? { timeWindow: `${eta} min ETA` } : {}) },
     }, { onDelta: d => setText(prev => prev + d) })
     if (full === null) { setText(prior); return }   // error or stopped — restore, message shows below
-    setEdited(true)
+    markEdited()
     setOutcome(null)
     setAiTouched(true)
-    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true); setAiTouched(false) })
+    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); markEdited(); setAiTouched(false) })
   }
 
   const offered = useMemo(() => {
@@ -205,15 +211,23 @@ export function SendMessageDialog({
     }).sms)
   }
 
-  // (Re)compose whenever the dialog opens or the template/overrides change —
-  // owner edits persist until they pick a different template.
+  // Opening or picking another template starts a fresh draft. Settings may
+  // arrive after typing begins, so hydration must preserve an edited body.
   useEffect(() => {
-    if (!open || custom === null) return
+    const context = draftContext.current
+    if (open && (!context.open || context.active !== active)) context.pendingReset = true
+    context.open = open
+    context.active = active
+    if (!open) { context.pendingReset = false; return }
+    // Keep the visible body's edited status until it is actually replaced.
+    // Later typing cancels a template reset that is waiting for settings.
+    if (custom === null || (edited && !context.pendingReset)) return
+    context.pendingReset = false
     setText(compose(active))
     setEdited(false)
     setOutcome(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, active, custom, company, bizPhone])
+  }, [open, active, custom, company, bizPhone, edited])
 
   const needsEta = active === 'on_my_way' || active === 'running_late'
 
@@ -362,7 +376,7 @@ export function SendMessageDialog({
               </div>
             )}
           </div>
-          <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
+          <textarea value={text} onChange={e => { setText(e.target.value); markEdited(); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
           <AiError message={ai.error} className="mt-1" />
