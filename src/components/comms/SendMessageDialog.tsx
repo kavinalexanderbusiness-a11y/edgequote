@@ -89,6 +89,11 @@ export function SendMessageDialog({
   const draftContext = useRef({ open: false, active, pendingReset: false })
   const [ch, setCh] = useState<{ sms: boolean; email: boolean }>({ sms: true, email: true })
   const [busy, setBusy] = useState(false)
+  // A live guard also covers callbacks captured before React renders busy.
+  const pending = useRef(false)
+  const aiGeneration = useRef(0)
+  const holdSubmittedDraft = useRef(false)
+  const [submittedSubject, setSubmittedSubject] = useState<{ visible: boolean; text: string } | null>(null)
   const [progress, setProgress] = useState(0)
   const [outcome, setOutcome] = useState<SendOutcome | null>(null)
   // Bulk sends cost money and reach many people — require a deliberate second click.
@@ -101,7 +106,31 @@ export function SendMessageDialog({
   const [uid, setUid] = useState<string | null>(null)
 
   const chosen = useMemo(() => all.filter(r => selected.has(r.customerId)), [all, selected])
-  const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const toggle = (id: string) => changeDraft(() => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n }))
+
+  function changeDraft(change: () => void) {
+    if (pending.current) return
+    holdSubmittedDraft.current = false
+    setSubmittedSubject(null)
+    change()
+  }
+
+  function startOperation() {
+    pending.current = true
+    setBusy(true)
+    // Late settings and AI completions must not rewrite the submitted preview,
+    // even after settlement. Cached settings remain available for the next draft.
+    holdSubmittedDraft.current = true
+    draftContext.current.pendingReset = false
+    setSubmittedSubject(current => current ?? { visible: custom !== null, text: emailSubject })
+    aiGeneration.current++
+    ai.cancel()
+  }
+
+  function finishOperation() {
+    pending.current = false
+    setBusy(false)
+  }
 
   function markEdited() {
     draftContext.current.pendingReset = false
@@ -115,7 +144,10 @@ export function SendMessageDialog({
   // assistant, not on a message the owner typed themselves.
   const [aiTouched, setAiTouched] = useState(false)
   async function aiWrite(mode: 'draft' | 'rewrite') {
-    if (busy || ai.running) return
+    if (pending.current || ai.running) return
+    changeDraft(() => {})
+    const generation = aiGeneration.current
+    const isCurrent = () => generation === aiGeneration.current && !pending.current
     const prior = text
     ai.clearError()
     setText('')
@@ -128,12 +160,13 @@ export function SendMessageDialog({
       bulk,
       jobId: jobId ?? undefined,
       vars: { ...vars, ...(needsEta && eta ? { timeWindow: `${eta} min ETA` } : {}) },
-    }, { onDelta: d => setText(prev => prev + d) })
+    }, { onDelta: d => { if (isCurrent()) setText(prev => prev + d) } })
+    if (!isCurrent()) return
     if (full === null) { setText(prior); return }   // error or stopped — restore, message shows below
     markEdited()
     setOutcome(null)
     setAiTouched(true)
-    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); markEdited(); setAiTouched(false) })
+    if (prior.trim()) toast.undo('Replaced your message.', () => { if (isCurrent()) changeDraft(() => { setText(prior); markEdited(); setAiTouched(false) }) })
   }
 
   const offered = useMemo(() => {
@@ -215,10 +248,16 @@ export function SendMessageDialog({
   // arrive after typing begins, so hydration must preserve an edited body.
   useEffect(() => {
     const context = draftContext.current
-    if (open && (!context.open || context.active !== active)) context.pendingReset = true
+    if (pending.current) return
+    if (open && (!context.open || context.active !== active)) {
+      context.pendingReset = true
+      holdSubmittedDraft.current = false
+      setSubmittedSubject(null)
+    }
     context.open = open
     context.active = active
     if (!open) { context.pendingReset = false; return }
+    if (holdSubmittedDraft.current) return
     // Keep the visible body's edited status until it is actually replaced.
     // Later typing cancels a template reset that is waiting for settings.
     if (custom === null || (edited && !context.pendingReset)) return
@@ -236,6 +275,7 @@ export function SendMessageDialog({
   // real portal link, same as an untouched immediate send); edited text is stored
   // as written and its {{tokens}} still interpolate per customer.
   async function schedule() {
+    if (pending.current) return
     const channels = (['sms', 'email'] as const).filter(c => ch[c])
     if (!channels.length) { setOutcome({ ok: false, text: 'Pick at least one channel.' }); return }
     if (!chosen.length) { setOutcome({ ok: false, text: 'Select at least one recipient.' }); return }
@@ -243,15 +283,20 @@ export function SendMessageDialog({
     const at = sendAt ? new Date(sendAt) : null
     if (!at || isNaN(at.getTime()) || at.getTime() < Date.now() + 60_000) { setOutcome({ ok: false, text: 'Pick a time in the future.' }); return }
     if (!uid) { setOutcome({ ok: false, text: 'Could not confirm your session — try again.' }); return }
-    setBusy(true); setOutcome(null)
-    const { error } = await supabase.from('scheduled_messages').insert(chosen.map(r => ({
-      user_id: uid, customer_id: r.customerId, job_id: jobId ?? null,
-      template: active, channels,
-      body: edited ? fromDisplayBody(text) : null,
-      vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
-      send_at: at.toISOString(),
-    })))
-    setBusy(false)
+    startOperation(); setOutcome(null)
+    let result
+    try {
+      result = await supabase.from('scheduled_messages').insert(chosen.map(r => ({
+        user_id: uid, customer_id: r.customerId, job_id: jobId ?? null,
+        template: active, channels,
+        body: edited ? fromDisplayBody(text) : null,
+        vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
+        send_at: at.toISOString(),
+      })))
+    } finally {
+      finishOperation()
+    }
+    const { error } = result
     if (error) {
       setOutcome({ ok: false, text: error.code === '42P01' ? 'Scheduling isn’t set up yet — run the scheduled-messages migration first.' : `Could not schedule: ${error.message}` })
       return
@@ -261,11 +306,12 @@ export function SendMessageDialog({
   }
 
   async function send() {
+    if (pending.current) return
     const channels = (['sms', 'email'] as const).filter(c => ch[c])
     if (!channels.length) { setOutcome({ ok: false, text: 'Pick at least one channel.' }); return }
     if (!chosen.length) { setOutcome({ ok: false, text: 'Select at least one recipient.' }); return }
     if (!text.trim()) { setOutcome({ ok: false, text: 'Write a message first.' }); return }
-    setBusy(true); setOutcome(null); setProgress(0)
+    startOperation(); setOutcome(null); setProgress(0)
     // Untouched template → let the server render per customer (each gets their
     // own name + REAL portal link). Edited text → send as written; any remaining
     // {{tokens}} (e.g. {{portal_link}}) still resolve server-side.
@@ -301,8 +347,11 @@ export function SendMessageDialog({
         setProgress(++done)
       }
     }
-    await Promise.all(Array.from({ length: Math.min(bulk ? 4 : 1, chosen.length) }, () => worker()))
-    setBusy(false)
+    try {
+      await Promise.all(Array.from({ length: Math.min(bulk ? 4 : 1, chosen.length) }, () => worker()))
+    } finally {
+      finishOperation()
+    }
     const out: SendOutcome = bulk
       // Never hardcode "no opt-in" — `skipped` also counts provider errors and
       // messaging-disabled. Blaming consent during a Twilio outage tells the owner
@@ -315,8 +364,8 @@ export function SendMessageDialog({
   }
 
   return (
-    <Modal open={open} onClose={() => !busy && onClose()} icon={MessageSquare} size="lg"
-      onSubmit={() => { if (busy || outcome?.ok || !chosen.length || !text.trim()) return; if (bulk && !armed) setArmed(true); else if (later) schedule(); else send() }}
+    <Modal open={open} onClose={() => !pending.current && onClose()} icon={MessageSquare} size="lg"
+      onSubmit={() => { if (pending.current || outcome?.ok || !chosen.length || !text.trim()) return; if (bulk && !armed) setArmed(true); else if (later) schedule(); else send() }}
       title={title ?? (bulk ? `Message ${all.length} customers` : `Message ${(all[0]?.name || 'customer').split(' ')[0]}`)}>
       <div className="space-y-4">
         {/* Recipients — only when there's a real choice to make */}
@@ -325,15 +374,15 @@ export function SendMessageDialog({
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-[10px] uppercase tracking-wide text-ink-faint">Recipients · <span className="text-ink-muted font-semibold">{chosen.length} of {all.length}</span></p>
               <div className="flex items-center gap-2 text-[11px]">
-                <button type="button" onClick={() => setSelected(new Set(all.map(r => r.customerId)))} className="text-accent-text hover:underline font-medium">Select all</button>
+                <button type="button" disabled={busy} onClick={() => changeDraft(() => setSelected(new Set(all.map(r => r.customerId))))} className="text-accent-text hover:underline font-medium disabled:opacity-50 disabled:cursor-not-allowed">Select all</button>
                 <span className="text-ink-faint">·</span>
-                <button type="button" onClick={() => setSelected(new Set())} className="text-ink-muted hover:text-ink">Clear</button>
+                <button type="button" disabled={busy} onClick={() => changeDraft(() => setSelected(new Set()))} className="text-ink-muted hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed">Clear</button>
               </div>
             </div>
             <div className="max-h-44 overflow-y-auto rounded-xl border border-border divide-y divide-border">
               {all.map(r => (
                 <label key={r.customerId} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-surface-raised/40">
-                  <input type="checkbox" checked={selected.has(r.customerId)} onChange={() => toggle(r.customerId)} className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" />
+                  <input type="checkbox" disabled={busy} checked={selected.has(r.customerId)} onChange={() => toggle(r.customerId)} className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm text-ink truncate">{r.name}</span>
                     {(r.phone || r.service) && <span className="block text-[11px] text-ink-faint truncate">{[r.phone, r.service].filter(Boolean).join(' · ')}</span>}
@@ -347,15 +396,15 @@ export function SendMessageDialog({
         {/* Template picker */}
         <div className="flex flex-wrap gap-2">
           {offered.map(t => (
-            <FilterPill key={t} active={active === t} onClick={() => setActive(t)}>{MSG_LABELS[t]}</FilterPill>
+            <FilterPill key={t} active={active === t} disabled={busy} onClick={() => changeDraft(() => setActive(t))}>{MSG_LABELS[t]}</FilterPill>
           ))}
         </div>
 
         {needsEta && (
           <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-ink-faint">
             ETA (min)
-            <input type="number" min="1" step="5" value={eta}
-              onChange={e => { setEta(e.target.value); if (!edited) setText(compose(active, { eta: e.target.value })) }}
+            <input type="number" min="1" step="5" value={eta} disabled={busy}
+              onChange={e => changeDraft(() => { setEta(e.target.value); if (!edited) setText(compose(active, { eta: e.target.value })) })}
               className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
           </label>
         )}
@@ -372,11 +421,11 @@ export function SendMessageDialog({
                 {text.trim() !== '' && !ai.running && (
                   <AssistButton label="Polish" onClick={() => aiWrite('rewrite')} disabled={busy} title="Rewrite the current draft — keeps every fact, improves the wording" />
                 )}
-                {ai.running && <AiStop onClick={ai.cancel} />}
+                {ai.running && <AiStop onClick={() => { if (!pending.current) ai.cancel() }} />}
               </div>
             )}
           </div>
-          <textarea value={text} onChange={e => { setText(e.target.value); markEdited(); setOutcome(null) }} rows={6} aria-label="Message"
+          <textarea value={text} readOnly={busy} onChange={e => changeDraft(() => { setText(e.target.value); markEdited(); setOutcome(null) })} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
           <AiError message={ai.error} className="mt-1" />
@@ -387,9 +436,9 @@ export function SendMessageDialog({
                 : 'Written from this customer\'s history, balance and your recent messages.'} />
           )}
           {ch.sms && <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />}
-          {ch.email && custom !== null && (
+          {ch.email && (submittedSubject?.visible ?? custom !== null) && (
             <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1.5">
-              <Mail className="w-3 h-3 text-ink-faint shrink-0" /> Email subject: <span className="text-ink font-medium truncate">{emailSubject}</span>
+              <Mail className="w-3 h-3 text-ink-faint shrink-0" /> Email subject: <span className="text-ink font-medium truncate">{submittedSubject?.text ?? emailSubject}</span>
             </p>
           )}
           {bulk && (
@@ -411,19 +460,19 @@ export function SendMessageDialog({
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] uppercase tracking-wide text-ink-faint">Send via</span>
-            <FilterPill active={ch.sms} onClick={() => setCh(c => ({ ...c, sms: !c.sms }))}>
+            <FilterPill active={ch.sms} disabled={busy} onClick={() => changeDraft(() => setCh(c => ({ ...c, sms: !c.sms })))}>
               <MessageSquare className="w-3 h-3" /> SMS
             </FilterPill>
-            <FilterPill active={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))}>
+            <FilterPill active={ch.email} disabled={busy} onClick={() => changeDraft(() => setCh(c => ({ ...c, email: !c.email })))}>
               <Mail className="w-3 h-3" /> Email
             </FilterPill>
-            <FilterPill active={later} onClick={() => { setLater(l => !l); setOutcome(null) }}>
+            <FilterPill active={later} disabled={busy} onClick={() => changeDraft(() => { setLater(l => !l); setOutcome(null) })}>
               <CalendarClock className="w-3 h-3" /> Send later
             </FilterPill>
             {outcome?.ok ? (
-              <Button onClick={() => onClose(1)} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
+              <Button onClick={() => { if (!pending.current) onClose(1) }} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
             ) : (
-              <Button onClick={bulk && !armed ? () => setArmed(true) : later ? schedule : send} loading={busy}
+              <Button onClick={bulk && !armed ? () => { if (!pending.current) setArmed(true) } : later ? schedule : send} loading={busy}
                 disabled={!chosen.length || !text.trim() || (!ch.sms && !ch.email)}
                 title={!chosen.length ? 'Select at least one recipient to send.' : !text.trim() ? 'Write a message to send.' : (!ch.sms && !ch.email) ? 'Pick at least one channel (SMS or email).' : undefined} className="ml-auto">
                 {later ? <CalendarClock className="w-4 h-4" /> : <Send className="w-4 h-4" />}
@@ -436,8 +485,8 @@ export function SendMessageDialog({
           {later && !outcome?.ok && (
             <label className="flex items-center gap-2 mt-2 text-[10px] uppercase tracking-wide text-ink-faint">
               Send at
-              <input type="datetime-local" value={sendAt} min={toLocalInput(new Date())}
-                onChange={e => { setSendAt(e.target.value); setOutcome(null) }}
+              <input type="datetime-local" value={sendAt} min={toLocalInput(new Date())} disabled={busy}
+                onChange={e => changeDraft(() => { setSendAt(e.target.value); setOutcome(null) })}
                 aria-label="When to send"
                 className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent [color-scheme:dark]" />
             </label>
