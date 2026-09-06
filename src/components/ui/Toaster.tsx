@@ -95,7 +95,7 @@ function ToastRow({ t }: { t: ToastItem }) {
       // pan-y lets a vertical page scroll pass through; horizontal is the swipe.
       className={`pointer-events-auto touch-pan-y flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm animate-toast ${meta.cls}`}>
       <Icon aria-hidden="true" className={`w-4 h-4 shrink-0 ${t.tone === 'loading' ? 'animate-spin' : ''}`} />
-      <span className="flex-1 min-w-0">{t.message}</span>
+      <span className="flex-1 min-w-0 break-words">{t.message}</span>
       {t.undo && (
         <button type="button" onClick={onUndo} className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <Undo2 className="w-3.5 h-3.5" /> Undo
