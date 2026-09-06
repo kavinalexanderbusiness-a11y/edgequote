@@ -83,13 +83,12 @@ export function MonthStrip({ collected, collectedLastMonthToDate, jobsDone, jobs
   ]
 
   return (
-    // Geometry matched to MoneyBand tile-for-tile — same padding, type scale and
-    // icon rule — but deliberately 3-across vs the hero's 4: same family,
-    // visibly the supporting band, not a second hero.
-    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+    // Keep the monthly amount together on phones, with jobs and conversion
+    // beneath it. From sm, the three supporting figures share one row.
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 [&>:first-child]:col-span-2 sm:[&>:first-child]:col-span-1">
       {tiles.map(({ key, label, short, value, sub, subShort, icon: Icon, color, bg, href }) => (
         <Link key={key} href={href}
-          className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          className="block min-w-0 rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <Card className="p-3 sm:p-4 h-full card-lift">
             <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">
               <p className="text-xs font-medium text-ink-muted truncate">
@@ -102,7 +101,7 @@ export function MonthStrip({ collected, collectedLastMonthToDate, jobsDone, jobs
                 <Icon className={cn('w-3.5 h-3.5', color)} />
               </div>
             </div>
-            <p className="text-lg sm:text-xl font-black text-ink tracking-tight tabular-nums truncate">{value}</p>
+            <p className="text-lg sm:text-xl font-black text-ink tracking-tight tabular-nums [overflow-wrap:anywhere]">{value}</p>
             <p className="text-[10px] sm:text-[11px] text-ink-muted mt-0.5 tabular-nums truncate">
               <span className="sm:hidden">{subShort}</span>
               <span className="hidden sm:inline">{sub}</span>

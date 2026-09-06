@@ -130,8 +130,9 @@ export default function DashboardLoading() {
         </div>
       </div>
 
-      {/* Month strip — 3-across at every width, same tile geometry. */}
-      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+      {/* Month strip — full-width collected amount on phones, then two tiles;
+          three across from sm, matching MonthStrip. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 [&>:first-child]:col-span-2 sm:[&>:first-child]:col-span-1">
         {[0, 1, 2].map(i => (
           <Card key={i} className="p-3 sm:p-4">
             <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">
