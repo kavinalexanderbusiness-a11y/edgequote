@@ -283,6 +283,7 @@ export default function CustomersPage() {
           : partial ? (partial.total
               ? `First ${partial.shown} of ${partial.total.toLocaleString()} — still loading`
               : `First ${partial.shown} from your last visit — still loading`)
+          : loading ? 'Loading customers…'
           : `${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
