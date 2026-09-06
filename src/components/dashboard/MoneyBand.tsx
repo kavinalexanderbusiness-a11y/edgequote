@@ -46,11 +46,11 @@ export function MoneyBand({ today, todayCount, week, weekPrev, owed, owedCount, 
   // Only claim a comparison when the baseline exists. A brand-new business's
   // second week "up from $0" is not an insight, it's an artifact.
   const weekDelta = weekPrev > 0 ? (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex max-w-full items-center gap-1">
       {week >= weekPrev
         ? <TrendingUp aria-hidden className="w-3 h-3 text-emerald-400 shrink-0" />
         : <TrendingDown aria-hidden className="w-3 h-3 text-red-400 shrink-0" />}
-      <span>vs {formatCurrency(weekPrev)} week before</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">vs {formatCurrency(weekPrev)} week before</span>
     </span>
   ) : null
 
@@ -119,19 +119,17 @@ export function MoneyBand({ today, todayCount, week, weekPrev, owed, owedCount, 
   ]
 
   return (
-    // 2×2 on phones, 4-across from sm. Four tiles at grid-cols-4 on a 390px
-    // screen leaves ~90px per money figure — the numbers this band exists for
-    // would truncate. 2×2 keeps every figure legible and the band above the
-    // queue either way.
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+    // Keep two columns through tablet widths, where full labels and comparison
+    // text need the room. Four columns fit from xl, including the sidebar.
+    <div className="grid grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-3">
       {tiles.map(t => {
         const Icon = t.icon
         return (
           <Link key={t.key} href={t.href}
-            className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="block min-w-0 rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Card className={cn('p-3 sm:p-4 h-full card-lift', t.surface)}>
               <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">
-                <p className="text-xs font-medium text-ink-muted truncate">
+                <p className="min-w-0 text-xs font-medium text-ink-muted truncate sm:overflow-visible sm:whitespace-normal sm:text-clip sm:[overflow-wrap:anywhere]">
                   <span className="sm:hidden">{t.short}</span>
                   <span className="hidden sm:inline">{t.label}</span>
                 </p>
@@ -145,8 +143,8 @@ export function MoneyBand({ today, todayCount, week, weekPrev, owed, owedCount, 
                   <Icon className="w-3.5 h-3.5" />
                 </span>
               </div>
-              <p className={cn('text-lg sm:text-2xl font-black tracking-tight tabular-nums truncate', t.tone)}>{t.value}</p>
-              <p className="text-[10px] sm:text-[11px] text-ink-muted mt-0.5 sm:mt-1 tabular-nums truncate">
+              <p className={cn('text-lg sm:text-2xl font-black tracking-tight tabular-nums truncate sm:overflow-visible sm:whitespace-normal sm:text-clip sm:[overflow-wrap:anywhere]', t.tone)}>{t.value}</p>
+              <p className="text-[10px] sm:text-[11px] text-ink-muted mt-0.5 sm:mt-1 tabular-nums truncate sm:overflow-visible sm:whitespace-normal sm:text-clip sm:[overflow-wrap:anywhere]">
                 <span className="sm:hidden">{t.subShort}</span>
                 <span className="hidden sm:inline">{t.sub}</span>
               </p>

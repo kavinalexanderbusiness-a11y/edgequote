@@ -48,10 +48,10 @@ export default function DashboardLoading() {
           is a picture of loading, not a promise about arrangement, and the
           layout preference lives server-side where this boundary can't read it. */}
 
-      {/* Money band — mirrors MoneyBand's real geometry (2×2 on phones,
-          4-across from sm, p-3 on phones) so nothing shifts when the numbers
+      {/* Money band — mirrors MoneyBand's real geometry (2×2 through tablets,
+          4-across from xl, p-3 on phones) so nothing shifts when the numbers
           land. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-3">
         {[0, 1, 2, 3].map(i => (
           <Card key={i} className="p-3 sm:p-4">
             <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">

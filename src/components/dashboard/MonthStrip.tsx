@@ -33,20 +33,20 @@ export function MonthStrip({ collected, collectedLastMonthToDate, jobsDone, jobs
   // small-business months are small numbers, and a percent on a small base is
   // technically true and practically noise.
   const collectedDelta = collectedLastMonthToDate > 0 ? (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex max-w-full items-center gap-1">
       {collected >= collectedLastMonthToDate
         ? <TrendingUp aria-hidden className="w-3 h-3 text-emerald-400 shrink-0" />
         : <TrendingDown aria-hidden className="w-3 h-3 text-red-400 shrink-0" />}
-      <span>vs {formatCurrency(collectedLastMonthToDate)} by now last month</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">vs {formatCurrency(collectedLastMonthToDate)} by now last month</span>
     </span>
   ) : null
 
   const jobsDelta = jobsDoneLastMonth > 0 ? (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex max-w-full items-center gap-1">
       {jobsDone >= jobsDoneLastMonth
         ? <TrendingUp aria-hidden className="w-3 h-3 text-emerald-400 shrink-0" />
         : <TrendingDown aria-hidden className="w-3 h-3 text-red-400 shrink-0" />}
-      <span>vs {jobsDoneLastMonth} by now last month</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">vs {jobsDoneLastMonth} by now last month</span>
     </span>
   ) : null
 
@@ -102,7 +102,7 @@ export function MonthStrip({ collected, collectedLastMonthToDate, jobsDone, jobs
               </div>
             </div>
             <p className="text-lg sm:text-xl font-black text-ink tracking-tight tabular-nums [overflow-wrap:anywhere]">{value}</p>
-            <p className="text-[10px] sm:text-[11px] text-ink-muted mt-0.5 tabular-nums truncate">
+            <p className="text-[10px] sm:text-[11px] text-ink-muted mt-0.5 tabular-nums truncate sm:overflow-visible sm:whitespace-normal sm:text-clip sm:[overflow-wrap:anywhere]">
               <span className="sm:hidden">{subShort}</span>
               <span className="hidden sm:inline">{sub}</span>
             </p>
