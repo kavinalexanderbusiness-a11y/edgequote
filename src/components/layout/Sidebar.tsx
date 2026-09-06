@@ -3,12 +3,12 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, useRef } from 'react'
-import { Settings, LogOut, Zap, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
+import { Settings, LogOut, Zap, Menu, X, Search, LifeBuoy, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useModules } from '@/hooks/useModules'
-import { CATEGORY_ORDER, MODULE_CATEGORIES, modulesForNavigation } from '@/lib/modules'
+import { CATEGORY_ORDER, MODULE_CATEGORIES, modulesForNavigation, type FeatureModule } from '@/lib/modules'
 import { useUnread } from '@/hooks/useUnread'
 import { clearOwnedCaches } from '@/lib/clientCache'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
@@ -19,8 +19,9 @@ import { Kbd } from '@/components/ui/Kbd'
 // per business by business_settings.enabled_modules (null = all), and the
 // analytics leaves live behind one "Grow" hub so this stays short.
 //
-// Daily work is grouped by the registry's category. Advanced tools live in
-// Settings and Sales reporting lives in Grow; their modules remain installed
+// Daily work is grouped by the registry's category. Secondary destinations stay
+// behind More tools until needed; the current section always opens that group.
+// Advanced tools live in Settings and Sales reporting lives in Grow; their modules remain installed
 // and searchable. Empty categories do not render a heading.
 //
 // ⚠️ The grouping MUST stay sourced from the registry. A hand-kept list here is
@@ -100,8 +101,22 @@ export function Sidebar() {
   // command palette and the Modules settings surface; live-updates on change.
   const { visible } = useModules()
   const navMain = modulesForNavigation(visible, 'sidebar')
+  const dailyNav = navMain.filter(m => !m.sidebarSecondary)
+  const moreNav = navMain.filter(m => m.sidebarSecondary)
   const pageModule = visible.find(m => m.href !== '/dashboard' && (pathname === m.href || pathname.startsWith(m.href + '/')))
   const settingsActive = pathname.startsWith('/dashboard/settings') || pageModule?.navigation === 'settings'
+  const section = Object.keys(sectionOf).find(p => pathname.startsWith(p))
+  const isNavActive = (href: string) => href === '/dashboard'
+    ? pathname === '/dashboard'
+    : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
+      || (href === '/dashboard/grow' && pageModule?.navigation === 'grow')
+  const moreActive = moreNav.some(m => isNavActive(m.href))
+  const [toolsExpanded, setToolsExpanded] = useState(moreActive)
+
+  // Deep links and navigation from search must reveal the current destination,
+  // including analytics leaves whose active section lives at another URL.
+  // This is local disclosure state, never a change to installed modules.
+  useEffect(() => { if (moreActive) setToolsExpanded(true) }, [pathname, moreActive])
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
   useEffect(() => {
@@ -173,11 +188,7 @@ export function Sidebar() {
   // ONE renderer for a nav row, so the ungrouped home link and every grouped
   // item stay identical (active state, unread badge, hit area).
   function navLink({ label, href, icon: Icon }: { label: string; href: string; icon: typeof Settings }, onNavigate?: () => void) {
-    const section = Object.keys(sectionOf).find(p => pathname.startsWith(p))
-    const active = href === '/dashboard'
-      ? pathname === '/dashboard'
-      : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
-        || (href === '/dashboard/grow' && pageModule?.navigation === 'grow')
+    const active = isNavActive(href)
     const badge = label === 'Messages' && unread > 0 ? unread : 0
     return (
       <Link key={href} href={href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={linkClass(active)}>
@@ -192,7 +203,21 @@ export function Sidebar() {
     )
   }
 
+  function navGroups(modules: FeatureModule[], onNavigate?: () => void) {
+    return CATEGORY_ORDER.map(cat => {
+      const items = modules.filter(m => m.category === cat && m.href !== '/dashboard')
+      if (items.length === 0) return null
+      return (
+        <div key={cat} className="mt-3 first:mt-1">
+          <p className="px-3 pb-1 text-xs font-medium text-ink-faint">{MODULE_CATEGORIES[cat]}</p>
+          <div className="flex flex-col gap-0.5">{items.map(m => navLink(m, onNavigate))}</div>
+        </div>
+      )
+    })
+  }
+
   function navBody(onNavigate?: () => void) {
+    const toolsId = onNavigate ? 'mobile-navigation-tools' : 'desktop-navigation-tools'
     return (
       <>
         <nav aria-label="Primary" className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
@@ -207,21 +232,23 @@ export function Sidebar() {
             <Kbd className="hidden lg:inline">⌘K</Kbd>
           </button>
           {/* Home first and ungrouped — it is not a category, it is where you land. */}
-          {navMain.filter(m => m.href === '/dashboard').map(m => navLink(m, onNavigate))}
+          {dailyNav.filter(m => m.href === '/dashboard').map(m => navLink(m, onNavigate))}
 
           {/* Group the remaining daily destinations using the module registry. */}
-          {CATEGORY_ORDER.map(cat => {
-            const items = navMain.filter(m => m.category === cat && m.href !== '/dashboard')
-            if (items.length === 0) return null      // a module can be uninstalled
-            return (
-              <div key={cat} className="mt-3 first:mt-1">
-                <p className="px-3 pb-1 text-xs font-medium text-ink-faint">
-                  {MODULE_CATEGORIES[cat]}
-                </p>
-                <div className="flex flex-col gap-0.5">{items.map(m => navLink(m, onNavigate))}</div>
+          {navGroups(dailyNav, onNavigate)}
+          {moreNav.length > 0 && (
+            <div className="mt-3 border-t border-border pt-2">
+              <button type="button" aria-expanded={toolsExpanded} aria-controls={toolsId}
+                onClick={() => setToolsExpanded(expanded => !expanded)}
+                className={cn(linkClass(moreActive), 'w-full text-left')}>
+                <span className="flex-1">More tools</span>
+                <ChevronDown className={cn('w-4 h-4 transition-transform', toolsExpanded && 'rotate-180')} aria-hidden="true" />
+              </button>
+              <div id={toolsId} hidden={!toolsExpanded}>
+                {navGroups(moreNav, onNavigate)}
               </div>
-            )
-          })}
+            </div>
+          )}
         </nav>
         <div className="px-3 py-4 border-t border-border flex flex-col gap-0.5">
           {/* Help sits with Settings, not in the work nav above — it's a place you go

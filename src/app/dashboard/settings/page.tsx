@@ -30,7 +30,7 @@ import { PushNotificationSettings } from '@/components/settings/PushNotification
 import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { DataExport } from '@/components/settings/DataExport'
 import { CustomFields } from '@/components/settings/CustomFields'
-import { Tabs, type TabItem } from '@/components/ui/Tabs'
+import type { TabItem } from '@/components/ui/Tabs'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
@@ -39,18 +39,18 @@ import { weekdayLong } from '@/lib/preferences'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { Download, Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, Wallet, X, ArrowRight, LayoutTemplate, ClipboardCheck, SlidersHorizontal } from 'lucide-react'
 
-const SETTINGS_TABS: TabItem[] = [
-  { key: 'business', label: 'Business', icon: Building2 },
-  { key: 'pricing', label: 'Pricing & Fees', icon: DollarSign },
-  { key: 'scheduling', label: 'Scheduling', icon: CalendarRange },
-  { key: 'messaging', label: 'Messaging', icon: MessageSquare },
-  { key: 'notifications', label: 'Notifications', icon: Bell },
-  { key: 'booking', label: 'Booking', icon: LinkIcon },
-  { key: 'payroll', label: 'Payroll', icon: Wallet },
-  { key: 'modules', label: 'Features', icon: LayoutGrid },
-  { key: 'advanced', label: 'Advanced tools', icon: Zap },
-  { key: 'custom-fields', label: 'Custom fields', icon: SlidersHorizontal },
-  { key: 'data', label: 'Your data', icon: Download },
+const SETTINGS_TABS: (TabItem & { group: string })[] = [
+  { key: 'business', label: 'Business', icon: Building2, group: 'Business' },
+  { key: 'pricing', label: 'Pricing & Fees', icon: DollarSign, group: 'Business' },
+  { key: 'scheduling', label: 'Scheduling', icon: CalendarRange, group: 'Business' },
+  { key: 'messaging', label: 'Messaging', icon: MessageSquare, group: 'Communication' },
+  { key: 'notifications', label: 'Notifications', icon: Bell, group: 'Communication' },
+  { key: 'booking', label: 'Booking', icon: LinkIcon, group: 'Communication' },
+  { key: 'payroll', label: 'Payroll', icon: Wallet, group: 'Business' },
+  { key: 'modules', label: 'Features', icon: LayoutGrid, group: 'Workspace' },
+  { key: 'advanced', label: 'Advanced tools', icon: Zap, group: 'Workspace' },
+  { key: 'custom-fields', label: 'Custom fields', icon: SlidersHorizontal, group: 'Workspace' },
+  { key: 'data', label: 'Your data', icon: Download, group: 'Workspace' },
 ]
 type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
 
@@ -378,7 +378,7 @@ export default function SettingsPage() {
   // empties. An error with no data gets an honest banner and a retry instead.
   if (loadError && !settings) return (
     <div className="max-w-3xl space-y-6">
-      <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
+      <PageHeader title="Settings" description="Business, communication and workspace preferences." />
       <Banner tone="danger" action={<Button size="sm" variant="secondary" onClick={() => refresh()}>Retry</Button>}>
         Could not load your settings — nothing is shown so nothing can be overwritten. ({loadError})
       </Banner>
@@ -387,7 +387,7 @@ export default function SettingsPage() {
 
   if (loading) return (
     <div className="max-w-3xl space-y-6">
-      <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
+      <PageHeader title="Settings" description="Business, communication and workspace preferences." />
       <Skeleton className="h-9 w-full max-w-md" />
       {[0, 1].map(i => (
         <div key={i} className="rounded-card border border-border bg-surface p-6 space-y-4">
@@ -411,13 +411,15 @@ export default function SettingsPage() {
     // tab (it's what people come here to check) while the react-hook-form keeps
     // its single mounted <form> — no field ever registers twice.
     <div className="max-w-3xl mx-auto flex flex-col gap-6">
-      <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
+      <PageHeader title="Settings" description="Business, communication and workspace preferences." />
 
       {/* top-14 on mobile: the app header is `lg:hidden sticky top-0 z-40 h-14`, so a
           top-0 strip here scrolled straight under it and the section switcher
           vanished on the longest form in the app. */}
       <div className="sticky top-14 lg:top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
-        <Tabs tabs={SETTINGS_TABS} active={tab} onChange={(k) => pickTab(k as SettingsTab)} />
+        <Select id="settings-section" label="Settings section" value={tab} className="appearance-auto bg-bg-tertiary"
+          options={SETTINGS_TABS.map(({ key, label, group }) => ({ value: key, label, group }))}
+          onChange={e => pickTab(e.target.value as SettingsTab)} />
       </div>
 
       {/* BUSINESS — non-form cards (Branding, Appearance). Rendered after the
@@ -429,8 +431,8 @@ export default function SettingsPage() {
           after day one without duplicating the picker here. */}
       <Link href="/setup" className="flex items-center justify-between gap-3 rounded-card border border-border bg-bg-secondary px-4 py-3 hover:border-accent/40 transition-colors group">
         <div>
-          <p className="text-sm font-semibold text-ink">Business type &amp; starter catalogue</p>
-          <p className="text-xs text-ink-muted mt-0.5">What trade you are, and the seeded defaults that came with it. Reseeding never touches configured data.</p>
+          <p className="text-sm font-semibold text-ink">Business type &amp; starter services</p>
+          <p className="text-xs text-ink-muted mt-0.5">Review your business type and starter service catalogue.</p>
         </div>
         <ArrowRight className="w-4 h-4 text-ink-faint group-hover:text-accent-text transition-colors shrink-0" />
       </Link>
