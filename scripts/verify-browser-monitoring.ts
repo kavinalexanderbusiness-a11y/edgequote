@@ -1,5 +1,5 @@
 // Actual config + compiled browser/server startup modules, with synthetic SDKs.
-// Checks disabled browser startup, configured hooks and transaction-name privacy.
+// Checks disabled startup, configured hooks and event/legacy INP route-name privacy.
 // This does not measure the whole Next bundle or the real Sentry build wrapper.
 // No application environment file, Sentry provider or network is used.
 import assert from 'node:assert/strict'
@@ -27,7 +27,7 @@ function configFor(env: Environment) {
   return testModule.exports.default
 }
 
-function browserFor(env: Environment) {
+function browserFor(env: Environment, initialize?: (options: Record<string, any>) => unknown) {
   const config = configFor(env)
   // Mirror Next's documented static env sources: present public variables and
   // next.config.env. An absent public variable is NOT automatically defined.
@@ -49,7 +49,7 @@ function browserFor(env: Environment) {
       assert.equal(id, '@sentry/nextjs', 'browser code can load only the synthetic SDK')
       sdkLoads.push(id)
       return {
-        init: (options: Record<string, any>) => { initializations.push(options) },
+        init: (options: Record<string, any>) => { initializations.push(options); return initialize?.(options) },
         captureRouterTransitionStart: (...args: unknown[]) => { transitions.push(args) },
       }
     },
@@ -90,6 +90,145 @@ const envelopeHeaders = runInNewContext(`(${headerFunction.getText(envelopeSourc
   randomSafeContext: { safeDateNow: () => 1_700_000_000_000 },
   dsn: { dsnToString: () => assert.fail('No DSN or tunnel is used in the envelope fixture') },
 }) as (event: Record<string, any>) => Record<string, any>
+
+// Extract SDK boundaries as code, never execute SDK imports or initialize a real
+// client. Span fixtures are synthetic; the independent INP proof covers the real
+// metric producer. This guard owns registration timing and final serialization.
+function sdkSource(pkg: string, relative: string) {
+  const file = join(dirname(require.resolve(pkg)), relative)
+  return ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+}
+function sdkFunction(source: ts.SourceFile, name: string, context: Record<string, unknown> = {}) {
+  let found: ts.FunctionDeclaration | ts.MethodDeclaration | ts.VariableDeclaration | undefined
+  function walk(node: ts.Node) {
+    if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isVariableDeclaration(node)) &&
+      node.name?.getText(source) === name) found = node
+    ts.forEachChild(node, walk)
+  }
+  walk(source)
+  assert.ok(found, `SDK boundary ${name} must remain reviewable`)
+  const expression = ts.isMethodDeclaration(found) ? `({${found.getText(source)}}).${name}` :
+    ts.isVariableDeclaration(found) ? found.initializer!.getText(source) : `(${found.getText(source)})`
+  return runInNewContext(expression, { Uint8Array, ...context,
+    require: () => assert.fail('SDK imports are forbidden'), fetch: () => assert.fail('Network is forbidden') })
+}
+
+function verifyInpEnvelopes() {
+  const core = (file: string) => sdkSource('@sentry/core', file)
+  const utilities = core('utils/envelope.js'), integration = core('integration.js'), clientSource = core('client.js')
+  const envelope = Object.fromEntries(['createEnvelope', 'createSpanEnvelopeItem'].map(name => [name, sdkFunction(utilities, name)]))
+  const serialize = sdkFunction(utilities, 'serializeEnvelope', {
+    encodeUTF8: (text: string) => new TextEncoder().encode(text), concatBuffers: sdkFunction(utilities, 'concatBuffers'),
+    normalize: { normalize: () => assert.fail('Cyclic fixtures are unexpected') },
+  })
+  const createSpanEnvelope = sdkFunction(core('envelope.js'), 'createSpanEnvelope', {
+    dynamicSamplingContext: { getDynamicSamplingContextFromSpan: (span: any) => span.sampling },
+    spanUtils: { spanToJSON: (span: any) => span.json }, envelope,
+    beforeSendSpan: { isStreamedBeforeSendSpanCallback: sdkFunction(core('tracing/spans/beforeSendSpan.js'), 'isStreamedBeforeSendSpanCallback') },
+    randomSafeContext: { safeDateNow: () => 1_700_000_000_000 },
+    dsn: { dsnToString: () => assert.fail('No tunnel is used') },
+    shouldIgnoreSpan: { shouldIgnoreSpan: () => assert.fail('No ignore policy is changed') },
+  })
+  const getIntegrations = sdkFunction(integration, 'getIntegrationsToSetup', { filterDuplicates: sdkFunction(integration, 'filterDuplicates') })
+  const setupIntegration = sdkFunction(integration, 'setupIntegration', { installedIntegrations: [], debugBuild: { DEBUG_BUILD: false } })
+  const setupIntegrations = sdkFunction(integration, 'setupIntegrations', { setupIntegration })
+  const afterSetupIntegrations = sdkFunction(integration, 'afterSetupIntegrations')
+  const sendEnvelope = sdkFunction(clientSource, 'sendEnvelope', { debugBuild: { DEBUG_BUILD: false } })
+  let options: Record<string, any> = {}, duringInit = false, cachedDuringInit = false, transportCalls = 0
+  const outputs: (string | Uint8Array)[] = []
+  const client: Record<string, any> = {
+    _hooks: {}, _integrations: {}, getOptions: () => options, getDsn: () => undefined,
+    on: sdkFunction(clientSource, 'on'), emit: sdkFunction(clientSource, 'emit'), _isEnabled: () => false,
+    _transport: { send: () => { transportCalls++; assert.fail('Even synthetic transport calls are forbidden') } },
+    addIntegration: sdkFunction(clientSource, 'addIntegration', { integration: { setupIntegration, afterSetupIntegrations } }),
+    getIntegrationByName(name: string) { return this._integrations[name] },
+  }
+  function send(value: any) {
+    // The actual disabled client still emits beforeEnvelope synchronously. Do
+    // not call transport.send; serialize its resulting envelope separately.
+    void sendEnvelope.call(client, value)
+    const serialized = serialize(value) as string | Uint8Array
+    outputs.push(serialized)
+    return serialized
+  }
+  const fixture = (body = '/portal/private-inp', header = '/book/private-sampling') => ({
+    sampling: Object.freeze({ transaction: header, trace_id: 'synthetic-trace', public_key: 'synthetic-public', sampled: 'true' }),
+    json: Object.freeze({ origin: 'auto.http.browser.inp', span_id: 'synthetic-span', trace_id: 'synthetic-trace',
+      start_timestamp: 1, timestamp: 2, description: 'button.save', op: 'ui.interaction.click',
+      data: Object.freeze({ transaction: body, retained: 42 }), measurements: { inp: { value: 120, unit: 'millisecond' } } }),
+  })
+  const cached = fixture()
+  // Use the actual BrowserTracing afterAllSetup installation branch and actual
+  // WebVitals.setup. Its INP observer callback supplies a synthetic cached span.
+  const tracing = sdkSource('@sentry/browser', 'tracing/browserTracingIntegration.js')
+  let installBranch: ts.IfStatement | undefined
+  function findBranch(node: ts.Node) {
+    if (ts.isIfStatement(node) && node.expression.getText(tracing).startsWith('client.addIntegration &&')) installBranch = node
+    ts.forEachChild(node, findBranch)
+  }
+  findBranch(tracing)
+  assert.ok(installBranch, 'BrowserTracing must retain a reviewable WebVitals installation phase')
+  const webVitalsIntegration = sdkFunction(sdkSource('@sentry/browser', 'integrations/webVitals.js'), 'webVitalsIntegration', {
+    WEB_VITALS_INTEGRATION_NAME: 'WebVitals', browser: { defineIntegration: (factory: unknown) => factory, hasSpanStreamingEnabled: () => false },
+    browserUtils: { startTrackingWebVitals: () => () => {}, registerInpInteractionListener() {},
+      startTrackingINP() { cachedDuringInit = duringInit; send(createSpanEnvelope([cached], client)) } },
+  })
+  const defaultIntegration = { name: 'SyntheticBrowserTracing', afterAllSetup: runInNewContext(`(client) => {${installBranch.getText(tracing)}}`, {
+    webVitals: { WEB_VITALS_INTEGRATION_NAME: 'WebVitals', webVitalsIntegration },
+    enableInp: true, enableStandaloneClsSpans: undefined, enableStandaloneLcpSpans: undefined,
+  }) }
+  browserFor({ NEXT_PUBLIC_SENTRY_DSN: browserDsn }, configured => {
+    options = configured; duringInit = true
+    const integrations = getIntegrations({ ...options, defaultIntegrations: [defaultIntegration] })
+    client._integrations = setupIntegrations(client, integrations)
+    afterSetupIntegrations(client, integrations)
+    duringInit = false
+    return client
+  })
+  check('INP: cached WebVitals setup has privacy hooks before init returns; defaults survive', () => {
+    assert.ok(cachedDuringInit)
+    assert.equal(outputs.length, 1)
+    assert.ok(typeof outputs[0] === 'string')
+    assert.doesNotMatch(outputs[0], /private-/)
+    assert.equal(client.getIntegrationByName(defaultIntegration.name), defaultIntegration)
+    assert.ok(client.getIntegrationByName('WebVitals'))
+  })
+  check('INP: final serialized body/header names are independent; frozen SDK state is retained', () => {
+    for (const name of ['/portal/private-route', 'GET /book/private-route?code=private-query', 'Label&code=private-prefix (/book/private-route)', '/portal/[token]', '/dashboard']) {
+      const span = fixture(name, name), value = createSpanEnvelope([span], client)
+      const serialized = send(value)
+      assert.ok(typeof serialized === 'string')
+      assert.doesNotMatch(serialized, /private-/)
+      assert.equal(span.json.data.transaction, name)
+      assert.equal(span.sampling.transaction, name)
+      assert.equal(value[1][0][1].description, span.json.description)
+      assert.equal(value[1][0][1].measurements, span.json.measurements)
+      assert.equal(value[1][0][1].data.retained, 42)
+      assert.equal(value[0].trace.public_key, span.sampling.public_key)
+      if (!name.includes('private-')) {
+        assert.equal(value[1][0][1].data.transaction, name)
+        assert.equal(value[0].trace.transaction, name)
+      }
+    }
+  })
+  check('INP: non-INP, streamed, string, binary and unknown items remain untouched', () => {
+    for (const item of [
+      [{ type: 'span' }, { ...cached.json, origin: 'auto.http.browser.lcp' }],
+      [{ type: 'span', content_type: 'application/vnd.sentry.items.span.v2+json' }, cached.json],
+      [{ type: 'span' }, { origin: 'auto.http.browser.inp', data: cached.json.data }],
+      [{ type: 'span' }, JSON.stringify(cached.json)], [{ type: 'span' }, new Uint8Array([1, 2])],
+      [{ type: 'transaction' }, { spans: [cached.json] }],
+    ]) {
+      const headers = Object.freeze({ trace: cached.sampling })
+      const value: [unknown, unknown[]] = [headers, [item]]
+      const before = serialize(value)
+      assert.deepEqual(send(value), before)
+      assert.equal(value[0], headers)
+      assert.equal(value[1][0], item)
+    }
+    assert.equal(transportCalls, 0)
+  })
+}
 
 let passed = 0
 function check(name: string, fn: () => void) { fn(); passed++; console.log(`PASS ${name}`) }
@@ -214,6 +353,7 @@ check('configured privacy options and existing request/breadcrumb scrubbing surv
 })
 
 verifyTransactionNames(browserFor({ NEXT_PUBLIC_SENTRY_DSN: browserDsn }).initializations[0], 'browser')
+verifyInpEnvelopes()
 
 async function verifyServerMonitoring() {
   for (const runtime of ['nodejs', 'edge']) {
@@ -245,5 +385,5 @@ async function verifyServerMonitoring() {
 }
 
 verifyServerMonitoring().then(() => {
-  console.log(`Monitoring: ${passed} passed, 0 failed. Actual startup hooks and SDK envelope-header constructor; synthetic SDKs only.`)
+  console.log(`Monitoring: ${passed} passed, 0 failed. Actual startup hooks and SDK envelope/lifecycle boundaries; synthetic SDKs only.`)
 }).catch(error => { console.error(error); process.exitCode = 1 })

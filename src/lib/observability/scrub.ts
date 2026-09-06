@@ -40,6 +40,35 @@ function scrubTransactionName(input: string): string {
   return wrapped ? `${wrapped[1]}${scrubUrl(wrapped[2])})` : scrubUrl(input)
 }
 
+/** Only the installed SDK's legacy browser INP envelope, not other span channels. */
+export function scrubInpEnvelope(envelope: [Record<string, unknown>, [Record<string, unknown>, unknown][]]): void {
+  const [headers, items] = envelope
+  let hasInp = false
+  const nextItems = items.map<(typeof items)[number]>(item => {
+    const [itemHeaders, payload] = item
+    if (itemHeaders.type !== 'span' || itemHeaders.content_type !== undefined ||
+      !payload || typeof payload !== 'object' || Array.isArray(payload)) return item
+    const span = payload as Record<string, unknown>
+    if (span.origin !== 'auto.http.browser.inp' || typeof span.span_id !== 'string' ||
+      typeof span.trace_id !== 'string' || typeof span.start_timestamp !== 'number' ||
+      !span.data || typeof span.data !== 'object' || Array.isArray(span.data)) return item
+    hasInp = true
+    const data = span.data as Record<string, unknown>
+    if (typeof data.transaction !== 'string') return item
+    return [itemHeaders, { ...span, data: { ...data, transaction: scrubTransactionName(data.transaction) } }]
+  })
+  if (!hasInp) return
+  // beforeEnvelope ignores return values. Replace only the envelope's copies;
+  // the SDK may still share the original attributes and frozen sampling context.
+  envelope[1] = nextItems
+  const trace = headers.trace
+  if (trace && typeof trace === 'object' && !Array.isArray(trace) &&
+    typeof (trace as Record<string, unknown>).transaction === 'string') {
+    envelope[0] = { ...headers, trace: { ...trace,
+      transaction: scrubTransactionName((trace as { transaction: string }).transaction) } }
+  }
+}
+
 /** Keys whose VALUE must never be sent, wherever they appear. */
 const SENSITIVE_KEY_RE = /(token|secret|password|authorization|cookie|api[-_]?key|access[-_]?key|service[-_]?role|card|cvc|iban|sin|ssn)/i
 

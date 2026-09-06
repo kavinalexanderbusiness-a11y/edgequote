@@ -8,7 +8,7 @@
 // Sentry DSN is designed to be public (it can only submit events, not read them),
 // which is why this is safe and the server DSN is kept separate.
 
-import { scrubEvent, isIgnorable } from '@/lib/observability/scrub'
+import { scrubEvent, scrubInpEnvelope, isIgnorable } from '@/lib/observability/scrub'
 
 type RouterTransitionStart = typeof import('@sentry/nextjs')['captureRouterTransitionStart']
 let captureRouterTransitionStart: RouterTransitionStart | undefined
@@ -35,6 +35,13 @@ if (process.env.NEXT_PUBLIC_SENTRY_DSN) {
     // for an observability task to slip in.
     replaysSessionSampleRate: 0,
     replaysOnErrorSampleRate: 0,
+
+    // A cached INP can be replayed during SDK setup. Register before all setup
+    // hooks; the array adds to the SDK defaults without replacing them.
+    integrations: [{
+      name: 'EdgeHQInpPrivacy',
+      beforeSetup(client) { client.on('beforeEnvelope', scrubInpEnvelope) },
+    }],
 
     // Browser extensions and injected scripts generate errors we can neither
     // reproduce nor fix; they only bury the real ones.
