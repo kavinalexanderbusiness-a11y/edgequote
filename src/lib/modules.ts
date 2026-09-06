@@ -53,6 +53,8 @@ export interface FeatureModule {
   category: ModuleCategory
   /** Navigation home only; installation, permissions and search remain unchanged. */
   navigation?: 'settings' | 'grow'
+  /** Keep installed tools one disclosure away without changing their navigation home. */
+  sidebarSecondary?: boolean
   /** Bump when the module meaningfully changes — drives the "Updated" badge. */
   version: number
   /** One line shown to businesses whose installed version is older. */
@@ -97,6 +99,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     permissions: ['jobs:read', 'jobs:write', 'customers:read', 'messages:send'],
     keywords: 'jobs visits calendar day plan route booked work' },
   { key: 'dispatch',   label: 'Dispatch',   href: '/dashboard/dispatch',   icon: Radio,
+    sidebarSecondary: true,
     category: 'operations', version: 1, updatedAt: '2026-07-15', requires: ['schedule'],
     description: 'Crews, technicians and the day\'s routes on one board.',
     permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'],
@@ -107,6 +110,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // (rather than special-casing the sidebar) is what makes the sidebar, ⌘K and the
   // Modules manager all agree — they every one read this registry.
   { key: 'workforce',  label: 'Workforce',  href: '/dashboard/workforce',  icon: HardHat,
+    sidebarSecondary: true,
     category: 'operations', version: 1, updatedAt: '2026-07-16', requires: ['dispatch'],
     description: 'Your people: hours, pay, time off and what the crew costs.',
     whatsNew: 'Payroll, timesheets and time off now have a home of their own.',
@@ -133,11 +137,13 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // four of the six rungs are derived from a quote's status, so without that
   // module the board could only ever show leads.
   { key: 'pipeline',   label: 'Pipeline',   href: '/dashboard/pipeline',   icon: Target,
+    sidebarSecondary: true,
     category: 'customers', version: 1, updatedAt: '2026-08-13', featured: true, requires: ['customers', 'quotes'],
     description: 'Every lead and quote in flight, each with the one thing to do next.',
     permissions: ['customers:read', 'quotes:read', 'invoices:read', 'jobs:read', 'messages:read'],
     keywords: 'sales deals leads opportunities funnel stages next action follow up won lost' },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
+    sidebarSecondary: true,
     category: 'customers', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
     description: 'Sites and service locations, with measurements and notes.',
     permissions: ['properties:read', 'properties:write', 'customers:read'],
@@ -153,6 +159,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     permissions: ['invoices:read', 'invoices:write', 'customers:read', 'messages:send'],
     keywords: 'billing bills receivables owed' },
   { key: 'payments',   label: 'Payments',   href: '/dashboard/payments',   icon: Wallet,
+    sidebarSecondary: true,
     category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['invoices'],
     description: 'The money ledger — every payment, refund and dispute.',
     permissions: ['payments:read', 'payments:write', 'invoices:read'],
@@ -161,6 +168,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // the P&L reads the payments ledger for its top line, so Accounting without
   // Payments would report cost with no revenue to weigh it against.
   { key: 'accounting', label: 'Accounting', href: '/dashboard/accounting', icon: Calculator,
+    sidebarSecondary: true,
     category: 'money', version: 1, updatedAt: '2026-07-16', requires: ['payments'],
     description: 'Expenses, vendors and what\'s actually left after the work.',
     permissions: ['expenses:read', 'expenses:write', 'payments:read'],
@@ -171,6 +179,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
     permissions: ['messages:read', 'messages:send', 'customers:read'],
     keywords: 'inbox sms email texts leads conversations' },
   { key: 'equipment',  label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench,
+    sidebarSecondary: true,
     category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The gear that does the work — tracking and upkeep.',
     permissions: ['equipment:read', 'equipment:write'],
@@ -185,12 +194,14 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // describe. It reads invoices and payments too, but degrades honestly without
   // them (invoiced and collected simply stay at zero, which is the truth).
   { key: 'sales',      label: 'Sales',      href: '/dashboard/sales',      icon: TrendingUp,
+    sidebarSecondary: true,
     category: 'growth', navigation: 'grow', version: 1, updatedAt: '2026-08-16', requires: ['quotes'],
     description: 'What you quoted, won, invoiced and actually collected — and which sources produced it.',
     whatsNew: 'Quoted, won, authorized, invoiced and collected are now five separate figures you can trace back to the quotes behind them.',
     permissions: ['quotes:read', 'invoices:read', 'payments:read', 'customers:read'],
     keywords: 'sales analytics revenue quoted won lost collected conversion win rate lead source attribution funnel forecast reporting' },
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
+    sidebarSecondary: true,
     category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',
     permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'],
