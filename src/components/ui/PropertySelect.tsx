@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { ensurePropertyForCustomer } from '@/lib/customers'
@@ -61,14 +61,16 @@ export function PropertySelect({
   const selected = value ? properties.find(p => p.id === value) ?? null : null
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
-  const [hi, setHi] = useState(0)
+  const [hiKey, setHiKey] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [newAddr, setNewAddr] = useState('')
   const [parsed, setParsed] = useState<ParsedAddress | null>(null)
   const [saving, setSaving] = useState(false)
   const [addErr, setAddErr] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
-  const inputId = label ? `prop-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined
+  const listRef = useRef<HTMLDivElement>(null)
+  const inputId = useId()
+  const listId = `${inputId}-list`
 
   const canAdd = !!customerId && !!onCreated
 
@@ -122,6 +124,34 @@ export function PropertySelect({
     ...matches.map(p => ({ type: 'property' as const, p })),
     ...(canAdd ? [{ type: 'add' as const }] : []),
   ]
+  const rowKey = (r: Row) => r.type === 'property' ? `property-${r.p.id}` : r.type
+  const optionId = (r: Row) => `${listId}-${encodeURIComponent(rowKey(r))}`
+  // A refreshed/reordered list must keep the same entity active. A removed row
+  // leaves no active option until navigation resumes, never a different address.
+  const hi = hiKey === null ? (rows.length ? 0 : -1) : rows.findIndex(r => rowKey(r) === hiKey)
+  const activeId = open && hi >= 0 ? optionId(rows[hi]) : undefined
+  const firstKey = rows.length ? rowKey(rows[0]) : null
+  useEffect(() => {
+    // Pin the first highlighted row too, before any arrow or pointer movement.
+    if (open && hiKey === null && firstKey !== null) setHiKey(firstKey)
+  }, [open, hiKey, firstKey])
+
+  useEffect(() => {
+    const list = listRef.current
+    const active = activeId ? document.getElementById(activeId) : null
+    if (!list || !active || !list.contains(active)) return
+    // Keep scrolling inside this list; moving the page/modal can hide Save.
+    const top = active.offsetTop
+    const bottom = top + active.offsetHeight
+    if (top < list.scrollTop) list.scrollTop = top
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
+  }, [activeId, hi, rows.length, place.maxHeight, place.side])
+
+  function move(direction: 1 | -1) {
+    if (!rows.length) return
+    const next = hi < 0 ? 0 : Math.min(Math.max(hi + direction, 0), rows.length - 1)
+    setHiKey(rowKey(rows[next]))
+  }
 
   function choose(i: number) {
     const r = rows[i]
@@ -135,9 +165,9 @@ export function PropertySelect({
 
   function onKeyDown(e: React.KeyboardEvent) {
     // Opening suggestions must not also submit the surrounding job form.
-    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); setOpen(true); setHi(0); return }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, rows.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
+    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); setOpen(true); setHiKey(null); return }
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1) }
     else if (e.key === 'Enter' && open) { e.preventDefault(); choose(hi) }
   }
 
@@ -199,10 +229,15 @@ export function PropertySelect({
           autoFocus={autoFocus}
           role="combobox"
           aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          aria-activedescendant={activeId}
+          aria-autocomplete="list"
+          aria-label={label ? undefined : 'Property'}
           value={query}
           placeholder={properties.length ? placeholder : canAdd ? 'No properties yet — add one' : 'No properties on file'}
-          onChange={e => { setQuery(e.target.value); setOpen(true); setHi(0) }}
-          onFocus={e => { setOpen(true); setHi(0); e.currentTarget.select() }}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setHiKey(null) }}
+          onFocus={e => { setOpen(true); setHiKey(null); e.currentTarget.select() }}
+          onClick={e => { if (!open) { setOpen(true); setHiKey(null); e.currentTarget.select() } }}
           onKeyDown={onKeyDown}
           className={cn(
             // text-base on mobile stops iOS zooming the page on focus — same as CustomerPicker.
@@ -220,7 +255,7 @@ export function PropertySelect({
           <ChevronDown className="w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         )}
         {open && (
-          <div role="listbox" aria-label={label ? `${label} options` : 'Properties'}
+          <div ref={listRef} id={listId} role="listbox" aria-label={label ? `${label} options` : 'Properties'}
             data-eq-dropdown
             style={dropdownStyle(place)}
             className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
@@ -230,8 +265,9 @@ export function PropertySelect({
               </p>
             ) : rows.map((r, i) => (
               r.type === 'property' ? (
-                <button key={r.p.id} type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
+                <button key={r.p.id} type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
                   <Home className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-ink truncate">{r.p.address}</span>
@@ -245,14 +281,16 @@ export function PropertySelect({
                   {value === r.p.id && <Check className="w-4 h-4 text-accent-text shrink-0" />}
                 </button>
               ) : r.type === 'none' ? (
-                <button key="none" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors text-ink-muted', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
+                <button key="none" type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors text-ink-muted', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
                   {noneLabel}
                   {value === '' && <Check className="w-4 h-4 text-accent-text shrink-0 ml-auto" />}
                 </button>
               ) : (
-                <button key="add" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
+                <button key="add" type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
                   <Plus className="w-3.5 h-3.5 shrink-0" /> Add a new property
                 </button>
               )

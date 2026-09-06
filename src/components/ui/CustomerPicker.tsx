@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { displayAddress } from '@/lib/customers'
 // See lib/dropdownPlacement — an unbounded downward list covered the fixed
@@ -39,13 +39,15 @@ export function CustomerPicker({
   const selected = value && value !== MANUAL ? customers.find(c => c.id === value) ?? null : null
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
-  const [hi, setHi] = useState(0)
+  const [hiKey, setHiKey] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   // The input's wrapper — boxRef also holds the label, which the list is not
   // anchored to.
   const anchorRef = useRef<HTMLDivElement>(null)
   const place = useDropdownPlacement(anchorRef, open)
-  const inputId = label ? label.toLowerCase().replace(/\s+/g, '-') : undefined
+  const inputId = useId()
+  const listId = `${inputId}-list`
 
   // Keep the input text in sync with the externally-selected customer while the menu
   // is closed (e.g. the "likely match — Use them" button sets customer_id directly).
@@ -87,6 +89,35 @@ export function CustomerPicker({
     ...matches.map(c => ({ type: 'customer' as const, c })),
     ...(allowManual ? [{ type: 'manual' as const }] : []),
   ]
+  const rowKey = (r: (typeof rows)[number]) => r.type === 'customer' ? `customer-${r.c.id}` : 'manual'
+  const optionId = (r: (typeof rows)[number]) => `${listId}-${encodeURIComponent(rowKey(r))}`
+  // Keep the same entity active if a background refresh reorders the list. If
+  // it disappears, Enter must not silently pick its replacement at that index.
+  const hi = hiKey === null ? (rows.length ? 0 : -1) : rows.findIndex(r => rowKey(r) === hiKey)
+  const activeId = open && hi >= 0 ? optionId(rows[hi]) : undefined
+  const firstKey = rows.length ? rowKey(rows[0]) : null
+  useEffect(() => {
+    // Pin the first highlighted row too, before any arrow or pointer movement.
+    if (open && hiKey === null && firstKey !== null) setHiKey(firstKey)
+  }, [open, hiKey, firstKey])
+
+  useEffect(() => {
+    const list = listRef.current
+    const active = activeId ? document.getElementById(activeId) : null
+    if (!list || !active || !list.contains(active)) return
+    // Scroll only the suggestion list: scrollIntoView also moves the surrounding
+    // form/modal and can pull its Save action out of view.
+    const top = active.offsetTop
+    const bottom = top + active.offsetHeight
+    if (top < list.scrollTop) list.scrollTop = top
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
+  }, [activeId, hi, rows.length, place.maxHeight, place.side])
+
+  function move(direction: 1 | -1) {
+    if (!rows.length) return
+    const next = hi < 0 ? 0 : Math.min(Math.max(hi + direction, 0), rows.length - 1)
+    setHiKey(rowKey(rows[next]))
+  }
 
   function choose(i: number) {
     const r = rows[i]
@@ -105,9 +136,9 @@ export function CustomerPicker({
     // let the key keep going, so Enter also triggered the form's implicit submit —
     // in the quote builder that saved a half-built quote from the customer field.
     // A combobox owns Enter; the form gets it from the Save button.
-    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); setOpen(true); setHi(0); return }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, rows.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
+    if (!open && (e.key === 'ArrowDown' || e.key === 'Enter')) { e.preventDefault(); setOpen(true); setHiKey(null); return }
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1) }
     else if (e.key === 'Enter' && open) { e.preventDefault(); choose(hi) }
   }
 
@@ -124,10 +155,15 @@ export function CustomerPicker({
           autoFocus={autoFocus}
           role="combobox"
           aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          aria-activedescendant={activeId}
+          aria-autocomplete="list"
+          aria-label={label ? undefined : 'Customer'}
           value={query}
           placeholder={value === MANUAL ? 'Entering details manually below' : placeholder}
-          onChange={e => { setQuery(e.target.value); setOpen(true); setHi(0) }}
-          onFocus={e => { setOpen(true); setHi(0); e.currentTarget.select() }}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setHiKey(null) }}
+          onFocus={e => { setOpen(true); setHiKey(null); e.currentTarget.select() }}
+          onClick={e => { if (!open) { setOpen(true); setHiKey(null); e.currentTarget.select() } }}
           onKeyDown={onKeyDown}
           className={cn(
             'w-full bg-bg-tertiary border rounded-xl pl-9 pr-9 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all',
@@ -144,7 +180,7 @@ export function CustomerPicker({
           <ChevronDown className="w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         )}
         {open && (
-          <div role="listbox" aria-label={label ? `${label} options` : 'Customers'}
+          <div ref={listRef} id={listId} role="listbox" aria-label={label ? `${label} options` : 'Customers'}
             data-eq-dropdown
             style={dropdownStyle(place)}
             className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
@@ -152,8 +188,9 @@ export function CustomerPicker({
               <p className="px-3.5 py-2.5 text-sm text-ink-faint">{query.trim() ? `No customers match “${query.trim()}”.` : 'No customers yet — add one to start a conversation.'}</p>
             ) : rows.map((r, i) => (
               r.type === 'customer' ? (
-                <button key={r.c.id} type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
+                <button key={r.c.id} type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 transition-colors', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
                   <User className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block text-ink truncate">{r.c.name}</span>
@@ -162,8 +199,9 @@ export function CustomerPicker({
                   {value === r.c.id && <Check className="w-4 h-4 text-accent-text shrink-0" />}
                 </button>
               ) : (
-                <button key="manual" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface-raised')}>
+                <button key="manual" type="button" id={optionId(r)} role="option" aria-selected={i === hi} tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()} onPointerMove={() => setHiKey(rowKey(r))} onClick={() => choose(i)}
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface-raised' : 'hover:bg-surface-raised')}>
                   {/* Name the action after what they typed — "Add 'Jane Smith' as a
                       new customer" says the typed name is KEPT, not thrown away. */}
                   <Plus className="w-3.5 h-3.5 shrink-0" /> {query.trim() ? <>Add &ldquo;{query.trim()}&rdquo; as a new customer</> : 'Enter manually'}

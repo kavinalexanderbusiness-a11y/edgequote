@@ -248,21 +248,49 @@ for (const name of ['CustomerPicker', 'PropertySelect']) {
   const source = read(`src/components/ui/${name}.tsx`)
   const body = source.match(/function onKeyDown\(e: React\.KeyboardEvent\) \{([\s\S]*?)\n  \}/)?.[1]
   if (!body) throw new Error(`Missing ${name} keyboard handler`)
-  const run = new Function('open', 'setOpen', 'setHi', 'rows', 'choose', 'e', body)
+  const run = new Function('open', 'setOpen', 'setHiKey', 'move', 'choose', 'e', 'hi', body)
   for (const key of ['Enter', 'ArrowDown']) {
-    let prevented = false, opened = false, highlight = -1, choices = 0
-    run(false, (value: boolean) => { opened = value }, (value: number) => { highlight = value }, [{}], () => { choices++ }, {
+    let prevented = false, opened = false, highlight: string | null | undefined, choices = 0
+    run(false, (value: boolean) => { opened = value }, (value: string | null) => { highlight = value }, () => {}, () => { choices++ }, {
       key, preventDefault() { prevented = true },
-    })
-    check(`${name}: closed ${key} opens suggestions without implicit submit/scroll`, prevented && opened && highlight === 0 && choices === 0)
+    }, -1)
+    check(`${name}: closed ${key} opens suggestions without implicit submit/scroll`, prevented && opened && highlight === null && choices === 0)
   }
   let picked = -1, prevented = false
   // The open handler reads the highlighted index from component state.
-  const chooseOpen = new Function('open', 'setOpen', 'setHi', 'rows', 'choose', 'e', 'hi', body)
-  chooseOpen(true, () => {}, () => {}, [{}, {}], (index: number) => { picked = index }, {
+  run(true, () => {}, () => {}, () => {}, (index: number) => { picked = index }, {
     key: 'Enter', preventDefault() { prevented = true },
   }, 1)
   check(`${name}: open Enter still chooses the highlighted row`, prevented && picked === 1)
+
+  // Run the real identity derivation, initial pin effect and choose handler with
+  // reordered/removed fixture rows. The active entity, not its index, is stable.
+  const keyExpr = source.match(/const rowKey = .* => (.*)/)?.[1]
+  const hiExpr = source.match(/const hi = (.*)/)?.[1]
+  const pinBody = source.slice(source.indexOf('const firstKey =')).match(/useEffect\(\(\) => \{([\s\S]*?)\n  \}, \[open, hiKey, firstKey\]\)/)?.[1]
+  const chooseBody = source.match(/function choose\(i: number\) \{([\s\S]*?)\n  \}/)?.[1]
+  if (!keyExpr || !hiExpr || !pinBody || !chooseBody) throw new Error(`Missing ${name} selection contract`)
+  const rowKey = new Function('r', `return ${keyExpr}`)
+  const indexFor = new Function('rows', 'hiKey', 'rowKey', `return ${hiExpr}`)
+  const pin = new Function('open', 'hiKey', 'firstKey', 'setHiKey', pinBody)
+  const choose = new Function('rows', 'onChange', 'onManual', 'setQuery', 'setOpen', 'setAdding', 'setNewAddr', 'setAddErr', 'query', 'MANUAL', 'i', chooseBody)
+  const rows = name === 'CustomerPicker'
+    ? ['a', 'b', 'c'].map(id => ({ type: 'customer', c: { id, name: id } }))
+    : ['a', 'b', 'c'].map(id => ({ type: 'property', p: { id, address: id } }))
+  for (const start of [0, 1]) {
+    let activeKey: string | null = start === 0 ? null : rowKey(rows[start])
+    pin(true, activeKey, rowKey(rows[0]), (key: string) => { activeKey = key })
+    for (const removed of [false, true]) {
+      const refreshed = removed ? rows.filter((_, i) => i !== start) : [...rows].reverse()
+      let selected: string | undefined
+      const index = indexFor(refreshed, activeKey, rowKey)
+      const commit = (i: number) => choose(refreshed, (id: string) => { selected = id }, undefined,
+        () => {}, () => {}, () => {}, () => {}, () => {}, '', '__manual', i)
+      run(true, () => {}, () => {}, () => {}, commit, { key: 'Enter', preventDefault() {} }, index)
+      check(`${name}: ${start === 0 ? 'initial' : 'moved'} highlight ${removed ? 'removal refuses a replacement' : 'reorder keeps the entity'}`,
+        removed ? selected === undefined && index === -1 : selected === ['a', 'b'][start])
+    }
+  }
 }
 
 {
