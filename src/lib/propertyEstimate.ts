@@ -2,7 +2,8 @@ import { pricePlans, type PricedPlan, type ServicePricingPlan } from '@/lib/meas
 import { M2_TO_SQFT, M_TO_FT } from '@/lib/measure/geometry'
 
 export type AreaUnit = 'sqft' | 'sqm'
-export type AreaPart = { id: string; label: string; mode: 'area' | 'rectangle'; area: string; length: string; width: string; unit: AreaUnit; excluded: boolean }
+export type AreaPart = { id: string; label: string; mode: 'area' | 'rectangle'; area: string; length: string; width: string; unit: AreaUnit; excluded: boolean;
+  imageBasis?: { pixelCount: number; referencePixels: number; referenceFeet: number; imageWidth: number; imageHeight: number } }
 export type AreaResult = { sqft: number | null; included: number; excluded: number; problem: string | null }
 
 export function newAreaPart(id: string, excluded = false): AreaPart {
@@ -50,7 +51,7 @@ export function displayPartInput(part: AreaPart, field: 'area' | 'length' | 'wid
 }
 
 export function editPartInput(part: AreaPart, field: 'area' | 'length' | 'width', input: string, unit: AreaUnit): AreaPart {
-  return { ...part, area: displayPartInput(part, 'area', unit), length: displayPartInput(part, 'length', unit), width: displayPartInput(part, 'width', unit), unit, [field]: input }
+  return { ...part, area: displayPartInput(part, 'area', unit), length: displayPartInput(part, 'length', unit), width: displayPartInput(part, 'width', unit), unit, [field]: input, imageBasis: undefined }
 }
 
 /** The Price Book remains the only money engine. A reviewed area is required even for flat plans. */
@@ -60,5 +61,5 @@ export function propertyEstimatePlans(plans: ServicePricingPlan[], area: AreaRes
 
 export const AUTOMATIC_MEASUREMENT = {
   available: false,
-  message: 'Automatic lawn and driveway detection is not connected yet. Enter your measured areas to calculate an estimate.',
+  message: 'Address-only lawn and driveway detection is not available. Use your own overhead image for assisted selection, or enter measured areas.',
 } as const

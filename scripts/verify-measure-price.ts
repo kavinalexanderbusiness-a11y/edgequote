@@ -30,6 +30,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyPropertyEstimator } from './lib/propertyEstimator'
+import { verifySurfaceScan } from './lib/surfaceScan'
 
 import {
   PRICING_TERMS, termDef, isPricingTerm, measurementTypeFor, isMeasured,
@@ -401,6 +402,7 @@ check('an unpriced plan never becomes a $0 option',
   'p.price ?? 0 turns "no price configured" into a $0 the customer can accept — filter on price != null instead')
 
 verifyPropertyEstimator(check)
+verifySurfaceScan(check)
 
 console.log(failures === 0
   ? '\n✅ measure & price is honest: the Price Book decides, and an unknown price stays unknown\n'

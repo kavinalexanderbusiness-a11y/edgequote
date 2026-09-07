@@ -40,6 +40,7 @@ export const PROPOSED_PRODUCT_PLANS: readonly ProposedProductPlan[] = [
     status: 'proposed', price: null, billingCadence: null, scanAllowance: null, seatLimit: null,
     features: [
       { id: 'quote-options', label: 'Multiple quote options', availability: 'available' },
+      { id: 'image-scanner', label: 'Assisted image measurement', availability: 'available' },
       { id: 'automation', label: 'Follow-up and automation tools', availability: 'available' },
       { id: 'automatic-scans', label: 'Automatic lawn and driveway scans — allowance to be decided', availability: 'planned' },
     ],

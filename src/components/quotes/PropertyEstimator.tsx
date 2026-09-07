@@ -8,6 +8,7 @@ import { Button, ButtonLink } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
+import { SurfaceScanner, type ScannedArea } from '@/components/quotes/SurfaceScanner'
 import { getCacheGeneration, getCacheOwner, subscribeCacheOwner } from '@/lib/clientCache'
 import { defaultPlan, formatPlanPrice, measurementTypeFor } from '@/lib/measurePricing'
 import { M2_TO_SQFT } from '@/lib/measure/geometry'
@@ -45,6 +46,7 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
   const [term, setTerm] = useState('')
   const [reviewed, setReviewed] = useState<string | null>(null)
   const [hasEdited, setHasEdited] = useState(false)
+  const [scannerOpen, setScannerOpen] = useState(false)
   const areaServices = services.filter(service => measurementTypeFor(service) === 'area')
   const service = areaServices.find(item => item.id === serviceId)
   const area = estimateArea(parts)
@@ -65,8 +67,19 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
   }
   const addPart = (excluded: boolean) => {
     const id = String(nextId.current++)
-    setParts(current => [...current, { ...newAreaPart(id, excluded), unit }])
+    setParts(current => current.length >= 20 ? current : [...current, { ...newAreaPart(id, excluded), unit }])
   }
+  const useScannedArea = ({ sqft, ...imageBasis }: ScannedArea) => {
+    if (parts.length >= 20) return false
+    const id = String(nextId.current++)
+    const part = { ...newAreaPart(id), label: `${surface === 'driveway' ? 'Driveway' : surface === 'lawn' ? 'Lawn' : 'Area'} from image`, area: String(sqft), imageBasis }
+    setParts(current => current.length >= 20 ? current : current.length === 1 && !current[0].label.trim() && !current[0].excluded && !current[0].area.trim() && !current[0].length.trim() && !current[0].width.trim()
+      ? [part] : [...current, part])
+    setHasEdited(true); setScannerOpen(false)
+    return true
+  }
+  const imageParts = parts.filter(part => part.imageBasis).length
+  const source = imageParts === 0 ? 'measurements entered by you' : imageParts === parts.length ? 'reviewed image selection' : 'entered measurements and reviewed image selection'
 
   return <div className="max-w-5xl mx-auto space-y-6 pb-8">
     <PageHeader title="Property estimator" description={`${businessName} · Measure the work. See your price.`}
@@ -104,6 +117,8 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
               options={[{ value: 'sqft', label: 'Feet · sq ft' }, { value: 'sqm', label: 'Metres · m²' }]} /></div>
           </div>
           <p className="text-xs text-ink-muted">Use your own measurements. Include each area once; subtract areas you won’t service.</p>
+          {scannerOpen ? <SurfaceScanner onUse={useScannedArea} onClose={() => setScannerOpen(false)} canApply={parts.length < 20} />
+            : <Button variant="secondary" disabled={parts.length >= 20} onClick={() => setScannerOpen(true)}>Scan an overhead image</Button>}
           <div className="space-y-3">
             {parts.map((part, index) => <fieldset key={part.id} className="rounded-xl border border-border p-4 space-y-3">
               <legend className="px-1 text-xs font-semibold text-ink-muted">{part.excluded ? 'Exclusion' : 'Area'} {index + 1}</legend>
@@ -116,7 +131,7 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
                 </Button>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Select label={`Section ${index + 1} measurement`} value={part.mode} onChange={event => updatePart(part.id, p => ({ ...p, mode: event.target.value as AreaPart['mode'] }))}
+                <Select label={`Section ${index + 1} measurement`} value={part.mode} onChange={event => updatePart(part.id, p => ({ ...p, mode: event.target.value as AreaPart['mode'], imageBasis: undefined }))}
                   options={[{ value: 'area', label: 'Enter area' }, { value: 'rectangle', label: 'Length × width' }]} />
                 <Select label={`Section ${index + 1} treatment`} value={part.excluded ? 'exclude' : 'include'} onChange={event => updatePart(part.id, p => ({ ...p, excluded: event.target.value === 'exclude' }))}
                   options={[{ value: 'include', label: 'Include' }, { value: 'exclude', label: 'Subtract' }]} />
@@ -127,6 +142,7 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
                 : <div className="grid grid-cols-2 gap-3">{(['length', 'width'] as const).map(field => <Input key={field}
                     label={`Section ${index + 1} ${field} (${lengthLabel})`} inputMode="decimal" maxLength={24}
                     value={displayPartInput(part, field, unit)} onChange={event => updatePart(part.id, p => editPartInput(p, field, event.target.value, unit))} />)}</div>}
+              {part.imageBasis && <p className="text-xs text-ink-muted">Reviewed image selection · {part.imageBasis.pixelCount.toLocaleString('en-CA')} pixels · reference {part.imageBasis.referenceFeet.toLocaleString('en-CA', { maximumFractionDigits: 2 })} ft. Editing the measurement replaces this image basis.</p>}
             </fieldset>)}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -149,7 +165,7 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
             <p className="text-xs text-ink-muted">Net service area</p>
             <p className="text-3xl font-bold tracking-tight text-ink mt-1">{area.sqft === null ? '—' : number(area.sqft)} <span className="text-sm font-medium text-ink-muted">{areaLabel}</span></p>
             {area.sqft !== null && <p className="text-xs text-ink-muted mt-2">{number(area.included)} included − {number(area.excluded)} excluded</p>}
-            <p className="text-xs text-ink-faint mt-2">Source: measurements entered by you.</p>
+            <p className="text-xs text-ink-faint mt-2">Source: {source}.</p>
           </div>
           {!service && <p className="text-sm text-ink-muted">Choose a service to see your configured prices.</p>}
           {service && area.sqft === null && <p className="text-sm text-ink-muted">Complete the measurements to calculate this estimate.</p>}
