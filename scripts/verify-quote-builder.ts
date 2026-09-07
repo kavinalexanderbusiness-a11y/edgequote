@@ -522,6 +522,7 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
   function host(code = source, stored: string | null = bytes) {
     const storage = new Map<string, string>(stored ? [['eq:autosave:quote:new', stored]] : [])
     const slots: any[] = []
+    const queuedStates = new Map<number, unknown>()
     const effects = new Map<number, { deps?: unknown[]; cleanup?: () => void }>()
     const timers = new Map<number, { at: number; fn: () => void }>()
     let cursor = 0, dirty = false, now = 1000, timerId = 0
@@ -531,8 +532,9 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
         const i = cursor++
         if (!(i in slots)) slots[i] = initial
         return [slots[i], (next: unknown) => {
-          const value = typeof next === 'function' ? next(slots[i]) : next
-          if (!Object.is(slots[i], value)) { slots[i] = value; dirty = true }
+          const previous = queuedStates.has(i) ? queuedStates.get(i) : slots[i]
+          const value = typeof next === 'function' ? next(previous) : next
+          if (!Object.is(previous, value)) { queuedStates.set(i, value); dirty = true }
         }]
       },
       useRef(current: unknown) { const i = cursor++; return slots[i] ?? (slots[i] = { current }) },
@@ -556,15 +558,18 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
       setTimeout(fn: () => void, ms: number) { const id = ++timerId; timers.set(id, { at: now + ms, fn }); return id },
       clearTimeout(id: number) { timers.delete(id) },
     })
-    const render = (next = options) => {
+    const flush = () => { for (const [i, value] of queuedStates) slots[i] = value; queuedStates.clear() }
+    const render = (next = options, publishState = true) => {
       options = next
+      if (publishState) flush()
       let rounds = 0
       do {
         if (++rounds > 20) throw new Error('Autosave did not settle')
         cursor = 0; dirty = false; pending = []
         result = mod.exports.useAutosave(options)
         for (const effect of pending) effect()
-      } while (dirty)
+        if (publishState) flush()
+      } while (dirty && publishState)
       return result
     }
     const advance = (ms = 1000) => {
@@ -582,6 +587,15 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
   function exercise(code = source) {
     const outcomes: [string, boolean][] = []
     const expect = (name: string, condition: boolean) => outcomes.push([name, condition])
+    // A form can publish a mount-time value before the storage-read state update
+    // is visible. Replaying that ordering must not leave an overwrite timer alive.
+    const mounting = host(code)
+    mounting.render({ key: 'quote:new', value: blank, canReplaceDraft: false }, false)
+    mounting.render({ key: 'quote:new', value: initialized, canReplaceDraft: false }, false)
+    const recovered = mounting.render()
+    mounting.advance()
+    expect('storage is protected before recovery state is published', mounting.stored() === bytes && recovered.draft?.notes === old.value.notes)
+    mounting.unmount()
     for (const customer of ['A', 'B']) {
       const h = host(code)
       h.render({ key: 'quote:new', value: blank, canReplaceDraft: false })
@@ -628,7 +642,8 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
   }
   for (const [name, passed] of exercise()) check(name, passed)
   for (const [name, before, after] of [
-    ['removing recovery protection', 'if (draft !== null && !canReplaceDraft) return', ''],
+    ['removing recovery protection', 'if (pendingDraft.current && !canReplaceDraft) return', ''],
+    ['using delayed state for mount-time protection', 'if (pendingDraft.current && !canReplaceDraft) return', 'if (draft !== null && !canReplaceDraft) return'],
     ['dropping the intent dependency', '[serialized, enabled, canReplaceDraft]', '[serialized, enabled]'],
     ['changing the legacy default', 'canReplaceDraft = true', 'canReplaceDraft = false'],
   ]) {

@@ -65,6 +65,9 @@ export function useAutosave<T>({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountSerialized = useRef<string | null>(null)
+  // Storage is read in an effect. Protect it immediately, before setDraft's
+  // rerender, so another mount-time effect cannot schedule an older snapshot.
+  const pendingDraft = useRef(false)
   const baselineMs = toMs(baselineUpdatedAt)
 
   // On mount (per key): surface a restorable draft if one survived AND it's newer than
@@ -79,6 +82,7 @@ export function useAutosave<T>({
           if (baselineMs && parsed.savedAt <= baselineMs) {
             window.localStorage.removeItem(storeKey(key))   // server is newer — never offer
           } else if (!isEmpty || !isEmpty(parsed.value)) {
+            pendingDraft.current = true
             setDraft(parsed.value)
             setSavedAt(parsed.savedAt)
           }
@@ -97,7 +101,8 @@ export function useAutosave<T>({
     if (mountSerialized.current === null) { mountSerialized.current = serialized; return }
     if (serialized === mountSerialized.current) return     // unchanged from baseline
     // Automatic fills are not permission to discard an owner's recoverable work.
-    if (draft !== null && !canReplaceDraft) return
+    if (pendingDraft.current && !canReplaceDraft) return
+    pendingDraft.current = false
     // The user is actively editing → their input is now the newest data. Stop offering
     // an older restore prompt so restoring can't clobber what they just typed.
     if (draft !== null) setDraft(null)
@@ -125,12 +130,14 @@ export function useAutosave<T>({
   }, [])
 
   const clear = useCallback(() => {
+    pendingDraft.current = false
     if (typeof window !== 'undefined') { try { window.localStorage.removeItem(storeKey(key)) } catch { /* ignore */ } }
     setDraft(null); setSavedAt(null); setStatus('idle')
   }, [key])
 
   const restore = useCallback((): T | null => {
     const v = draft
+    pendingDraft.current = false
     setDraft(null)
     // Keep the stored copy until the next save cycle — the form now holds it anyway.
     return v
