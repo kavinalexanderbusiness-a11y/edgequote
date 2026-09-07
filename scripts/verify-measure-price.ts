@@ -29,6 +29,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { verifyPropertyEstimator } from './lib/propertyEstimator'
 
 import {
   PRICING_TERMS, termDef, isPricingTerm, measurementTypeFor, isMeasured,
@@ -398,6 +399,8 @@ check('basisText never becomes a customer-facing option description',
 check('an unpriced plan never becomes a $0 option',
   !/price:\s*[a-zA-Z_$][\w$]*\.price\s*\?\?\s*0/.test(builderSrc),
   'p.price ?? 0 turns "no price configured" into a $0 the customer can accept — filter on price != null instead')
+
+verifyPropertyEstimator(check)
 
 console.log(failures === 0
   ? '\n✅ measure & price is honest: the Price Book decides, and an unknown price stays unknown\n'

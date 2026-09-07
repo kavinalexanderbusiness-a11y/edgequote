@@ -129,9 +129,12 @@ export default function QuotesPage() {
         title="Quotes"
         description={loading ? 'Loading your quotes…' : loadError && quotes.length === 0 ? 'Quote count unavailable' : `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
         action={
-          <ButtonLink href="/dashboard/quotes/new">
-            <Plus className="w-4 h-4" /> New quote
-          </ButtonLink>
+          <div className="flex flex-wrap gap-2">
+            <ButtonLink href="/dashboard/quotes/estimate" variant="secondary">Property estimate</ButtonLink>
+            <ButtonLink href="/dashboard/quotes/new">
+              <Plus className="w-4 h-4" /> New quote
+            </ButtonLink>
+          </div>
         }
       />
       {!loading && quotes.length > 0 && (
