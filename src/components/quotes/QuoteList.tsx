@@ -396,7 +396,7 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
         <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">
           {/* Follow-up queue toggle — FilterPill geometry, but it keeps its amber
               identity (amber = follow-up everywhere), so no accent pill-glow. */}
-          {followUpCount > 0 && (
+          {(followUpOnly || followUpCount > 0) && (
             <FilterPill active={followUpOnly} onClick={() => setFollowUpOnly(v => !v)}
               className={followUpOnly ? '!bg-amber-400 !border-amber-400' : '!border-amber-500/30 !bg-amber-500/10 !text-amber-400 hover:!bg-amber-500/20'}>
               <Bell className="w-3 h-3" /> Follow up <span className="tabular-nums">({followUpCount})</span>

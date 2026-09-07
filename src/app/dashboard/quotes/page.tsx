@@ -127,7 +127,7 @@ export default function QuotesPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Quotes"
-        description={loading ? 'Loading your quotes…' : `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
+        description={loading ? 'Loading your quotes…' : loadError && quotes.length === 0 ? 'Quote count unavailable' : `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
         action={
           <ButtonLink href="/dashboard/quotes/new">
             <Plus className="w-4 h-4" /> New quote
