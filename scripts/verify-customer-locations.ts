@@ -19,6 +19,9 @@
 
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
+import { isMeasurementHandoffCompatible } from '../src/lib/measurementHandoff'
 
 const root = join(__dirname, '..')
 const read = (p: string) => readFileSync(join(root, p), 'utf8')
@@ -141,6 +144,103 @@ check('JobForm still auto-selects the single property silently',
 check('the location page shows no unlanded systems as placeholders',
   !/coming soon/i.test(PROP_DETAIL),
   'documents/assets are not on main — a fake section is a promise the app cannot keep')
+
+// A retained measurement is older than the customer/property explicitly chosen
+// for this quote. Execute the actual mount effect so a correct but unused helper
+// cannot pass while the page still adopts the incompatible payload.
+console.log('\nMeasurement handoff — preserve the explicit quote destination:')
+const pageAst = ts.createSourceFile('page.tsx', QUOTE_NEW, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+let adoptionEffect = ''
+let compatibilityCall = ''
+function findAdoption(node: ts.Node) {
+  if (ts.isCallExpression(node) && node.expression.getText(pageAst) === 'useEffect'
+    && node.arguments[0]?.getText(pageAst).includes("getItem('eq_measurement')")) {
+    adoptionEffect = node.arguments[0].getText(pageAst)
+  }
+  if (ts.isCallExpression(node) && node.expression.getText(pageAst) === 'isMeasurementHandoffCompatible') {
+    compatibilityCall = node.getText(pageAst)
+  }
+  ts.forEachChild(node, findAdoption)
+}
+findAdoption(pageAst)
+check('actual measurement adoption effect and compatibility call are present', !!adoptionEffect && !!compatibilityCall)
+
+type HandoffCase = { name: string; search: string; payload?: unknown; raw?: string; accepted: boolean }
+const measured = { customerId: 'customer-a', propertyId: 'property-a', address: '10 Example Road', sqft: 1200,
+  jobPrice: 87, suggestedPrice: 91, sections: { front: 1200 }, confidence: 'fixture' }
+const handoffCases: HandoffCase[] = [
+  { name: 'no handoff preserves explicit destination', search: '?customer=customer-b', accepted: false },
+  { name: 'direct measurement retains every payload value', search: '?from=measurement', payload: measured, accepted: true },
+  { name: 'legacy handoff needs no new route marker', search: '', payload: measured, accepted: true },
+  { name: 'matching customer and property', search: '?customer=customer-a&property=property-a', payload: measured, accepted: true },
+  { name: 'matching customer alone', search: '?customer=customer-a', payload: measured, accepted: true },
+  { name: 'matching property alone', search: '?property=property-a', payload: measured, accepted: true },
+  { name: 'different customer rejects all measurement defaults', search: '?customer=customer-b', payload: measured, accepted: false },
+  { name: 'different property for same customer rejects all defaults', search: '?customer=customer-a&property=property-b', payload: measured, accepted: false },
+  { name: 'property-only mismatch rejects entire handoff', search: '?property=property-b', payload: measured, accepted: false },
+  { name: 'measurement marker cannot bypass a customer conflict', search: '?from=measurement&customer=customer-b', payload: measured, accepted: false },
+  { name: 'nullable legacy identity without explicit selection', search: '?from=measurement', payload: { ...measured, customerId: null, propertyId: null }, accepted: true },
+  { name: 'matching customer allows unknown unselected property', search: '?customer=customer-a', payload: { ...measured, propertyId: null }, accepted: true },
+  { name: 'matching property allows unknown unselected customer', search: '?property=property-a', payload: { ...measured, customerId: null }, accepted: true },
+  { name: 'empty URL selection preserves legacy semantics', search: '?customer=&property=', payload: measured, accepted: true },
+  { name: 'malformed JSON is consumed without adoption', search: '?customer=customer-a', raw: '{broken', accepted: false },
+]
+for (const field of ['customerId', 'propertyId'] as const) {
+  const query = field === 'customerId' ? '?customer=customer-a' : '?property=property-a'
+  for (const value of [undefined, null, '', '   ', 42, true, ['customer-a'], { id: 'customer-a' }]) {
+    handoffCases.push({ name: `${field} ${JSON.stringify(value) ?? 'missing'} cannot satisfy an explicit selection`,
+      search: query, payload: { ...measured, [field]: value }, accepted: false })
+  }
+  handoffCases.push({ name: `malformed unselected ${field} is not coerced`, search: '',
+    payload: { ...measured, [field]: 42 }, accepted: false })
+}
+for (const payload of [null, [], 42, 'customer-a']) {
+  handoffCases.push({ name: `non-object payload ${JSON.stringify(payload)} is rejected`, search: '?customer=customer-a', payload, accepted: false })
+}
+
+type Compatibility = typeof isMeasurementHandoffCompatible
+function runAdoption(test: HandoffCase, effect = adoptionEffect, compatible: Compatibility = isMeasurementHandoffCompatible) {
+  const raw = test.raw ?? (test.payload === undefined ? null : JSON.stringify(test.payload))
+  const store = new Map<string, string>(raw == null ? [] : [['eq_measurement', raw]])
+  const adopted: unknown[] = []
+  const removed: string[] = []
+  const unexpected = () => { throw new Error('Unexpected non-measurement handoff operation') }
+  const code = ts.transpileModule(`const adopt = ${effect}; adopt()`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
+  }).outputText
+  runInNewContext(code, {
+    window: { location: { search: test.search }, sessionStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      removeItem: (key: string) => { removed.push(key); store.delete(key) },
+    } },
+    URLSearchParams, isMeasurementHandoffCompatible: compatible,
+    setMeasurement: (payload: unknown) => adopted.push(payload),
+    LEAD_PREFILL_KEY: 'fixture-lead', setLead: unexpected,
+    readRenewalPrefill: () => null, clearRenewalPrefill: unexpected, setRenewal: unexpected,
+  }, { timeout: 1000 })
+  return { adopted, remaining: store.get('eq_measurement') ?? null, removed, raw }
+}
+function adoptionPasses(test: HandoffCase, effect = adoptionEffect, compatible: Compatibility = isMeasurementHandoffCompatible): boolean {
+  try {
+    const result = runAdoption(test, effect, compatible)
+    return JSON.stringify(result.adopted) === JSON.stringify(test.accepted ? [test.payload] : [])
+      && result.remaining === null
+      && JSON.stringify(result.removed) === JSON.stringify(result.raw == null ? [] : ['eq_measurement'])
+  } catch { return false }
+}
+if (adoptionEffect && compatibilityCall) {
+  for (const test of handoffCases) check(test.name, adoptionPasses(test))
+  const rejectedCustomer = handoffCases.find(test => test.name === 'different customer rejects all measurement defaults')!
+  const rejectedProperty = handoffCases.find(test => test.name === 'different property for same customer rejects all defaults')!
+  check('[mutation] removing customer compatibility is detected', !adoptionPasses(rejectedCustomer, adoptionEffect,
+    (payload, selection) => isMeasurementHandoffCompatible(payload, { propertyId: selection.propertyId })))
+  check('[mutation] removing property compatibility is detected', !adoptionPasses(rejectedProperty, adoptionEffect,
+    (payload, selection) => isMeasurementHandoffCompatible(payload, { customerId: selection.customerId })))
+  check('[mutation] bypassing the actual adoption guard is detected',
+    !adoptionPasses(rejectedCustomer, adoptionEffect.replace(compatibilityCall, 'true')))
+  check('[mutation] leaving a rejected handoff in storage is detected',
+    !adoptionPasses(rejectedCustomer, adoptionEffect.replace("window.sessionStorage.removeItem('eq_measurement')", 'undefined')))
+}
 
 console.log(
   failures === 0

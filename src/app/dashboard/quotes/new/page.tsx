@@ -22,6 +22,7 @@ import { clearRenewalPrefill, readRenewalPrefill, type RenewalPrefillPayload } f
 import { toast } from '@/lib/toast'
 import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 import { depositRuleFromForm } from '@/lib/payments/depositGate'
+import { isMeasurementHandoffCompatible } from '@/lib/measurementHandoff'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -89,7 +90,14 @@ export default function NewQuotePage() {
     if (typeof window === 'undefined') return
     const raw = window.sessionStorage.getItem('eq_measurement')
     if (raw) {
-      try { setMeasurement(JSON.parse(raw) as MeasurementPayload) } catch { /* ignore */ }
+      try {
+        const parsed: unknown = JSON.parse(raw)
+        const destination = new URLSearchParams(window.location.search)
+        // Reject the whole old handoff, including its address and measurements.
+        if (isMeasurementHandoffCompatible(parsed, {
+          customerId: destination.get('customer'), propertyId: destination.get('property'),
+        })) setMeasurement(parsed as MeasurementPayload)
+      } catch { /* ignore */ }
       window.sessionStorage.removeItem('eq_measurement')
     }
     // Adopt a website-lead handoff. NOT consumed on read any more: the destructive
