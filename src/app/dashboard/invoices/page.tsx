@@ -720,7 +720,14 @@ export default function InvoicesPage() {
 
       {loading ? (
         <SkeletonRows count={6} />
-      ) : loadError ? null : invoices.length === 0 ? (
+      ) : loadError ? null : invoices.length === 0 && !knownInvoiceCount ? (
+        currentInvoiceRead && invoiceRead.pending ? <SkeletonRows count={6} /> : (
+          <InlineEmpty>
+            Invoice list unavailable.{' '}
+            <button type="button" onClick={() => { setLoading(true); fetchInvoices() }} className="font-semibold text-accent-text hover:underline">Retry</button>
+          </InlineEmpty>
+        )
+      ) : invoices.length === 0 ? (
         <EmptyState icon={FileText} title="No invoices yet"
           description={<>Completing a recurring visit drafts one automatically — or open an accepted quote and click <span className="font-medium text-ink">Convert to Invoice</span>.</>} />
       ) : visible.length === 0 ? (
