@@ -17,6 +17,7 @@
 // Style follows the other verify scripts: deterministic, no network, no DB.
 
 import { baselineSql } from './lib/schema-source'
+import { verifyCustomerAutosaveIntegration } from './lib/autosaveOwnership'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { displayAddress, normalizeTags, findCustomerMatch, phoneMatches, phoneSearchDigits, addressMatches } from '../src/lib/customers'
@@ -196,5 +197,8 @@ check('inbound webhook no longer inlines its own digit strip',
   /input\.phone \?\? ''\)\.replace\(\/\\D/.test(inbound), false)
 
 // ═══════════════════════════════════════════════════════════════════════════
+H('8. New customer drafts use the verified owner; edit callers keep their contract')
+verifyCustomerAutosaveIntegration((name, passed) => check(name, passed, true))
+
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)

@@ -18,7 +18,9 @@ type Cache = {
   getCacheOwner(): string | null; getCacheGeneration(): number
   subscribeCacheOwner(fn: () => void): () => void
 }
-const read = (file: string) => readFileSync(join(process.cwd(), file), 'utf8')
+// Windows checkouts may use CRLF; exact multiline mutations must test the same
+// source on either platform without changing or writing application bytes.
+const read = (file: string) => readFileSync(join(process.cwd(), file), 'utf8').replace(/\r\n/g, '\n')
 const compiled = new Map<string, string>()
 function compile(source: string): string {
   if (!compiled.has(source)) compiled.set(source, ts.transpileModule(source, {
@@ -321,5 +323,131 @@ export function verifyAutosaveOwnership(check: Check): void {
     runInNewContext(expression.getText(qb), { isEdit: false }) === 'verified-owner' &&
     runInNewContext(expression.getText(qb), { isEdit: true }) === undefined)
   const customer = read('src/components/customers/CustomerForm.tsx')
-  check('CustomerForm remains on the existing default contract', customer.includes('useAutosave<CustomerFormValues>') && !/ownership\s*:/.test(customer))
+  check('CustomerForm creation opts in while edits retain the default contract',
+    customerOptions(customer, { isEdit: false }, {}).ownership === 'verified-owner' &&
+    customerOptions(customer, {}, {}).ownership === 'verified-owner' &&
+    customerOptions(customer, { isEdit: true }, {}).ownership === undefined)
+}
+
+// Consumer integration: evaluate the actual call-site props and entire form
+// options expression, then pass those options to the same production-hook host.
+// This complements (does not repeat) the owner/generation matrix above.
+function customerOptionsAst(source: string) {
+  const ast = ts.createSourceFile('CustomerForm.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const options: ts.ObjectLiteralExpression[] = []
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useAutosave' &&
+        node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) options.push(node.arguments[0])
+    ts.forEachChild(node, visit)
+  }
+  visit(ast)
+  if (options.length !== 1) throw new Error('Expected the one CustomerForm autosave options object')
+  return { ast, options: options[0] }
+}
+
+function customerOptions(source: string, props: Record<string, unknown>, value: Record<string, unknown>): Options {
+  const { ast, options } = customerOptionsAst(source)
+  return runInNewContext(`(${options.getText(ast)})`, {
+    autosaveKey: undefined, isEdit: undefined, baselineUpdatedAt: undefined, ...props, formValues: value,
+  }) as Options
+}
+
+function customerCallerProps(source: string, context: Record<string, unknown>): Record<string, unknown> {
+  const ast = ts.createSourceFile('customer-page.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const forms: ts.JsxSelfClosingElement[] = []
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'CustomerForm') forms.push(node)
+    ts.forEachChild(node, visit)
+  }
+  visit(ast)
+  if (forms.length !== 1) throw new Error('Expected one actual CustomerForm call in each supported page')
+  const props: Record<string, unknown> = {}
+  for (const member of forms[0].attributes.properties) {
+    if (ts.isJsxSpreadAttribute(member)) throw new Error('Review customer props spread before assuming its ownership flags')
+    const key = member.name.getText(ast)
+    if (!['isEdit', 'autosaveKey', 'baselineUpdatedAt'].includes(key)) continue
+    if (!member.initializer) props[key] = true
+    else if (ts.isJsxExpression(member.initializer) && member.initializer.expression) {
+      props[key] = runInNewContext(member.initializer.expression.getText(ast), context)
+    } else if (ts.isStringLiteral(member.initializer)) props[key] = member.initializer.text
+    else throw new Error(`Unsupported CustomerForm ${key} expression`)
+  }
+  return props
+}
+
+export function verifyCustomerAutosaveIntegration(check: Check): void {
+  const sources: Sources = { autosave: read('src/hooks/useAutosave.ts'), owner: read('src/hooks/useAutosaveOwner.ts'), cache: read('src/lib/clientCache.ts') }
+  const source = read('src/components/customers/CustomerForm.tsx')
+  const page = read('src/app/dashboard/customers/page.tsx')
+  const detail = read('src/app/dashboard/customers/[id]/page.tsx')
+  const createProps = customerCallerProps(page, { editing: null })
+  const editRecord = { id: 'existing-customer', updated_at: '1970-01-01T00:00:00.001Z' }
+  const editProps = [
+    ['Customers-page edit', customerCallerProps(page, { editing: editRecord })],
+    ['customer-profile edit', customerCallerProps(detail, { customer: editRecord })],
+  ] as const
+  const initial = { name: '', email: '', phone: '', notes: '', tags: [], sms_opt_in: false, email_opt_in: false }
+  const aValue = { ...initial, name: 'A synthetic contact', email: 'a@example.test', notes: 'A private intake wording' }
+  const bValue = { ...initial, name: 'B synthetic contact', phone: '4035550102', notes: 'B own intake wording' }
+  const legacyValue = { ...initial, name: 'Unattributed old contact', notes: 'Do not assign this legacy wording' }
+  const plain = (value: object) => JSON.stringify({ value, savedAt: 100 })
+  const stamped = (owner: string, value: object) => JSON.stringify({ owner, value, savedAt: 100 })
+  const oldKey = 'eq:autosave:customer:new', aKey = 'eq:autosave:owner:owner-A:customer:new', bKey = 'eq:autosave:owner:owner-B:customer:new'
+  const exerciseConsumer = (formSource: string): [string, boolean][] => {
+    const outcomes: [string, boolean][] = [], expect = (label: string, passed: boolean) => outcomes.push([label, passed])
+    const options = (props: Record<string, unknown>, value: Record<string, unknown>) => customerOptions(formSource, props, value)
+    {
+      const h = host(sources, { [oldKey]: plain(legacyValue), [aKey]: stamped('owner-A', aValue), [bKey]: stamped('owner-B', bValue) }); h.adopt('owner-A')
+      const a = h.form(options(createProps, initial))
+      expect('actual Add customer props restore only the current owner contact', JSON.stringify(a.result.restore()) === JSON.stringify(aValue))
+      expect('create consumer never accesses or changes the legacy customer slot', !h.io.some(x => x.actor === 'hook' && x.key === oldKey) && h.storage.get(oldKey) === plain(legacyValue))
+      h.signOut(); h.adopt('owner-B'); h.flush()
+      const b = h.form(options(createProps, initial))
+      expect('same actual create consumer recovers B own contact after account change', JSON.stringify(b.result.restore()) === JSON.stringify(bValue))
+      h.close()
+    }
+    {
+      const h = host(sources, { [oldKey]: plain(legacyValue) })
+      const f = h.form(options(createProps, initial))
+      expect('actual create consumer is dormant without verified ownership', f.result.draft === null && f.result.restore() === null && h.io.length === 0)
+      h.close()
+    }
+    {
+      const h = host(sources, { [oldKey]: plain(legacyValue) }); h.adopt('owner-A')
+      const f = h.form(options(createProps, initial)); f.render(options(createProps, aValue)); h.advance()
+      const raw = h.storage.get(aKey), written = raw ? JSON.parse(raw) : null
+      expect('actual create key and options persist exact contact values with owner stamp', written?.owner === 'owner-A' && JSON.stringify(written.value) === JSON.stringify(aValue) && h.storage.get(oldKey) === plain(legacyValue))
+      h.close()
+    }
+    {
+      const h = host(sources, { [aKey]: stamped('owner-A', aValue) }); h.adopt('owner-A')
+      expect('omitted isEdit still has the established create meaning', JSON.stringify(h.form(options({}, initial)).result.restore()) === JSON.stringify(aValue))
+      h.close()
+    }
+    for (const [label, props] of editProps) {
+      const key = 'eq:autosave:customer:existing-customer', h = host(sources, { [key]: plain(aValue) }); h.adopt('owner-A')
+      const f = h.form(options(props, initial))
+      expect(`${label} retains original unowned recovery through its actual props`, JSON.stringify(f.result.restore()) === JSON.stringify(aValue))
+      f.render(options(props, bValue)); h.advance()
+      const raw = h.storage.get(key), written = raw ? JSON.parse(raw) : null
+      expect(`${label} retains its existing key and unstamped write contract`, written && !('owner' in written) && JSON.stringify(written.value) === JSON.stringify(bValue))
+      h.close()
+    }
+    return outcomes
+  }
+  for (const [label, passed] of exerciseConsumer(source)) check(label, passed)
+  const { ast, options } = customerOptionsAst(source)
+  const ownership = options.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(ast) === 'ownership')
+  if (!ownership || !ts.isPropertyAssignment(ownership)) throw new Error('Customer ownership mutation target missing')
+  for (const [label, replacement] of [
+    ['removing create ownership', '...{}'],
+    ['inverting create/edit ownership', "ownership: isEdit ? 'verified-owner' : undefined"],
+    ['broadening ownership to edits', "ownership: 'verified-owner'"],
+  ]) {
+    const mutant = source.slice(0, ownership.getStart(ast)) + replacement + source.slice(ownership.getEnd())
+    // Every observation below comes from the real hook's recovery/storage
+    // output, not from a substring or a direct comparison of the option itself.
+    const failed = exerciseConsumer(mutant).filter(([, passed]) => !passed)
+    check(`customer consumer mutation caught: ${label}`, failed.length > 0, failed.map(([name]) => name).slice(0, 2).join('; '))
+  }
 }

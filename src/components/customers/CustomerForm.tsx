@@ -96,6 +96,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
   const formValues = watch()
   const autosave = useAutosave<CustomerFormValues>({
     key: autosaveKey || `customer:${isEdit ? 'edit' : 'new'}`,
+    ownership: isEdit ? undefined : 'verified-owner',
     value: formValues,
     baselineUpdatedAt: baselineUpdatedAt ?? null,
     isEmpty: v => !v.name?.trim() && !v.email?.trim() && !v.phone?.trim(),
