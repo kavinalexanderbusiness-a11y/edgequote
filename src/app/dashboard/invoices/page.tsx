@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { pageAll } from '@/lib/supabase/pageAll'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
-import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { cacheLease, getCacheGeneration, isCurrentLease, readCache, subscribeCacheOwner, writeCache, CACHE_TTL, type CacheLease } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment } from '@/types'
 import { InvoiceDetail } from '@/components/payments/InvoiceDetail'
 import { financiallyLocked } from '@/lib/payments/invoiceActions'
@@ -54,6 +54,14 @@ export default function InvoicesPage() {
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Recheck read provenance when the existing account/cache generation changes.
+  useSyncExternalStore(subscribeCacheOwner, getCacheGeneration, () => 0)
+  const invoiceReadSerial = useRef(0)
+  const invoiceReadActive = useRef(false)
+  const knownInvoiceSnapshot = useRef<{ lease: CacheLease | null; rows: Invoice[] } | null>(null)
+  const [invoiceRead, setInvoiceRead] = useState<{
+    requestId: number; lease: CacheLease | null; rows: Invoice[] | null; pending: boolean
+  }>({ requestId: 0, lease: null, rows: null, pending: true })
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
@@ -147,6 +155,9 @@ export default function InvoicesPage() {
 
   async function fetchInvoices() {
     const lease = cacheLease()
+    const requestId = ++invoiceReadSerial.current
+    setInvoiceRead({ requestId, lease, rows: null, pending: true })
+    let completeRows: Invoice[] | null = null
     try {
       // Local session read — no auth round-trip before the RLS-scoped fetch batch.
       const { data: { session } } = await supabase.auth.getSession()
@@ -194,9 +205,14 @@ export default function InvoicesPage() {
       const byInv: Record<string, Payment[]> = {}
       for (const p of payRes.rows) { if (p.invoice_id) (byInv[p.invoice_id] ||= []).push(p) }
       setPaymentsByInvoice(byInv)
+      if (lease?.owner === user.id) completeRows = iRes.rows
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load invoices.')
     } finally {
+      if (invoiceReadActive.current && requestId === invoiceReadSerial.current && isCurrentLease(lease)) {
+        if (completeRows) knownInvoiceSnapshot.current = { lease, rows: completeRows }
+        setInvoiceRead({ requestId, lease, rows: completeRows, pending: false })
+      }
       setLoading(false)
     }
   }
@@ -232,9 +248,15 @@ export default function InvoicesPage() {
   // Instant revisit: paint the cached list immediately (no skeleton), then revalidate in
   // the background — realtime keeps it live. Reuses the shared clientCache SWR module.
   useEffect(() => {
+    invoiceReadActive.current = true
     const cached = readCache<Invoice[]>('invoices-list', CACHE_TTL.short)
+    if (cached) knownInvoiceSnapshot.current = { lease: cacheLease(), rows: cached }
     if (cached) { setInvoices(cached); setLoading(false) }
     fetchInvoices()
+    return () => {
+      invoiceReadActive.current = false
+      invoiceReadSerial.current += 1
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live: when the Stripe webhook flips an invoice to paid (or status changes in
@@ -543,12 +565,20 @@ export default function InvoicesPage() {
   // full surface). Everything else is the list. Derived from the SAME `focused`
   // set `byStatus` already uses, so the two can't disagree about what's open.
   const detailMode = !!focus && focused !== null && focused.length > 0
+  // A cached screen or an older response cannot establish that a linked invoice
+  // is missing. Bind that claim to the latest completed read and its exact rows.
+  const currentInvoiceRead = invoiceReadActive.current
+    && invoiceRead.requestId === invoiceReadSerial.current && isCurrentLease(invoiceRead.lease)
+  const authoritativeInvoices = currentInvoiceRead && !invoiceRead.pending && invoiceRead.rows === invoices
+  const knownInvoiceCount = invoices.length > 0 || (knownInvoiceSnapshot.current?.rows === invoices
+    && isCurrentLease(knownInvoiceSnapshot.current.lease))
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Invoices"
-        description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
+        description={knownInvoiceCount ? `${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`
+          : loading || (currentInvoiceRead && invoiceRead.pending) ? 'Loading your invoices…' : 'Invoice count unavailable'}
         action={
           <Button onClick={() => setShowNew(true)}>
             <Plus className="w-4 h-4" /> New invoice
@@ -672,7 +702,7 @@ export default function InvoicesPage() {
           {/* A link to an invoice that has since been deleted used to fall through
               to the full list with a lone "Show all" — indistinguishable from
               having opened the list on purpose. Say which one is missing. */}
-          {!loading && !detailMode && (
+          {!loading && !loadError && authoritativeInvoices && !detailMode && (
             <span className="text-xs text-ink-faint">
               {focus.invoice ? `${focus.invoice} isn’t here any more` : 'That job has no invoice yet'} — showing everything instead.
             </span>
