@@ -147,7 +147,7 @@ export default function CustomersPage() {
 
     if (error || !newCustomer) {
       toast.error('Could not create the customer: ' + (error?.message ?? 'please try again.'))
-      return
+      return false
     }
     const c = newCustomer as Customer
 
