@@ -229,7 +229,7 @@ export function Sidebar() {
             className="hidden lg:flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface-raised transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Search className="w-4 h-4" />
             <span className="flex-1 text-left">Search</span>
-            <Kbd className="hidden lg:inline">⌘K</Kbd>
+            <Kbd className="hidden lg:inline">Ctrl/⌘ K</Kbd>
           </button>
           {/* Home first and ungrouped — it is not a category, it is where you land. */}
           {dailyNav.filter(m => m.href === '/dashboard').map(m => navLink(m, onNavigate))}

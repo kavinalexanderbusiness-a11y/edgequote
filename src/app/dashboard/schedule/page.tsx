@@ -2780,11 +2780,11 @@ export default function SchedulePage() {
     else setCursor(c => dir === 1 ? addDays(c ?? cursor, 1) : subDays(c ?? cursor, 1))
   }
 
-  function openNewJob(date: Date) {
+  const openNewJob = useCallback((date: Date) => {
     setEditing(null)
     setFormDate(format(date, 'yyyy-MM-dd'))
     setShowForm(true)
-  }
+  }, [])
 
   // Day view leads with the WEEKDAY — it's the datum you're paging by.
   const headingLabel =
@@ -2824,6 +2824,28 @@ export default function SchedulePage() {
     estimateDeepLinkUsed.current = true
     setEstimateDialog({ date: dayISO, existing: null })
   }, [estimateParam, dayISO, tenantTimeReady])
+
+  // The global Create sheet requests a blank visit explicitly. Remove that
+  // request after handling it so closing the form does not replay it, while a
+  // later Create click on this same page can start another visit.
+  const newJobParam = searchParams.get('new')
+  const newJobDeepLinkUsed = useRef(false)
+  useEffect(() => {
+    if (newJobParam !== '1') {
+      newJobDeepLinkUsed.current = false
+      return
+    }
+    if (!tenantTimeReady || newJobDeepLinkUsed.current) return
+    newJobDeepLinkUsed.current = true
+    const remaining = new URLSearchParams(searchParams.toString())
+    remaining.delete('new')
+    const query = remaining.toString()
+    router.replace(`/dashboard/schedule${query ? `?${query}` : ''}${window.location.hash}`, { scroll: false })
+
+    // Existing drafts and contextual links keep ownership of their forms.
+    if (showForm || editing || estimateDialog || quoteId || customerParam || propertyParam || jobParam || focusRec || estimateParam || panelParam) return
+    openNewJob(parseScheduleDate(dayParam) ?? cursor)
+  }, [newJobParam, tenantTimeReady, searchParams, router, showForm, editing, estimateDialog, quoteId, customerParam, propertyParam, jobParam, focusRec, estimateParam, panelParam, dayParam, cursor, openNewJob])
 
   const setEstimateStatus = useCallback(async (item: EstimateAppointment, to: ScheduleItem['status']) => {
     const err = await estimates.setStatus(item.id, to)

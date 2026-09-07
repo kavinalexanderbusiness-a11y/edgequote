@@ -51,8 +51,11 @@ console.log('\n═══ ONE Quick Add, and it knows where it is ═══')
     global.map(a => a.key).join(',') === 'quote,visit,customer',
     global.map(a => a.key).join(',') || '(nothing)')
   check('…and every one of them CREATES something',
-    global.every(a => /\/new|\?new=1|\/dashboard\/schedule$/.test(a.href)),
+    global.every(a => /\/new|\?new=1/.test(a.href)),
     `${global.map(a => a.href).join(' · ')} — a create sheet that navigates teaches nobody what + means`)
+  check('the blank Visit door explicitly requests a new job',
+    global.find(a => a.key === 'visit')?.href === '/dashboard/schedule?new=1',
+    global.find(a => a.key === 'visit')?.href ?? '(no visit action)')
   check('…and none of them claims a context it does not have',
     global.every(a => !a.contextual && !/customer=/.test(a.href)))
 

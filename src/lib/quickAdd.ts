@@ -132,7 +132,7 @@ export function quickAddActions(ctx: QuickAddContext, enabled: ReadonlySet<strin
   if (enabled.has('schedule')) {
     out.push({
       key: 'visit', label: 'Visit', sub: forWho ? `Book work ${forWho}` : 'Book work in',
-      href: `/dashboard/schedule${qs({ customer: cust.id, property: cust.propertyId })}`,
+      href: `/dashboard/schedule${qs({ customer: cust.id, property: cust.propertyId, new: !cust.id && !cust.propertyId ? '1' : undefined })}`,
       icon: 'visit', moduleKey: 'schedule', contextual: !!cust.id,
     })
   }

@@ -49,7 +49,7 @@ export default function HelpPage() {
     <div>
       <PageHeader
         title="Help"
-        description="How this app actually behaves — including the parts that are deliberately surprising."
+        description="Find help with customers, quotes, scheduling and getting paid."
       />
 
       <div className="space-y-4">
@@ -110,8 +110,10 @@ export default function HelpPage() {
             <div>
               <p className="text-sm font-medium text-ink">Still stuck?</p>
               <p className="text-xs text-ink-muted mt-0.5">
-                If the answer isn&rsquo;t here, it&rsquo;s our gap and not yours. Tell us what you were trying to do and
-                we&rsquo;ll both fix the app and write the missing page.
+                Tell us what you were trying to do. For help using EdgeHQ, email{' '}
+                <a href="mailto:kavin.alexander.business@gmail.com" className="font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  kavin.alexander.business@gmail.com
+                </a>.
               </p>
             </div>
           </CardBody>
