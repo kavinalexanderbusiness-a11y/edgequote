@@ -800,17 +800,11 @@ export function QuoteBuilder({
   // here: it is a lookup, not a setting — nothing about it is stored on the
   // quote, and listing it as "not specified" would invent a field that a reader
   // would then go looking for on the saved row.
-  // The two notes are summarised SEPARATELY and by audience. A single "Notes
-  // added" behind a shut drawer cannot tell an owner whether the words waiting
-  // in there are the ones the customer receives or the ones they must not — and
-  // that is the only question worth answering about a note from the outside.
-  const hasCustomerNote = !!(notes && String(notes).trim())
+  // Only the internal note is hidden here; the customer note is visible above.
   const hasInternalNote = !!(internalNotes && String(internalNotes).trim())
   const moreSummary = [
     Number(travelFee) > 0 ? `Travel ${formatCurrency(Number(travelFee))}` : (includeTravel ? 'No travel fee' : 'Travel absorbed'),
-    hasCustomerNote ? 'Customer note' : null,
-    hasInternalNote ? 'Internal note' : null,
-    !hasCustomerNote && !hasInternalNote ? 'No notes' : null,
+    hasInternalNote ? 'Internal note' : 'No internal note',
     // The scheduling-deposit rule, stated on the shut door. Silent when off —
     // "no deposit" is the default, not an unanswered question.
     depositType === 'percent' && Number(depositValue) > 0 ? `${Number(depositValue)}% deposit to book`
@@ -2331,6 +2325,64 @@ export function QuoteBuilder({
           )}
 
 
+          <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            {/* ⚠️ THE TRAP THIS CLOSES. This field has ALWAYS been customer-facing
+                — QuotePDF prints it in a "Notes" box and get_portal_data selects
+                it — and its placeholder read "Job-specific details, access
+                instructions, gate codes…". That is an invitation to type
+                operational secrets into the one box on a quote the customer
+                receives. Nobody had taken it yet (all 82 live quote notes read as
+                real scope of work), so this is a latent trap being closed rather
+                than a leak being cleaned up. The field keeps its meaning and its
+                data; the words stop lying about who reads them. */}
+            <Textarea label={AUDIENCE_COPY.customer.label} hint={AUDIENCE_COPY.customer.help}
+              placeholder="Disposal and cleanup are included · existing stepping stones will be reused"
+              {...register('notes')} />
+            {aiScope.enabled === true && (
+              <div className="mt-2 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <AssistButton
+                  label={notes && String(notes).trim() ? 'Polish' : 'Write'}
+                  busyLabel="Writing…"
+                  busy={aiScope.running}
+                  title="Turns the services on this quote (and your rough notes) into customer-ready scope-of-work text — never touches pricing"
+                  onClick={async () => {
+                    const prior = String(notes || '')
+                    aiScope.clearError()
+                    setValue('notes', '')
+                    const full = await aiScope.run({
+                      task: 'quote_scope',
+                      // Lets the scope reference real history ("the same work we did in
+                      // April"). Facts are re-derived server-side from this id, as ever.
+                      customerId: watch('customer_id') || undefined,
+                      serviceType: watch('service_type') || undefined,
+                      services: (watchedServices || []).map(s => ({ name: s?.service_type, notes: s?.notes })),
+                      propertyId: defaultPropertyId || undefined,
+                      measuredSqft: measuredSqft || undefined,
+                      address: address || undefined,
+                      draft: prior,
+                    }, { onDelta: d => setValue('notes', String(watch('notes') || '') + d) })
+                    if (full === null) { setValue('notes', prior); return }
+                    setAiScopePrior(prior)
+                    // This field's replace is destructive and had no way back —
+                    // the composer had undo, the two Notes fields did not.
+                    if (prior.trim()) toast.undo('Replaced your notes.', () => { setValue('notes', prior); setAiScopePrior(null) })
+                  }} />
+                {aiScope.running && <AiStop onClick={aiScope.cancel} />}
+                {!aiScope.running && aiScopePrior !== null && (
+                  <AiUndo onClick={() => { setValue('notes', aiScopePrior); setAiScopePrior(null) }} />
+                )}
+              </div>
+              <AiError message={aiScope.error} />
+              {!aiScope.running && aiScopePrior !== null && (
+                <AiNote caution={AI_CHECK_FIRST}
+                  explain="Written from this quote's line items and your notes on them, plus what you've done for this customer before. It never sees or states a price." />
+              )}
+              </div>
+            )}
+
+          </div>
+
           {/* ── More options — the set-it-and-forget-it end of a quote ──
               Travel, notes and scheduling were three separate drawers. Each is a
               thing an owner touches on the occasional quote, and three shut doors
@@ -2454,61 +2506,6 @@ export function QuoteBuilder({
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
               <FileText className="w-3.5 h-3.5" /> Notes
             </p>
-            {/* ⚠️ THE TRAP THIS CLOSES. This field has ALWAYS been customer-facing
-                — QuotePDF prints it in a "Notes" box and get_portal_data selects
-                it — and its placeholder read "Job-specific details, access
-                instructions, gate codes…". That is an invitation to type
-                operational secrets into the one box on a quote the customer
-                receives. Nobody had taken it yet (all 82 live quote notes read as
-                real scope of work), so this is a latent trap being closed rather
-                than a leak being cleaned up. The field keeps its meaning and its
-                data; the words stop lying about who reads them. */}
-            <Textarea label={AUDIENCE_COPY.customer.label} hint={AUDIENCE_COPY.customer.help}
-              placeholder="Disposal and cleanup are included · existing stepping stones will be reused"
-              {...register('notes')} />
-            {aiScope.enabled === true && (
-              <div className="mt-2 space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <AssistButton
-                  label={notes && String(notes).trim() ? 'Polish' : 'Write'}
-                  busyLabel="Writing…"
-                  busy={aiScope.running}
-                  title="Turns the services on this quote (and your rough notes) into customer-ready scope-of-work text — never touches pricing"
-                  onClick={async () => {
-                    const prior = String(notes || '')
-                    aiScope.clearError()
-                    setValue('notes', '')
-                    const full = await aiScope.run({
-                      task: 'quote_scope',
-                      // Lets the scope reference real history ("the same work we did in
-                      // April"). Facts are re-derived server-side from this id, as ever.
-                      customerId: watch('customer_id') || undefined,
-                      serviceType: watch('service_type') || undefined,
-                      services: (watchedServices || []).map(s => ({ name: s?.service_type, notes: s?.notes })),
-                      propertyId: defaultPropertyId || undefined,
-                      measuredSqft: measuredSqft || undefined,
-                      address: address || undefined,
-                      draft: prior,
-                    }, { onDelta: d => setValue('notes', String(watch('notes') || '') + d) })
-                    if (full === null) { setValue('notes', prior); return }
-                    setAiScopePrior(prior)
-                    // This field's replace is destructive and had no way back —
-                    // the composer had undo, the two Notes fields did not.
-                    if (prior.trim()) toast.undo('Replaced your notes.', () => { setValue('notes', prior); setAiScopePrior(null) })
-                  }} />
-                {aiScope.running && <AiStop onClick={aiScope.cancel} />}
-                {!aiScope.running && aiScopePrior !== null && (
-                  <AiUndo onClick={() => { setValue('notes', aiScopePrior); setAiScopePrior(null) }} />
-                )}
-              </div>
-              <AiError message={aiScope.error} />
-              {!aiScope.running && aiScopePrior !== null && (
-                <AiNote caution={AI_CHECK_FIRST}
-                  explain="Written from this quote's line items and your notes on them, plus what you've done for this customer before. It never sees or states a price." />
-              )}
-              </div>
-            )}
-
             {/* ⭐ THE PRIVATE HALF, AND WHY IT IS A SECOND FIELD RATHER THAN A
                 TOGGLE. Until now a quote had exactly ONE box, and it printed. An
                 owner with "don't go below $700" to record had nowhere to put it
