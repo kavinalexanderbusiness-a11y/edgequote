@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 // See lib/dropdownPlacement. This list had no height bound AT ALL — the only
 // one of the four — so it was the worst offender over the fixed Save bar.
@@ -23,6 +23,7 @@ interface AddressAutocompleteProps {
   onChange: (v: string) => void
   onSelect?: (parsed: ParsedAddress) => void
   placeholder?: string
+  maxLength?: number
   error?: string
   /** ReactNode to match Input/Select — the form primitives take the same shapes. */
   hint?: React.ReactNode
@@ -42,7 +43,7 @@ function newSession(): string {
 }
 
 export function AddressAutocomplete({
-  label, value, onChange, onSelect, placeholder, error, hint, bookingToken,
+  label, value, onChange, onSelect, placeholder, maxLength, error, hint, bookingToken,
 }: AddressAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([])
   const [open, setOpen] = useState(false)
@@ -57,9 +58,57 @@ export function AddressAutocomplete({
   // One Places session token spans a type→select round trip (Google bills it as a
   // single session), then rotates once a selection resolves its details.
   const sessionRef = useRef<string | null>(null)
-  // Guards against a slow earlier request overwriting a newer keystroke's results.
+  // One generation covers both predictions and selected-place details. Aborting
+  // saves work; the generation checks also protect against an already-read body.
   const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const requestRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(false)
+  const acknowledgedRef = useRef({ value, bookingToken })
+  const emittedValueRef = useRef<string | null>(null)
+  const latestPropsRef = useRef({ value, bookingToken })
+  latestPropsRef.current = { value, bookingToken }
+
+  const invalidateRequests = useCallback(() => {
+    seqRef.current++
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = null
+    requestRef.current?.abort()
+    requestRef.current = null
+  }, [])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false; invalidateRequests() }
+  }, [invalidateRequests])
+
+  useEffect(() => {
+    const previous = acknowledgedRef.current
+    // A normal controlled onChange acknowledgement belongs to the same intent.
+    // Prefills/resets and public booking-context changes do not start a lookup.
+    if (previous.bookingToken !== bookingToken ||
+      (previous.value !== value && value !== emittedValueRef.current)) {
+      invalidateRequests()
+      setSuggestions([]); setOpen(false); setLoadError(false)
+      sessionRef.current = null
+      emittedValueRef.current = null
+    }
+    acknowledgedRef.current = { value, bookingToken }
+    if (value === emittedValueRef.current) emittedValueRef.current = null
+  }, [value, bookingToken, invalidateRequests])
+
+  function isCurrent(seq: number, controller: AbortController) {
+    const latest = latestPropsRef.current
+    return mountedRef.current && seq === seqRef.current && !controller.signal.aborted &&
+      latest.bookingToken === bookingToken &&
+      (latest.value === acknowledgedRef.current.value || latest.value === emittedValueRef.current)
+  }
+
+  function emitValue(next: string) {
+    emittedValueRef.current = next
+    onChange(next)
+  }
+
   const boxRef = useRef<HTMLDivElement>(null)
   // The input's wrapper — boxRef also holds the label.
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -93,25 +142,33 @@ export function AddressAutocomplete({
   }, [])
 
   function handleInput(v: string) {
-    onChange(v)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (!v || v.trim().length < 3) { setSuggestions([]); setOpen(false); return }
+    invalidateRequests()
+    setSuggestions([]); setOpen(false); setLoadError(false)
+    emitValue(v)
+    if (!v || v.trim().length < 3 || !mountedRef.current) return
     if (!sessionRef.current) sessionRef.current = newSession()
-    const seq = ++seqRef.current
+    const sessionToken = sessionRef.current
+    const seq = seqRef.current
+    const controller = new AbortController()
+    requestRef.current = controller
     debounceRef.current = setTimeout(async () => {
+      debounceRef.current = null
+      if (!isCurrent(seq, controller)) return
       try {
         const res = await fetch('/api/places/autocomplete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: v, sessionToken: sessionRef.current, bookingToken }),
+          body: JSON.stringify({ input: v, sessionToken, bookingToken }),
+          signal: controller.signal,
         })
-        if (seq !== seqRef.current) return // a newer keystroke has already superseded this
+        if (!isCurrent(seq, controller)) return
         if (!res.ok) {
           setSuggestions([]); setOpen(false)
           if (res.status >= 500) setLoadError(true) // real misconfig, not a miss
           return
         }
         const { suggestions: list } = await res.json()
+        if (!isCurrent(seq, controller)) return
         const mapped: SuggestionItem[] = (list || [])
           .map((s: any) => ({ text: s.text || '', placeId: s.placeId || '' }))
           .filter((s: SuggestionItem) => s.text && s.placeId)
@@ -119,7 +176,9 @@ export function AddressAutocomplete({
         setOpen(mapped.length > 0)
         setHi(0) // reset the highlight to the top on every fresh result set
       } catch {
-        if (seq === seqRef.current) { setSuggestions([]); setOpen(false) }
+        if (isCurrent(seq, controller)) { setSuggestions([]); setOpen(false) }
+      } finally {
+        if (requestRef.current === controller) requestRef.current = null
       }
     }, 250)
   }
@@ -140,18 +199,26 @@ export function AddressAutocomplete({
   }
 
   async function choose(s: SuggestionItem) {
-    setOpen(false)
-    onChange(s.text)
+    invalidateRequests()
+    const seq = seqRef.current
+    const controller = new AbortController()
+    requestRef.current = controller
+    setSuggestions([]); setOpen(false)
+    emitValue(s.text)
     try {
+      if (!isCurrent(seq, controller)) return
       const res = await fetch('/api/places/details', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ placeId: s.placeId, sessionToken: sessionRef.current, bookingToken }),
+        signal: controller.signal,
       })
+      if (!isCurrent(seq, controller)) return
       if (!res.ok) throw new Error('details')
       const { place } = await res.json() as { place: ParsedAddress }
+      if (!isCurrent(seq, controller)) return
       const street = place.address || place.formatted || s.text
-      onChange(street)
+      emitValue(street)
       onSelect?.({
         address: street,
         city: place.city || '',
@@ -163,7 +230,11 @@ export function AddressAutocomplete({
       })
       sessionRef.current = newSession() // a resolved selection closes the billing session
     } catch {
-      onSelect?.({ address: s.text, city: '', province: '', postal: '', formatted: s.text, lat: null, lng: null })
+      if (isCurrent(seq, controller)) {
+        onSelect?.({ address: s.text, city: '', province: '', postal: '', formatted: s.text, lat: null, lng: null })
+      }
+    } finally {
+      if (requestRef.current === controller) requestRef.current = null
     }
   }
 
@@ -185,6 +256,7 @@ export function AddressAutocomplete({
           aria-activedescendant={open && suggestions.length > 0 ? optId(hi) : undefined}
           value={value}
           placeholder={placeholder}
+          maxLength={maxLength}
           onChange={(e) => handleInput(e.target.value)}
           onFocus={() => { if (suggestions.length) { setOpen(true); setHi(0) } }}
           onKeyDown={onKeyDown}
@@ -196,10 +268,10 @@ export function AddressAutocomplete({
           )}
         />
         {open && suggestions.length > 0 && (
-          <div id={listId} role="listbox" aria-label={label || 'Address suggestions'}
-            data-eq-dropdown
+          <div data-eq-dropdown
             style={dropdownStyle(place)}
-            className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop overflow-y-auto overscroll-contain">
+            className="absolute z-overlay w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl origin-top animate-pop flex flex-col overflow-hidden">
+            <div id={listId} role="listbox" aria-label={label || 'Address suggestions'} className="min-h-0 overflow-y-auto overscroll-contain">
             {suggestions.map((s, i) => (
               <button
                 key={i}
@@ -216,6 +288,11 @@ export function AddressAutocomplete({
                 <span className="truncate">{s.text}</span>
               </button>
             ))}
+            </div>
+            {/* Compact attribution stays visible while the predictions scroll. */}
+            <div className="shrink-0 border-t border-border px-3.5 py-1.5 text-right">
+              <span translate="no" className="font-body text-xs font-normal not-italic tracking-normal whitespace-nowrap text-white [[data-theme=light]_&]:text-[#1f1f1f]">Google Maps</span>
+            </div>
           </div>
         )}
       </div>

@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button, ButtonLink } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { Select } from '@/components/ui/Select'
 import { SurfaceScanner, type ScannedArea } from '@/components/quotes/SurfaceScanner'
 import { getCacheGeneration, getCacheOwner, subscribeCacheOwner } from '@/lib/clientCache'
@@ -94,9 +95,10 @@ function EstimatorWorkspace({ businessName, services, plans, loadError }: Proper
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] items-start">
       <div className="space-y-5 min-w-0">
         <Card className="p-5 space-y-4">
-          <h2 className="flex items-center gap-2 font-semibold text-ink"><Ruler className="w-4 h-4 text-accent-text" />1. Choose the work</h2>
-          <Input label="Property or job label" placeholder="Address or a name you’ll recognize" value={label} maxLength={200}
-            onChange={event => setLabel(event.target.value)} hint="Optional. Kept on this page only." />
+          <h2 className="flex items-center gap-2 font-semibold text-ink"><Ruler className="w-4 h-4 text-accent-text" />1. Find the property</h2>
+          <AddressAutocomplete label="Property address" placeholder="Start typing a street address" value={label} maxLength={200}
+            onChange={setLabel} onSelect={({ formatted, address }) => setLabel(formatted || address)}
+            hint="Optional. Finds the address; measurements are entered below." />
           <div className="grid gap-4 sm:grid-cols-2">
             <Select label="Area type" value={surface} onChange={event => setSurface(event.target.value)}
               options={[{ value: 'lawn', label: 'Lawn' }, { value: 'driveway', label: 'Driveway' }, { value: 'other', label: 'Other area' }]} />
