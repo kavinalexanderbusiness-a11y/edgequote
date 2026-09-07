@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -134,7 +134,9 @@ export function QuoteBuilder({
   // capacity bar and every scheduling engine read. Falls back to the shared 8h
   // default when settings haven't resolved, exactly as workdayMinutes defines.
   const workdayMin = workdayMinutes(settings?.daily_capacity_hours)
-  const { register, handleSubmit, watch, setValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
+  const [hasUserEdited, setHasUserEdited] = useState(false)
+  const markEdited = useCallback(() => setHasUserEdited(true), [])
+  const { register: registerField, handleSubmit, watch, setValue: setFormValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
         customer_id: defaultCustomerId || '',
@@ -204,6 +206,18 @@ export function QuoteBuilder({
       },
     })
 
+  // Only explicit edits may replace a recoverable draft. Initialization effects
+  // use setFormValue directly; registered inputs and owner commands use these
+  // wrappers. Opening a disclosure, focusing or searching a picker is not an edit.
+  const register: typeof registerField = (name, options) => {
+    const field = registerField(name, options)
+    return { ...field, onChange: event => { markEdited(); return field.onChange(event) } }
+  }
+  const setValue = useCallback<typeof setFormValue>((name, value, options) => {
+    markEdited()
+    setFormValue(name, value, options)
+  }, [markEdited, setFormValue])
+
   // Additional lines beyond the primary one. ONE field array holds both services
   // and materials — they are the same species of line (qty × unit_price through
   // the one quote-services engine) and a second array would mean a second sum.
@@ -238,6 +252,7 @@ export function QuoteBuilder({
   const autosave = useAutosave<QuoteFormValues>({
     key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
     value: formValues,
+    canReplaceDraft: hasUserEdited,
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
     // "Empty" has to mean empty. Additional service and material lines weren't
     // counted, so a quote whose content was its LINES ("Mulch, 6 yd, $55") looked
@@ -864,17 +879,17 @@ export function QuoteBuilder({
     if (!customerId || customerId === '__manual') return
     const customer = customers.find(c => c.id === customerId)
     if (customer) {
-      setValue('customer_name', customer.name)
+      setFormValue('customer_name', customer.name)
       if (!isEdit && customer.address) {
         const full = [customer.address, customer.city, customer.province].filter(Boolean).join(', ')
         const current = String(getValues('address') || '')
         if (!current.trim() || current === autoFilledAddress.current) {
-          setValue('address', full)
+          setFormValue('address', full)
           autoFilledAddress.current = full
         }
       }
     }
-  }, [customerId, customers, setValue, getValues, isEdit])
+  }, [customerId, customers, setFormValue, getValues, isEdit])
 
   // Pull the latest measurement recommendation for the relevant property — the
   // SPECIFIC property when one was requested (per-property Quote button), else the
@@ -913,10 +928,10 @@ export function QuoteBuilder({
       const lawn = Number(row?.lawn_sqft) || 0
       const currentSqft = Number(getValues('measured_sqft')) || 0
       if (!isEdit && lawn > 0 && (currentSqft === 0 || currentSqft === autoFilledSqft.current)) {
-        setValue('measured_sqft', lawn)
+        setFormValue('measured_sqft', lawn)
         autoFilledSqft.current = lawn
       } else if (!isEdit && lawn === 0 && currentSqft > 0 && currentSqft === autoFilledSqft.current) {
-        setValue('measured_sqft', 0)
+        setFormValue('measured_sqft', 0)
         autoFilledSqft.current = null
       }
       // Targeting a specific property → its address wins. Otherwise the primary
@@ -929,14 +944,14 @@ export function QuoteBuilder({
         const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
         const current = String(getValues('address') || '')
         if (full && (targetPropertyId || !current.trim() || current === autoFilledAddress.current)) {
-          setValue('address', full)
+          setFormValue('address', full)
           autoFilledAddress.current = full
         }
       }
     }
     load()
     return () => { active = false }
-  }, [customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setValue])
+  }, [customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setFormValue])
 
   // Same rule for the notes a template pre-fills. Changing service used to
   // REPLACE whatever was in the Notes field — including a scope the owner had
@@ -950,21 +965,21 @@ export function QuoteBuilder({
     if (!templateId) return
     const t = templates.find(s => s.id === templateId)
     if (t) {
-      setValue('service_type', t.name)
+      setFormValue('service_type', t.name)
       // Only an HOURLY template's rate is a labour rate — a per-sqft or
       // starting-from figure is a PRICE and must never become $/man-hour.
       if (t.pricing_display_type === 'hourly' || t.pricing_display_type === 'hourly_materials') {
-        setValue('rate', t.default_rate)
+        setFormValue('rate', t.default_rate)
       }
       if (!isEdit && t.default_description) {
         const current = String(getValues('notes') || '')
         if (!current.trim() || current === autoFilledNotes.current) {
-          setValue('notes', t.default_description)
+          setFormValue('notes', t.default_description)
           autoFilledNotes.current = t.default_description
         }
       }
     }
-  }, [templateId, templates, setValue, getValues, isEdit])
+  }, [templateId, templates, setFormValue, getValues, isEdit])
 
   // The recommendation stays live in the price field until the owner owns the
   // number. What changed: it can now be ABSENT. This effect used to run on mount
@@ -981,15 +996,15 @@ export function QuoteBuilder({
     // edit could remove without noticing what it was holding up.
     const price = serviceRec?.price ?? null
     if (price != null && price > 0) {
-      setValue('initial_price', price)
+      setFormValue('initial_price', price)
       setPriceOrigin('suggested')
     } else if (priceOrigin === 'suggested') {
       // BLANK, not 0: 'empty' means the field LOOKS empty (its documented contract),
       // not that it holds a zero the owner must delete before typing.
-      setValue('initial_price', BLANK)
+      setFormValue('initial_price', BLANK)
       setPriceOrigin('empty')
     }
-  }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setValue])
+  }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setFormValue])
 
   // Gated on tiers existing: with ZERO tiers configured (every first-run account),
   // suggestTravelFee's no-match fallback is { fee: 0, tierLabel: 'Unknown' }, which
@@ -1007,11 +1022,11 @@ export function QuoteBuilder({
 
   useEffect(() => {
     if (travelSuggestion?.isCustom) {
-      setValue('custom_travel_required', true)
+      setFormValue('custom_travel_required', true)
     } else if (distanceKm > 0) {
-      setValue('custom_travel_required', false)
+      setFormValue('custom_travel_required', false)
     }
-  }, [travelSuggestion, distanceKm, setValue])
+  }, [travelSuggestion, distanceKm, setFormValue])
 
   function applySuggestedTravel() {
     if (travelSuggestion && !travelSuggestion.isCustom && travelSuggestion.fee !== null) {
@@ -1418,7 +1433,7 @@ export function QuoteBuilder({
               {showCustomerPicker && (
                 <Controller name="customer_id" control={control}
                   render={({ field }) => (
-                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange}
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={value => { markEdited(); field.onChange(value) }}
                       // The typed search IS the new customer's name — carry it into
                       // the manual Name field instead of making the owner type it
                       // twice. Fill-when-empty only (the file's own overwrite rule):
@@ -1515,8 +1530,8 @@ export function QuoteBuilder({
                     // A hand-edited address ends the chip's authority — without this
                     // the picked chip stays lit (and keeps driving the measured
                     // price) while the field says somewhere else.
-                    onChange={v => { field.onChange(v); if (pickedPropertyId && v !== autoFilledAddress.current) setPickedPropertyId(null) }}
-                    onSelect={(p) => { field.onChange(p.formatted); if (pickedPropertyId) setPickedPropertyId(null); calculateDistance(p.formatted) }}
+                    onChange={v => { markEdited(); field.onChange(v); if (pickedPropertyId && v !== autoFilledAddress.current) setPickedPropertyId(null) }}
+                    onSelect={(p) => { markEdited(); field.onChange(p.formatted); if (pickedPropertyId) setPickedPropertyId(null); calculateDistance(p.formatted) }}
                     error={errors.address?.message}
                   />
                 )} />
@@ -1883,7 +1898,7 @@ export function QuoteBuilder({
                   {...register('initial_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
                 {/* Only offer "use the recommendation" when one actually exists. */}
                 {priceOrigin === 'manual' && serviceRec && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setPriceOrigin('empty')} className="mt-1.5">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => { markEdited(); setPriceOrigin('empty') }} className="mt-1.5">
                     Use suggested ({formatCurrency(serviceRec.price)})
                   </Button>
                 )}
@@ -2111,7 +2126,7 @@ export function QuoteBuilder({
                             control that deletes a priced line instantly. Padding gives
                             it a real hit area on a phone; the ring makes it reachable
                             by keyboard like every other control here. */}
-                        <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove service"
+                        <button type="button" onClick={() => { markEdited(); serviceLines.remove(i) }} aria-label="Remove service"
                           className="tap-target-y flex items-center justify-center -m-1 p-2 rounded-lg text-ink-faint hover:text-red-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -2179,7 +2194,7 @@ export function QuoteBuilder({
                               label="Duration"
                               workdayMin={workdayMin}
                               value={Number(field.value) > 0 ? Number(field.value) : null}
-                              onChange={m => field.onChange(m ?? '')}
+                              onChange={m => { markEdited(); field.onChange(m ?? '') }}
                             />
                           )} />
                         <p className="text-xs text-ink-faint -mt-1.5">Only affects scheduling — not the price.</p>
@@ -2196,6 +2211,7 @@ export function QuoteBuilder({
               <Button type="button" variant="secondary" size="sm"
                 onClick={() => {
                   const n = serviceLines.fields.length
+                  markEdited()
                   serviceLines.append(emptyServiceLine())
                   requestAnimationFrame(() => setFocus(`services.${n}.service_type`))
                 }}>
@@ -2232,7 +2248,7 @@ export function QuoteBuilder({
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Material {n + 1}</p>
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
-                        <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove material"
+                        <button type="button" onClick={() => { markEdited(); serviceLines.remove(i) }} aria-label="Remove material"
                           className="tap-target-y flex items-center justify-center -m-1 p-2 rounded-lg text-ink-faint hover:text-red-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -2296,6 +2312,7 @@ export function QuoteBuilder({
               <Button type="button" variant="secondary" size="sm"
                 onClick={() => {
                   const n = serviceLines.fields.length
+                  markEdited()
                   serviceLines.append(emptyMaterialLine())
                   requestAnimationFrame(() => setFocus(`services.${n}.service_type`))
                 }}>
@@ -2364,7 +2381,7 @@ export function QuoteBuilder({
                 label={includeTravel ? 'Charging travel fee' : 'Absorbing travel — no fee'} />
               <Controller name="show_travel_separately" control={control}
                 render={({ field }) => (
-                  <Toggle checked={field.value} onChange={field.onChange}
+                  <Toggle checked={field.value} onChange={value => { markEdited(); field.onChange(value) }}
                     label={field.value ? 'Show travel as separate line on PDF' : 'Travel rolled into total on PDF'} />
                 )} />
             </div>

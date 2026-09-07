@@ -63,11 +63,11 @@ check('a pick speaks only for the customer it was made for',
   'switching customers must clear the pick or customer B inherits customer A’s location')
 
 check('a hand-edited address dethrones the pick',
-  /onChange=\{v => \{ field\.onChange\(v\); if \(pickedPropertyId && v !== autoFilledAddress\.current\) setPickedPropertyId\(null\) \}/.test(QB),
+  /onChange=\{v => \{ markEdited\(\); field\.onChange\(v\); if \(pickedPropertyId && v !== autoFilledAddress\.current\) setPickedPropertyId\(null\) \}/.test(QB),
   'a lit chip over a field that says somewhere else is a wrong claim about the quote')
 
 check('…and so does picking from the autocomplete',
-  /onSelect=\{\(p\) => \{ field\.onChange\(p\.formatted\); if \(pickedPropertyId\) setPickedPropertyId\(null\); calculateDistance/.test(QB),
+  /onSelect=\{\(p\) => \{ markEdited\(\); field\.onChange\(p\.formatted\); if \(pickedPropertyId\) setPickedPropertyId\(null\); calculateDistance/.test(QB),
   'the autocomplete is the other deliberate address act — it must also end the chip’s authority')
 
 check('the measured price follows the picked location',
@@ -75,7 +75,7 @@ check('the measured price follows the picked location',
   'without this, tapping "45 Lake Rd" still prices the plan tiles off the primary’s lawn')
 
 check('…and the measurement effect re-runs on a pick',
-  /\}, \[customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setValue\]\)/.test(QB),
+  /\}, \[customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setFormValue\]\)/.test(QB),
   'targetPropertyId is dead code if the effect never sees the pick change')
 
 check('the free-typed field remains — a NEW job-site address stays quotable',

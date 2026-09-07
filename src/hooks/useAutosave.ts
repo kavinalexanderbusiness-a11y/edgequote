@@ -30,6 +30,9 @@ export interface UseAutosaveOptions<T> {
   baselineUpdatedAt?: string | number | null
   /** Treat the value as nothing-to-save (don't persist an empty/pristine form). */
   isEmpty?: (value: T) => boolean
+  /** Whether deliberate editing may replace a recovered draft. Default true for
+   *  existing callers; forms with passive initialization must signal edit intent. */
+  canReplaceDraft?: boolean
 }
 
 export interface UseAutosaveResult<T> {
@@ -53,7 +56,7 @@ function toMs(v: string | number | null | undefined): number {
 }
 
 export function useAutosave<T>({
-  key, value, enabled = true, debounceMs = 800, baselineUpdatedAt = null, isEmpty,
+  key, value, enabled = true, debounceMs = 800, baselineUpdatedAt = null, isEmpty, canReplaceDraft = true,
 }: UseAutosaveOptions<T>): UseAutosaveResult<T> {
   const [status, setStatus] = useState<AutosaveStatus>('idle')
   const [savedAt, setSavedAt] = useState<number | null>(null)
@@ -93,6 +96,8 @@ export function useAutosave<T>({
     if (typeof window === 'undefined' || !enabled) return
     if (mountSerialized.current === null) { mountSerialized.current = serialized; return }
     if (serialized === mountSerialized.current) return     // unchanged from baseline
+    // Automatic fills are not permission to discard an owner's recoverable work.
+    if (draft !== null && !canReplaceDraft) return
     // The user is actively editing → their input is now the newest data. Stop offering
     // an older restore prompt so restoring can't clobber what they just typed.
     if (draft !== null) setDraft(null)
@@ -112,7 +117,7 @@ export function useAutosave<T>({
     }, debounceMs)
     return () => { if (timer.current) clearTimeout(timer.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialized, enabled])
+  }, [serialized, enabled, canReplaceDraft])
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current)

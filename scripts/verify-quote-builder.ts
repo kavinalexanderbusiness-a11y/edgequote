@@ -506,6 +506,160 @@ console.log('\n═══ Service suggestions fit the visible dialog body ══�
   check('a fully clipped body invents no visible menu space', zero.placement.maxHeight === 0)
 }
 
+// Execute the production hook with a deterministic effect/timer host. Browser
+// fixtures separately exercise real React, RHF, the full page and owner controls.
+// This guard loads no application provider and only writes an in-memory store.
+console.log('\n═══ Passive quote initialization preserves recoverable work ═══')
+{
+  type Draft = { customer: string; service: string; notes: string }
+  type Options = { key: string; value: Draft; canReplaceDraft?: boolean; enabled?: boolean }
+  type Result = { draft: Draft | null; restore: () => Draft | null; discard: () => void }
+  const source = read('src/hooks/useAutosave.ts')
+  const old = { value: { customer: 'A', service: 'Owner wording', notes: 'Keep this scope' }, savedAt: 100 }
+  const bytes = JSON.stringify(old)
+  const blank = { customer: '', service: '', notes: '' }
+  const initialized = { customer: 'B', service: '', notes: '' }
+  function host(code = source, stored: string | null = bytes) {
+    const storage = new Map<string, string>(stored ? [['eq:autosave:quote:new', stored]] : [])
+    const slots: any[] = []
+    const effects = new Map<number, { deps?: unknown[]; cleanup?: () => void }>()
+    const timers = new Map<number, { at: number; fn: () => void }>()
+    let cursor = 0, dirty = false, now = 1000, timerId = 0
+    let pending: (() => void)[] = [], options: Options, result: Result
+    const hooks = {
+      useState(initial: unknown) {
+        const i = cursor++
+        if (!(i in slots)) slots[i] = initial
+        return [slots[i], (next: unknown) => {
+          const value = typeof next === 'function' ? next(slots[i]) : next
+          if (!Object.is(slots[i], value)) { slots[i] = value; dirty = true }
+        }]
+      },
+      useRef(current: unknown) { const i = cursor++; return slots[i] ?? (slots[i] = { current }) },
+      useCallback(fn: unknown) { cursor++; return fn },
+      useEffect(fn: () => void | (() => void), deps?: unknown[]) {
+        const i = cursor++, previous = effects.get(i)
+        if (!previous || !deps || deps.some((d, j) => !Object.is(d, previous.deps?.[j]))) {
+          pending.push(() => { previous?.cleanup?.(); effects.set(i, { deps, cleanup: fn() || undefined }) })
+        }
+      },
+    }
+    const mod = { exports: {} as { useAutosave: (o: Options) => Result } }
+    runInNewContext(ts.transpileModule(code, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText, {
+      module: mod, exports: mod.exports,
+      require(id: string) { if (id === 'react') return hooks; throw new Error(`Unexpected autosave dependency: ${id}`) },
+      window: { localStorage: { getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) } },
+      Date: class extends Date { static now() { return now } },
+      setTimeout(fn: () => void, ms: number) { const id = ++timerId; timers.set(id, { at: now + ms, fn }); return id },
+      clearTimeout(id: number) { timers.delete(id) },
+    })
+    const render = (next = options) => {
+      options = next
+      let rounds = 0
+      do {
+        if (++rounds > 20) throw new Error('Autosave did not settle')
+        cursor = 0; dirty = false; pending = []
+        result = mod.exports.useAutosave(options)
+        for (const effect of pending) effect()
+      } while (dirty)
+      return result
+    }
+    const advance = (ms = 1000) => {
+      const end = now + ms
+      while (true) {
+        const next = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!next) break
+        timers.delete(next[0]); now = next[1].at; next[1].fn(); render()
+      }
+      now = end
+    }
+    return { render, advance, stored: () => storage.get('eq:autosave:quote:new') ?? null,
+      unmount: () => { for (const effect of effects.values()) effect.cleanup?.() } }
+  }
+  function exercise(code = source) {
+    const outcomes: [string, boolean][] = []
+    const expect = (name: string, condition: boolean) => outcomes.push([name, condition])
+    for (const customer of ['A', 'B']) {
+      const h = host(code)
+      h.render({ key: 'quote:new', value: blank, canReplaceDraft: false })
+      const passive = { ...initialized, customer }
+      let state = h.render({ key: 'quote:new', value: passive, canReplaceDraft: false })
+      h.advance()
+      expect(`${customer}: passive fill retains original bytes and recovery beyond debounce`, h.stored() === bytes && state.draft?.notes === old.value.notes)
+      // Intent alone must rerun the guard, even if the current value is unchanged.
+      state = h.render({ key: 'quote:new', value: passive, canReplaceDraft: true })
+      h.advance()
+      expect(`${customer}: deliberate editing releases recovery and autosaves current values`, state.draft === null && JSON.parse(h.stored()!).value.customer === customer && h.stored() !== bytes)
+      h.unmount()
+    }
+    for (const action of ['restore', 'discard'] as const) {
+      const h = host(code)
+      h.render({ key: 'quote:new', value: blank, canReplaceDraft: false })
+      const state = h.render({ key: 'quote:new', value: initialized, canReplaceDraft: false })
+      h.advance()
+      const restored = state[action]()
+      const next = h.render({ key: 'quote:new', value: action === 'restore' ? restored as Draft : initialized, canReplaceDraft: false })
+      h.advance()
+      expect(`${action}: explicit recovery decision releases the prompt with its existing storage semantics`,
+        next.draft === null && (action === 'restore'
+          ? JSON.stringify(JSON.parse(h.stored()!).value) === JSON.stringify(old.value)
+          : h.stored() === null))
+      h.render({ key: 'quote:new', value: { ...initialized, service: 'New owner wording' }, canReplaceDraft: true })
+      h.advance()
+      expect(`${action}: later intentional editing continues to autosave`, JSON.parse(h.stored()!).value.service === 'New owner wording')
+      h.unmount()
+    }
+    const legacy = host(code)
+    legacy.render({ key: 'quote:new', value: blank })
+    const state = legacy.render({ key: 'quote:new', value: initialized })
+    legacy.advance()
+    expect('an unrelated caller omitting the option keeps existing replacement behavior', state.draft === null && JSON.parse(legacy.stored()!).value.customer === 'B')
+    legacy.unmount()
+    const fresh = host(code, null)
+    fresh.render({ key: 'quote:new', value: blank, canReplaceDraft: false })
+    fresh.render({ key: 'quote:new', value: initialized, canReplaceDraft: false })
+    fresh.advance()
+    expect('without a recoverable draft, existing autosave behavior is unchanged', JSON.parse(fresh.stored()!).value.customer === 'B')
+    fresh.unmount()
+    return outcomes
+  }
+  for (const [name, passed] of exercise()) check(name, passed)
+  for (const [name, before, after] of [
+    ['removing recovery protection', 'if (draft !== null && !canReplaceDraft) return', ''],
+    ['dropping the intent dependency', '[serialized, enabled, canReplaceDraft]', '[serialized, enabled]'],
+    ['changing the legacy default', 'canReplaceDraft = true', 'canReplaceDraft = false'],
+  ]) {
+    const mutated = source.replace(before, after)
+    check(`mutation caught: ${name}`, mutated !== source && exercise(mutated).some(([, passed]) => !passed))
+  }
+  const ast = ts.createSourceFile('QuoteBuilder.tsx', QB, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  let quoteIntent: ts.Expression | undefined
+  let passiveWrites = 0, passiveIntentWrites = 0
+  const inspect = (node: ts.Node, passive = false) => {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useAutosave') {
+      const options = node.arguments[0]
+      if (options && ts.isObjectLiteralExpression(options)) {
+        const entry = options.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(ast) === 'canReplaceDraft')
+        if (entry && ts.isPropertyAssignment(entry)) quoteIntent = entry.initializer
+      }
+    }
+    if (passive && ts.isCallExpression(node)) {
+      if (node.expression.getText(ast) === 'setFormValue') passiveWrites++
+      if (['setValue', 'markEdited'].includes(node.expression.getText(ast))) passiveIntentWrites++
+    }
+    const withinEffect = passive || (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect')
+    ts.forEachChild(node, child => inspect(child, withinEffect))
+  }
+  inspect(ast)
+  check('QuoteBuilder supplies the actual edit-intent signal to the shared hook', !!quoteIntent &&
+    runInNewContext(quoteIntent.getText(ast), { hasUserEdited: false }) === false &&
+    runInNewContext(quoteIntent.getText(ast), { hasUserEdited: true }) === true)
+  check('passive quote effects never manufacture edit intent', passiveWrites > 0 && passiveIntentWrites === 0)
+}
+
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {
   console.log(`\n❌ verify:quote-builder — ${failures} failure${failures === 1 ? '' : 's'}\n`)
