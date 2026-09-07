@@ -650,7 +650,7 @@ export default function QuoteDetailPage() {
       const { data: { user } } = await supabase.auth.getUser()
       // THE quote→job engine (lib/scheduleQuote) — same job here as from the
       // dashboard's "Accepted — not yet scheduled" card.
-      const { error } = await scheduleQuoteAsJob(supabase, user!.id, quote, { date: dateOverride, services })
+      const { jobId, error } = await scheduleQuoteAsJob(supabase, user!.id, quote, { date: dateOverride, services })
       if (error) {
         toast.error('Could not create job: ' + error)
       } else {
@@ -671,7 +671,9 @@ export default function QuoteDetailPage() {
           ? `First visit added to today’s schedule. The ${cadLabel} isn’t a repeating schedule yet — open the job to set its recurrence.`
           : 'Job added to today’s schedule.', {
           tone: 'success',
-          action: { label: 'View job', run: () => router.push('/dashboard/schedule') },
+          action: jobId
+            ? { label: 'View job', run: () => router.push(`/dashboard/schedule?job=${encodeURIComponent(jobId)}`) }
+            : { label: 'View schedule', run: () => router.push('/dashboard/schedule') },
         })
       }
     } catch {
