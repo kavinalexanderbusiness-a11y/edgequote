@@ -251,6 +251,7 @@ export function QuoteBuilder({
   const formValues = watch()
   const autosave = useAutosave<QuoteFormValues>({
     key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
+    ownership: isEdit ? undefined : 'verified-owner',
     value: formValues,
     canReplaceDraft: hasUserEdited,
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,

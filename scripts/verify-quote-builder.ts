@@ -26,6 +26,7 @@ import ts from 'typescript'
 import { buildServiceMenu, serviceMatches, RECENT_MAX } from '../src/lib/servicePicker'
 import { recentTemplateIdsFrom } from '../src/lib/quoteServices'
 import { placeDropdown } from '../src/lib/dropdownPlacement'
+import { verifyAutosaveOwnership } from './lib/autosaveOwnership'
 import type { ServiceTemplate } from '../src/types'
 
 let failures = 0
@@ -551,7 +552,13 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
       compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
     }).outputText, {
       module: mod, exports: mod.exports,
-      require(id: string) { if (id === 'react') return hooks; throw new Error(`Unexpected autosave dependency: ${id}`) },
+      require(id: string) {
+        if (id === 'react') return hooks
+        // These pre-existing controls deliberately exercise the unchanged default
+        // mode. The ownership guard below executes the real helper and cache.
+        if (id === '@/hooks/useAutosaveOwner') return { useAutosaveOwner: () => null, isActiveAutosaveOwner: () => false }
+        throw new Error(`Unexpected autosave dependency: ${id}`)
+      },
       window: { localStorage: { getItem: (key: string) => storage.get(key) ?? null,
         setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) } },
       Date: class extends Date { static now() { return now } },
@@ -644,7 +651,7 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
   for (const [name, before, after] of [
     ['removing recovery protection', 'if (pendingDraft.current && !canReplaceDraft) return', ''],
     ['using delayed state for mount-time protection', 'if (pendingDraft.current && !canReplaceDraft) return', 'if (draft !== null && !canReplaceDraft) return'],
-    ['dropping the intent dependency', '[serialized, enabled, canReplaceDraft]', '[serialized, enabled]'],
+    ['dropping the intent dependency', '[serialized, enabled, canReplaceDraft, guarded, binding, accessible]', '[serialized, enabled, guarded, binding, accessible]'],
     ['changing the legacy default', 'canReplaceDraft = true', 'canReplaceDraft = false'],
   ]) {
     const mutated = source.replace(before, after)
@@ -674,6 +681,9 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
     runInNewContext(quoteIntent.getText(ast), { hasUserEdited: true }) === true)
   check('passive quote effects never manufacture edit intent', passiveWrites > 0 && passiveIntentWrites === 0)
 }
+
+console.log('\n═══ New quote drafts belong to their verified owner ═══')
+verifyAutosaveOwnership(check)
 
 console.log('\n── Summary ────────────────────────────────────────────────────')
 if (failures) {

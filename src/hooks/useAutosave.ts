@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isActiveAutosaveOwner, useAutosaveOwner } from '@/hooks/useAutosaveOwner'
 
 // ── Shared autosave engine ───────────────────────────────────────────────────
 // ONE hook every long-form editor (quotes, invoices, customers, jobs, notes,
@@ -15,6 +16,7 @@ const storeKey = (key: string) => `${PREFIX}${key}`
 export type AutosaveStatus = 'idle' | 'saving' | 'saved'
 
 interface StoredDraft<T> { value: T; savedAt: number }
+interface OwnedDraft<T> extends StoredDraft<T> { owner: string }
 
 export interface UseAutosaveOptions<T> {
   /** Stable per-editor key, e.g. `quote:new`, `customer:${id}`, `job:${id}:notes`. */
@@ -33,6 +35,9 @@ export interface UseAutosaveOptions<T> {
   /** Whether deliberate editing may replace a recovered draft. Default true for
    *  existing callers; forms with passive initialization must signal edit intent. */
   canReplaceDraft?: boolean
+  /** Opt in only for forms bound to the verified dashboard owner. An unresolved
+   *  owner disables recovery and storage; it never falls back to a legacy key. */
+  ownership?: 'verified-owner'
 }
 
 export interface UseAutosaveResult<T> {
@@ -56,8 +61,12 @@ function toMs(v: string | number | null | undefined): number {
 }
 
 export function useAutosave<T>({
-  key, value, enabled = true, debounceMs = 800, baselineUpdatedAt = null, isEmpty, canReplaceDraft = true,
+  key, value, enabled = true, debounceMs = 800, baselineUpdatedAt = null, isEmpty, canReplaceDraft = true, ownership,
 }: UseAutosaveOptions<T>): UseAutosaveResult<T> {
+  const guarded = ownership === 'verified-owner'
+  const binding = useAutosaveOwner(guarded, key)
+  const accessible = !guarded || isActiveAutosaveOwner(binding, key)
+  const target = guarded ? binding?.storageKey : storeKey(key)
   const [status, setStatus] = useState<AutosaveStatus>('idle')
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [draft, setDraft] = useState<T | null>(null)
@@ -74,13 +83,20 @@ export function useAutosave<T>({
   // whatever is on the server. A stale draft (older than the record) is dropped silently.
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (guarded && !isActiveAutosaveOwner(binding, key)) return
     try {
-      const raw = window.localStorage.getItem(storeKey(key))
+      const raw = window.localStorage.getItem(target!)
       if (raw) {
-        const parsed = JSON.parse(raw) as StoredDraft<T>
+        const parsed = JSON.parse(raw) as OwnedDraft<T>
+        if (guarded && parsed?.owner !== binding!.lease.owner) {
+          // Unprovable ownership is never recovery content. Passive fills are
+          // also not permission to replace it; only a deliberate new edit is.
+          pendingDraft.current = true
+          return
+        }
         if (parsed && typeof parsed.savedAt === 'number') {
           if (baselineMs && parsed.savedAt <= baselineMs) {
-            window.localStorage.removeItem(storeKey(key))   // server is newer — never offer
+            window.localStorage.removeItem(target!)   // server is newer — never offer
           } else if (!isEmpty || !isEmpty(parsed.value)) {
             pendingDraft.current = true
             setDraft(parsed.value)
@@ -90,7 +106,7 @@ export function useAutosave<T>({
       }
     } catch { /* corrupt/unavailable storage — ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+  }, [key, guarded, binding])
 
   const serialized = (() => { try { return JSON.stringify(value) } catch { return '' } })()
 
@@ -98,6 +114,7 @@ export function useAutosave<T>({
   // (the baseline) so merely opening a form never creates a draft.
   useEffect(() => {
     if (typeof window === 'undefined' || !enabled) return
+    if (guarded && !isActiveAutosaveOwner(binding, key)) return
     if (mountSerialized.current === null) { mountSerialized.current = serialized; return }
     if (serialized === mountSerialized.current) return     // unchanged from baseline
     // Automatic fills are not permission to discard an owner's recoverable work.
@@ -111,18 +128,24 @@ export function useAutosave<T>({
     setStatus('saving')
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
+      if (guarded && !isActiveAutosaveOwner(binding, key)) return
       try {
         const now = Date.now()
-        window.localStorage.setItem(storeKey(key), JSON.stringify({ value, savedAt: now } as StoredDraft<T>))
+        const stored: StoredDraft<T> | OwnedDraft<T> = guarded
+          ? { owner: binding!.lease.owner, value, savedAt: now }
+          : { value, savedAt: now }
+        window.localStorage.setItem(target!, JSON.stringify(stored))
         setSavedAt(now)
         setStatus('saved')
         if (statusTimer.current) clearTimeout(statusTimer.current)
-        statusTimer.current = setTimeout(() => setStatus('idle'), 2500)
+        statusTimer.current = setTimeout(() => {
+          if (!guarded || isActiveAutosaveOwner(binding, key)) setStatus('idle')
+        }, 2500)
       } catch { setStatus('idle') }
     }, debounceMs)
     return () => { if (timer.current) clearTimeout(timer.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialized, enabled, canReplaceDraft])
+  }, [serialized, enabled, canReplaceDraft, guarded, binding, accessible])
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current)
@@ -130,20 +153,27 @@ export function useAutosave<T>({
   }, [])
 
   const clear = useCallback(() => {
+    if (guarded && !isActiveAutosaveOwner(binding, key)) return
+    if (guarded) {
+      if (timer.current) clearTimeout(timer.current)
+      if (statusTimer.current) clearTimeout(statusTimer.current)
+    }
     pendingDraft.current = false
-    if (typeof window !== 'undefined') { try { window.localStorage.removeItem(storeKey(key)) } catch { /* ignore */ } }
+    if (typeof window !== 'undefined') { try { window.localStorage.removeItem(target!) } catch { /* ignore */ } }
     setDraft(null); setSavedAt(null); setStatus('idle')
-  }, [key])
+  }, [key, guarded, binding, target])
 
   const restore = useCallback((): T | null => {
+    if (guarded && !isActiveAutosaveOwner(binding, key)) return null
     const v = draft
     pendingDraft.current = false
     setDraft(null)
     // Keep the stored copy until the next save cycle — the form now holds it anyway.
     return v
-  }, [draft])
+  }, [draft, guarded, binding, key])
 
   const discard = useCallback(() => { clear() }, [clear])
 
-  return { status, savedAt, draft, restore, discard, clear }
+  return { status: accessible ? status : 'idle', savedAt: accessible ? savedAt : null,
+    draft: accessible ? draft : null, restore, discard, clear }
 }

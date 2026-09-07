@@ -63,11 +63,24 @@ let owner: string | null = null
 // Advances on every owner change; a lease from an earlier generation is stale.
 let gen = 0
 
+const ownerListeners = new Set<() => void>()
+export function subscribeCacheOwner(listener: () => void): () => void {
+  ownerListeners.add(listener)
+  return () => { ownerListeners.delete(listener) }
+}
+export function getCacheGeneration(): number { return gen }
+function notifyCacheOwner(): void {
+  // CacheOwner also adopts during render. Invalidate leases synchronously, but
+  // wake subscribers afterward so one component does not update another in render.
+  if (ownerListeners.size) queueMicrotask(() => { for (const listener of ownerListeners) listener() })
+}
+
 /** Set by components/layout/CacheOwner; null on unmount. */
 export function setCacheOwner(id: string | null): void {
   if (id === owner) return
   owner = id
   gen++
+  notifyCacheOwner()
 }
 export function getCacheOwner(): string | null { return owner }
 
@@ -109,6 +122,7 @@ export function adoptCacheOwner(id: string): void {
   }
   owner = id
   gen++
+  notifyCacheOwner()
 }
 
 // localStorage survives an app kill; sessionStorage is the tab-scoped default.
@@ -172,6 +186,7 @@ function isEnvelope(raw: string | null): boolean {
  *  refill what was just cleared. */
 export function clearOwnedCaches(): void {
   gen++
+  notifyCacheOwner()
   for (const persist of [false, true]) {
     try {
       const s = store({ persist })
