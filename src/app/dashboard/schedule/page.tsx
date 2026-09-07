@@ -1042,7 +1042,7 @@ export default function SchedulePage() {
   }
 
   useEffect(() => {
-    if (!quoteId) return
+    if (!quoteId || estimateParam === 'new') return
     let active = true
     async function loadQuote() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -1087,17 +1087,17 @@ export default function SchedulePage() {
     }
     loadQuote()
     return () => { active = false }
-  }, [quoteId, supabase])
+  }, [quoteId, supabase, estimateParam])
 
   useEffect(() => {
-    if (!customerParam || quoteId) return
+    if (!customerParam || quoteId || estimateParam === 'new') return
     setEditing(null)
     setQuotePrefill(null)
     // Property-aware: a per-property "Job" button passes ?property= so the form
     // opens on that exact property, not just the customer.
     setCustomerPrefill({ customer_id: customerParam, ...(propertyParam ? { property_id: propertyParam } : {}), scheduled_date: localToday() })
     setShowForm(true)
-  }, [customerParam, propertyParam, quoteId])
+  }, [customerParam, propertyParam, quoteId, estimateParam])
 
   // Edit Schedule deep link (?focus=<recurrenceId>) — open the next upcoming
   // visit of that series for editing, so changes can be applied to the whole
