@@ -8,6 +8,7 @@ import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
+import { Button, ButtonLink } from '@/components/ui/Button'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency, formatDate } from '@/lib/utils'
 import { Globe, RefreshCw } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
@@ -82,6 +83,8 @@ export default function NewQuotePage() {
   const [lead, setLead] = useState<LeadPrefillPayload | null>(null)
   const [renewal, setRenewal] = useState<RenewalPrefillPayload | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<'signed-out' | 'unavailable' | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   const supabase = createClient()
 
@@ -134,31 +137,52 @@ export default function NewQuotePage() {
   }, [])
 
   useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setLoadError(null)
     async function load() {
-      // Local session read — no auth round-trip before the builder's data batch.
-      const { data: { session } } = await supabase.auth.getSession()
-      const user = session?.user
-      const [customersRes, templatesRes, tiersRes, settingsRes, recentRes] = await Promise.all([
-        supabase.from('customers').select('*, properties(id, address, city, province, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
-        supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
-        supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
-        supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
-        // Which services this business actually quotes — ONE indexed column off
-        // rows they already saved, so the picker can open on their usual work
-        // instead of an alphabetised catalogue. Ranking only: a failed read costs
-        // the Recent block and nothing else (see recentTemplateIdsFrom).
-        supabase.from('quotes').select('service_template_id').eq('user_id', user!.id)
-          .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60),
-      ])
-      setCustomers(customersRes.data || [])
-      setTemplates(templatesRes.data || [])
-      setTiers(tiersRes.data || [])
-      setSettings(settingsRes.data)
-      setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
-      setLoading(false)
+      try {
+        // Local session supplies the query owner; RLS remains the data boundary.
+        // A failed refresh is retryable and must never appear as an empty book.
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+        if (!alive) return
+        if (sessionError) throw sessionError
+        const user = session?.user
+        if (!user) { setLoadError('signed-out'); return }
+        const [customersRes, templatesRes, tiersRes, settingsRes, recentRes] = await Promise.all([
+          supabase.from('customers').select('*, properties(id, address, city, province, is_primary)').eq('user_id', user.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
+          supabase.from('service_templates').select('*').eq('user_id', user.id).order('sort_order'),
+          supabase.from('travel_fee_tiers').select('*').eq('user_id', user.id).order('sort_order'),
+          supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
+          // Which services this business actually quotes — ONE indexed column off
+          // rows they already saved, so the picker can open on their usual work
+          // instead of an alphabetised catalogue. Ranking only: a failed read costs
+          // the Recent block and nothing else (see recentTemplateIdsFrom).
+          Promise.resolve(supabase.from('quotes').select('service_template_id').eq('user_id', user.id)
+            .not('service_template_id', 'is', null).order('created_at', { ascending: false }).limit(60))
+            .catch(() => ({ data: null })),
+        ])
+        if (!alive) return
+        if (customersRes.error || templatesRes.error || tiersRes.error || settingsRes.error
+          || !customersRes.data || !templatesRes.data || !tiersRes.data || !settingsRes.data) {
+          throw new Error('Quote details unavailable')
+        }
+        // Publish the required reads together. Mounting with fallback settings
+        // could price a configured business as though it had never been set up.
+        setCustomers(customersRes.data)
+        setTemplates(templatesRes.data)
+        setTiers(tiersRes.data)
+        setSettings(settingsRes.data)
+        setRecentTemplateIds(recentTemplateIdsFrom(recentRes.data))
+      } catch {
+        if (alive) setLoadError('unavailable')
+      } finally {
+        if (alive) setLoading(false)
+      }
     }
-    load()
-  }, [])
+    void load()
+    return () => { alive = false }
+  }, [loadAttempt, supabase])
 
   // Resolves FALSE when the insert failed, so the builder keeps the autosave
   // draft instead of clearing it — the toast below is otherwise the only trace of
@@ -638,6 +662,23 @@ export default function NewQuotePage() {
   }, [renewal])
 
   if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
+  if (loadError) {
+    const next = '/dashboard/quotes/new' + (searchParams.toString() ? '?' + searchParams.toString() : '')
+    return (
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader title="New quote" description="Build and save a new service quote." />
+        <Banner tone="warn">
+          {loadError === 'signed-out'
+            ? 'Sign in again to start this quote.'
+            : 'Couldn’t load your customers and pricing settings. Try again before starting this quote.'}
+        </Banner>
+        <div className="flex flex-wrap gap-3">
+          {loadError === 'signed-out' && <ButtonLink href={'/login?next=' + encodeURIComponent(next)}>Sign in</ButtonLink>}
+          <Button variant="secondary" onClick={() => setLoadAttempt(attempt => attempt + 1)}>Try again</Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">

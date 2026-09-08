@@ -61,50 +61,91 @@ export default function MessageHistoryPage() {
   const [channel, setChannel] = useState<ChannelFilter>('all')
   const [template, setTemplate] = useState<string>('all')
   const [query, setQuery] = useState('')
-  const [insights, setInsights] = useState<Insights | null>(null)
+  const [insights, setInsights] = useState<(Insights & { ownerId: string }) | null>(null)
+  const [loadedFilter, setLoadedFilter] = useState<string | null>(null)
+  const [loadedOwner, setLoadedOwner] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<{ filter: string; reset: boolean } | null>(null)
   const seq = useRef(0)
+  const previousQuery = useRef(query)
+  const filterKey = JSON.stringify([status, channel, template, query.trim()])
+  const visibleRows = loadedFilter === filterKey ? rows : []
+  const error = loadError?.filter === filterKey ? loadError : null
 
-  // The strip loads once — it's a 30-day pulse, not a live ticker.
+  // The strip loads once per verified owner, not once per page of results.
   useEffect(() => {
+    if (!loadedOwner) return
     let active = true
     supabase.rpc('comms_insights', { p_days: 30 }).then(({ data, error }) => {
-      if (active && !error && data) setInsights(data as Insights)
-    })
+      if (active && !error && data) setInsights({ ...(data as Insights), ownerId: loadedOwner })
+    }).catch(() => {})
     return () => { active = false }
-  }, [supabase])
+  }, [supabase, loadedOwner])
 
   async function load(reset: boolean) {
+    if (!reset && (loadedFilter !== filterKey || loading || loadingMore)) return
     const mySeq = ++seq.current
+    let replace = reset
+    let verifiedOwner = false
+    setLoadError(null)
     if (reset) setLoading(true); else setLoadingMore(true)
-    const { data: { session } } = await supabase.auth.getSession()
-    const uid = session?.user?.id
-    if (!uid) { if (mySeq === seq.current) setLoading(false); return }
-    const from = reset ? 0 : rows.length
-    const q = query.trim()
-    // Name search needs an INNER join (a filter on an embedded table silently
-    // matches nothing on a LEFT join); without a search the LEFT join keeps rows
-    // whose customer was deleted (customer_id is null) honest and visible.
-    let qb = supabase.from('notification_log')
-      .select(q ? 'id, created_at, channel, template, status, detail, customer_id, customers!inner(name)' : 'id, created_at, channel, template, status, detail, customer_id, customers(name)')
-      .eq('user_id', uid)
-    if (q) qb = qb.ilike('customers.name', `%${q}%`)
-    if (status !== 'all') qb = qb.in('status', STATUS_SETS[status])
-    if (channel !== 'all') qb = qb.eq('channel', channel)
-    if (template !== 'all') qb = qb.eq('template', template)
-    const { data } = await qb.order('created_at', { ascending: false }).range(from, from + PAGE - 1)
-    if (mySeq !== seq.current) return
-    const got = (data as unknown as Row[]) || []
-    setRows(prev => reset ? got : [...prev, ...got.filter(r => !prev.some(p => p.id === r.id))])
-    setHasMore(got.length === PAGE)
-    setLoading(false); setLoadingMore(false)
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      if (mySeq !== seq.current) return
+      const uid = session?.user?.id
+      if (sessionError || !uid) throw new Error('History session unavailable')
+      verifiedOwner = true
+      if (loadedOwner !== uid) {
+        // A pagination/retry click can outlive its login. Never append a new
+        // owner's page to the previous owner's rows, or retain them on failure.
+        replace = true
+        setRows([]); setLoadedFilter(null); setLoadedOwner(uid); setHasMore(false); setInsights(null)
+        setLoading(true); setLoadingMore(false)
+      }
+      const from = replace ? 0 : rows.length
+      const q = query.trim()
+      // Name search needs an INNER join (a filter on an embedded table silently
+      // matches nothing on a LEFT join); without a search the LEFT join keeps rows
+      // whose customer was deleted (customer_id is null) honest and visible.
+      let qb = supabase.from('notification_log')
+        .select(q ? 'id, created_at, channel, template, status, detail, customer_id, customers!inner(name)' : 'id, created_at, channel, template, status, detail, customer_id, customers(name)')
+        .eq('user_id', uid)
+      if (q) qb = qb.ilike('customers.name', `%${q}%`)
+      if (status !== 'all') qb = qb.in('status', STATUS_SETS[status])
+      if (channel !== 'all') qb = qb.eq('channel', channel)
+      if (template !== 'all') qb = qb.eq('template', template)
+      const { data, error: readError } = await qb.order('created_at', { ascending: false }).range(from, from + PAGE - 1)
+      if (mySeq !== seq.current) return
+      if (readError || !Array.isArray(data)) throw new Error('History read unavailable')
+      const got = data as unknown as Row[]
+      setRows(prev => replace ? got : [...prev, ...got.filter(r => !prev.some(p => p.id === r.id))])
+      setLoadedFilter(filterKey)
+      setHasMore(got.length === PAGE)
+    } catch {
+      if (mySeq === seq.current) {
+        if (!verifiedOwner) {
+          setRows([]); setLoadedFilter(null); setLoadedOwner(null); setHasMore(false); setInsights(null)
+          replace = true
+        }
+        setLoadError({ filter: filterKey, reset: replace })
+      }
+    } finally {
+      if (mySeq === seq.current) { setLoading(false); setLoadingMore(false) }
+    }
   }
 
-  // Filters reload immediately; the search debounces.
-  useEffect(() => { load(true) }, [status, channel, template]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Invalidate old responses during the debounce too, not just when the next
+  // request starts. Known rows remain available only for their exact filters.
+  function invalidateRequests() { seq.current++ }
   useEffect(() => {
-    const t = setTimeout(() => load(true), 250)
-    return () => clearTimeout(t)
-  }, [query]) // eslint-disable-line react-hooks/exhaustive-deps
+    const debounce = query !== previousQuery.current
+    previousQuery.current = query
+    setLoadError(null)
+    setLoading(true)
+    let t: ReturnType<typeof setTimeout> | undefined
+    if (debounce) t = setTimeout(() => load(true), 250)
+    else void load(true)
+    return () => { clearTimeout(t); invalidateRequests() }
+  }, [status, channel, template, query]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Every template the app can send, offered as a dropdown — the list comes from
   // THE template registry so a new MsgType shows up here automatically.
@@ -133,7 +174,7 @@ export default function MessageHistoryPage() {
       {/* 30-day pulse. Median reply time is THE number that wins work — leads that
           hear back fast book; this makes the habit visible. Tiles link to the
           surface where the number can be acted on. */}
-      {insights && (
+      {insights && insights.ownerId === loadedOwner && (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
           <InsightTile icon={Send} label="Sent · 30d" value={String(insights.sends)} />
           <InsightTile icon={CheckCheck} label="Delivered" tone={insights.failed > 0 ? 'text-amber-400' : undefined}
@@ -168,6 +209,14 @@ export default function MessageHistoryPage() {
         </select>
       </div>
 
+      {error && (
+        <div role="alert" className="rounded-xl border border-red-500/25 bg-bg-secondary p-4 space-y-2">
+          <p className="text-sm text-ink">{error.reset ? 'Could not load message history.' : 'Could not load more message history.'}</p>
+          {visibleRows.length > 0 && <p className="text-xs text-ink-muted">Showing previously loaded messages. This list may be incomplete.</p>}
+          <Button variant="secondary" size="sm" onClick={() => load(error.reset)}>Retry reading history</Button>
+        </div>
+      )}
+
       <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
         {loading ? (
           <div className="divide-y divide-border">
@@ -179,19 +228,19 @@ export default function MessageHistoryPage() {
               </div>
             ))}
           </div>
-        ) : rows.length === 0 ? (
+        ) : error && visibleRows.length === 0 ? null : visibleRows.length === 0 ? (
           <EmptyState icon={History} className="py-16" title="No sends match"
             description={query || status !== 'all' || channel !== 'all' || template !== 'all'
               ? 'Try clearing a filter — this ledger only shows sends that match all of them.'
               : 'Templated and automated sends land here the moment they go out (or are skipped).'} />
         ) : (
           <div className="divide-y divide-border">
-            {rows.map(r => <HistoryRow key={r.id} r={r} />)}
+            {visibleRows.map(r => <HistoryRow key={r.id} r={r} />)}
           </div>
         )}
       </div>
 
-      {hasMore && !loading && (
+      {hasMore && loadedFilter === filterKey && !loading && !error && (
         <div className="flex justify-center">
           <Button variant="secondary" size="sm" onClick={() => load(false)} loading={loadingMore}>
             {loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Load more'}
