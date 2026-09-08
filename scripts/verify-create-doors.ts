@@ -102,6 +102,9 @@ console.log('\n═══ A door does not make you re-enter what it knows ══�
 // not have one. The bare doors are listed BY NAME so a new bare door — one that
 // drops a customer it was holding — shows up here instead of in a support call.
 const BARE_QUOTE_DOORS: Record<string, string> = {
+  // This is a sign-in RETURN destination, not a new creation entrypoint. It
+  // appends the full current query before encoding next; pinned below.
+  'app/dashboard/quotes/new/page.tsx':     'session recovery returns to the same quote with its complete customer/property context',
   'app/dashboard/page.tsx':                'home page header — no customer is on screen yet',
   'app/dashboard/quotes/page.tsx':         'the quote list header — the list is every customer’s',
   // Same species as the quote list header: the board spans every deal, so no one
@@ -153,6 +156,12 @@ check('no quote door drops a customer it already had', bare.length === 0,
 const stale = Object.keys(BARE_QUOTE_DOORS).filter(p => !matched.has(p))
 check('the allowlist has no stale entries', stale.length === 0,
   `${stale.join(', ')} no longer link to a bare /dashboard/quotes/new — drop the entry`)
+
+const newQuotePage = stripComments(read('src/app/dashboard/quotes/new/page.tsx'))
+check('quote sign-in recovery preserves its full query context',
+  /const next = '\/dashboard\/quotes\/new' \+ \(searchParams\.toString\(\) \? '\?' \+ searchParams\.toString\(\) : ''\)/.test(newQuotePage)
+    && /href=\{'\/login\?next=' \+ encodeURIComponent\(next\)\}/.test(newQuotePage),
+  'a session recovery link must retain customer, property and all other quote query context in its encoded return destination')
 
 // The lead door is the one that looks bare and is not: it stashes the lead's
 // customer id AND what they asked for. Merging it into a plain link would lose
