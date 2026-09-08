@@ -75,7 +75,7 @@ export default function MessageHistoryPage() {
   useEffect(() => {
     if (!loadedOwner) return
     let active = true
-    supabase.rpc('comms_insights', { p_days: 30 }).then(({ data, error }) => {
+    Promise.resolve(supabase.rpc('comms_insights', { p_days: 30 })).then(({ data, error }) => {
       if (active && !error && data) setInsights({ ...(data as Insights), ownerId: loadedOwner })
     }).catch(() => {})
     return () => { active = false }
