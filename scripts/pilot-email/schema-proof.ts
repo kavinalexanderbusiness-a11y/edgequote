@@ -8,11 +8,12 @@ import { runExtraCases } from './schema-extra-cases'
 import { runConcurrencyCases } from './concurrency-cases'
 import { runTransportCases } from './transport-cases'
 import { runRuntimeCases } from './runtime-cases'
+import { runRuntimeReviewCases } from './runtime-review-cases'
 import { runDriverCases } from './driver-cases'
 
 const source = resolve(__dirname, '../..')
 const output = join(source, 'outputs/pilot-email-core-20260908')
-const PROPOSAL_HASH = 'a87134b3ae086fc1edecd872b8d849f17c60b496df9e031612f7dad2de2d5312'
+const PROPOSAL_HASH = '9c63fa732c9b701c1d1fbc86acbc8ec863c4160f5af15a029b8ddf5ddfbf062a'
 const sourcePins: Record<string, string> = {}
 const read = (path: string) => {
   const text = readFileSync(join(source, path), 'utf8').replace(/\r\n/g, '\n')
@@ -22,6 +23,7 @@ const read = (path: string) => {
 
 async function main() {
   let db: DisposableSession | undefined
+  let concurrencyClosed = true
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(), sourcePins, groups: {}, platformSubstitutions: [],
     scope: 'Actual baseline/all migrations/proposal on isolated marked PostgreSQL17 service, including native triggers/publication/RLS. Separate psql backends prove recorded lock interleavings. Supabase auth/storage/net are the existing platform test doubles; external provider/auth calls are synthetic. No production database, live client or provider activation.',
@@ -32,7 +34,8 @@ async function main() {
     // Verify the reviewed proposal before even opening the synthetic database.
     read('supabase/proposals/pilot-email-core.sql')
     if (sourcePins['supabase/proposals/pilot-email-core.sql'] !== PROPOSAL_HASH) throw new Error('Proposal differs from independently reviewed SQL; rebind explicitly')
-    for (const file of readdirSync(join(source, 'scripts/pilot-email')).filter(f => /\.(ts|sql)$/.test(f)).sort()) read('scripts/pilot-email/' + file)
+    read('.github/workflows/pilot-email-schema.yml')
+    for (const file of readdirSync(join(source, 'scripts/pilot-email')).filter(f => /\.(ts|sql|md)$/.test(f)).sort()) read('scripts/pilot-email/' + file)
     for (const file of readdirSync(join(source, 'src/lib/comms')).filter(f => /^pilotEmail.*\.ts$/.test(f)).sort()) read('src/lib/comms/' + file)
     db = await DisposableSession.open('schema-main')
     report.databaseVersion = (await db.query('select version() as version')).rows[0].version
@@ -60,11 +63,14 @@ async function main() {
     const nativeBefore = await nativeDefinition()
     groups.schema = await runCases(db)
     groups.supplemental = await runExtraCases(db)
-    const concurrency = await runConcurrencyCases(db)
-    groups.concurrency = concurrency.tests
-    report.concurrency = { barriers: concurrency.barriers, sessions: concurrency.sessions, observer: db.pid }
     groups.transport = await runTransportCases()
     groups.runtime = await runRuntimeCases(db)
+    groups.runtimeReview = await runRuntimeReviewCases(db)
+    concurrencyClosed = false
+    const concurrency = await runConcurrencyCases(db)
+    concurrencyClosed = true
+    groups.concurrency = concurrency.tests
+    report.concurrency = { barriers: concurrency.barriers, sessions: concurrency.sessions, observer: db.pid }
     const nativeAfter = await nativeDefinition()
     groups.preservation = [{ name: 'native trigger, RLS and publication definitions remain intact after all cases', pass: JSON.stringify(nativeBefore) === JSON.stringify(nativeAfter) }]
     report.nativeDefinitions = nativeAfter
@@ -76,8 +82,14 @@ async function main() {
     report.pass = false
     report.error = error instanceof Error ? error.message.slice(0, 2000) : 'Native PostgreSQL proof failed'
   } finally {
-    await db?.close()
-    report.allSessionsClosed = true
+    let mainClosed = true
+    try { await db?.close() } catch {
+      mainClosed = false
+      report.pass = false
+      report.error = 'Main fixture session exit could not be confirmed'
+    }
+    report.allSessionsClosed = mainClosed && concurrencyClosed
+    if (!report.allSessionsClosed) report.pass = false
     report.completedAt = new Date().toISOString()
     mkdirSync(output, { recursive: true })
     writeFileSync(join(output, 'native-pg17-proof.json'), JSON.stringify(report, null, 2))

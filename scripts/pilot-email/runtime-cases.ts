@@ -19,7 +19,7 @@ const syntheticSecret = (owner: string) => 'whsec_' + Buffer.alloc(32, owner ===
 // Supabase-shaped fixture replaces REST transport only; SELECTs and RPC verdicts
 // run in PostgreSQL with actual baseline/proposal functions and service grants.
 // Supabase HTTP/JWT validation itself is explicitly outside this fixture.
-function sqlSupabase(db: Database): SupabaseClient {
+export function sqlSupabase(db: Database): SupabaseClient {
   const identifier = (s: string) => { assert.match(s, /^[a-z_]+$/); return '"' + s + '"' }
   const execute = async (sql: string, params: unknown[]) => {
     await db.exec('savepoint runtime_transport; set local role service_role')
@@ -105,7 +105,7 @@ export async function runRuntimeCases(db: Database): Promise<TestResult[]> {
   const approved = async (owner = A) => {
     const { cid, body } = await setup(owner)
     const response = await approvePilotEmailRequest(store, auth(owner), ownerRequest(body))
-    assert.equal(response.status, 200); assert.equal(response.body.sent, false)
+    assert.equal(response.status, 200)
     return { cid, wid: String(response.body.workflowId), body }
   }
   const attempt = async (wid: string) => (await db.query<Record<string, unknown>>('select id,payload,reply_token,first_started_at,provider_email_id from public.pilot_email_send_attempts where workflow_id=$1::uuid', [wid])).rows[0]

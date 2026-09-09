@@ -8,7 +8,7 @@ in `supabase/proposals`, outside migration replay. Do not apply it to production
 The new path reuses the native reach and governor checks. Its PostgreSQL start
 is stricter: it locks and rechecks the current quote, consent, approved client
 connection and daily capacity before authorizing one provider attempt. Confirmed
-delivery is finalized atomically into native Messages and notification history.
+provider acceptance is finalized atomically into native Messages and notification history.
 No failure falls back to the founder's shared sender or legacy fail-open send
 reservation. The default CRM dispatch and founder capability denial are unchanged.
 

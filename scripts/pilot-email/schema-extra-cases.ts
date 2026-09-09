@@ -317,7 +317,8 @@ export async function runExtraCases(db: Database): Promise<CaseResult[]> {
     const cid = await connection(), wid = await workflow(cid), attempt = await claim(wid)
     await db.exec('set local role authenticated')
     await db.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)", [A, JSON.stringify({ role: 'authenticated', sub: A })])
-    const accepted = await scalar('select public.owner_record_customer_acceptance($1::uuid,$2) as value', [QA, 'Synthetic owner confirms the customer accepted this exact quote.'])
+    const accepted = await scalar('select public.owner_record_customer_acceptance($1::uuid,$2,null,null,$3) as value',
+      [QA, 'text_message', 'Synthetic owner confirms the customer accepted this exact quote.'])
     await db.exec('reset role')
     assert.equal(typeof accepted, 'string')
     assert.equal((await start(attempt)).code, 'quote_decided')

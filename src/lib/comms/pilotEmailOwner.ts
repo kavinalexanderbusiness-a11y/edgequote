@@ -9,6 +9,18 @@ export interface PilotOwnerAuth {
 type OwnerResult = { status: number; body: Record<string, unknown> }
 const unavailable = (): OwnerResult => ({ status: 503, body: { error: 'Could not update email follow-up. Try again.' } })
 
+function validSteps(steps: unknown[]): boolean {
+  return steps.every(value => {
+    const step = record(value)
+    return !!step && !Object.keys(step).some(key => !['subject', 'text', 'html', 'due_at'].includes(key))
+      && typeof step.subject === 'string' && step.subject.trim().length > 0 && step.subject.length <= 500
+      && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(step.subject)
+      && typeof step.text === 'string' && step.text.trim().length > 0 && step.text.length <= 30_000
+      && (!('html' in step) || (typeof step.html === 'string' && step.html.length > 0 && step.html.length <= 100_000))
+      && typeof step.due_at === 'string' && step.due_at.length <= 80 && Number.isFinite(Date.parse(step.due_at))
+  })
+}
+
 async function requestBody(request: Request): Promise<Record<string, unknown> | null> {
   if (request.method !== 'POST' || !request.headers.get('content-type')?.startsWith('application/json')) return null
   const origin = request.headers.get('origin')
@@ -40,7 +52,7 @@ export async function approvePilotEmailRequest(store: PilotStore, auth: PilotOwn
     const body = await requestBody(request)
     if (!body || Object.keys(body).some(k => !['connectionId', 'customerId', 'quoteId', 'steps'].includes(k))
       || !uuid(body.connectionId) || !uuid(body.customerId) || !uuid(body.quoteId) || !Array.isArray(body.steps)
-      || body.steps.length < 1 || body.steps.length > 2) return { status: 400, body: { error: 'Check the follow-up details.' } }
+      || body.steps.length < 1 || body.steps.length > 2 || !validSteps(body.steps)) return { status: 400, body: { error: 'Check the follow-up details.' } }
     const connection = await store.connection(body.connectionId)
     if (!connection || connection.user_id !== identity.data.user.id) return { status: 404, body: { error: 'Email connection not found.' } }
     const result = await store.rpc('pilot_email_approve_workflow', {
@@ -50,7 +62,7 @@ export async function approvePilotEmailRequest(store: PilotStore, auth: PilotOwn
     if (['approved', 'existing'].includes(String(result.code)) && uuid(result.workflow_id)) {
       const workflow = await store.workflow(result.workflow_id)
       if (workflow?.user_id === identity.data.user.id && workflow.state === 'approved') {
-        return { status: 200, body: { workflowId: result.workflow_id, state: 'approved', sent: false } }
+        return { status: 200, body: { workflowId: result.workflow_id, state: 'approved' } }
       }
     }
     return { status: 409, body: { error: 'The quote or email connection changed. Review it before approving follow-up.' } }

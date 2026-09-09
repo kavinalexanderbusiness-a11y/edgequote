@@ -146,6 +146,9 @@ export async function runConcurrencyCases(observer: Database) {
         }
       })
     }
-  } finally { await Promise.allSettled([left.close(), right.close()]) }
+  } finally {
+    const closed = await Promise.allSettled([left.close(), right.close()])
+    if (closed.some(result => result.status === 'rejected')) throw new Error('Concurrency session exit could not be confirmed')
+  }
   return { tests: results, barriers, sessions: [left.pid, right.pid] }
 }

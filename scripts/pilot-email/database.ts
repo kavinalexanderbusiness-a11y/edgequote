@@ -11,7 +11,7 @@ export interface TestResult { name: string; pass: boolean; error?: string }
 export const DISPOSABLE_MARKER = 'EDGEHQ_LOCAL_PG17_PILOT_TEST_ONLY'
 export const DATABASE_COMMENT = 'edgehq disposable pilot schema proof; never production'
 
-export function assertDisposableEnvironment(env: NodeJS.ProcessEnv): void {
+export function assertDisposableEnvironment(env: Readonly<Record<string, string | undefined>>): void {
   if (env.PILOT_EMAIL_DISPOSABLE !== DISPOSABLE_MARKER) throw new Error('Explicit disposable database marker required')
   for (const [key, value] of Object.entries({ PGHOST: '127.0.0.1', PGPORT: '5432', PGDATABASE: 'pilot_test', PGUSER: 'postgres' })) {
     if (env[key] && env[key] !== value) throw new Error('Refusing non-synthetic PostgreSQL target: ' + key)
@@ -97,6 +97,7 @@ export class DisposableSession implements Database {
   private queue: Promise<unknown> = Promise.resolve()
   private ended = false
   private closing = false
+  private closePromise: Promise<void> | null = null
   pid = 0
   private constructor(name: string) {
     assertDisposableEnvironment(process.env)
@@ -107,7 +108,7 @@ export class DisposableSession implements Database {
       stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       // No inherited credentials, service files, URL, startup commands or SSL
       // target. The password below exists only for the disposable CI service.
-      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+      env: { NODE_ENV: 'test', PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
         PGPASSWORD: 'pilot_disposable_password_not_a_secret', PGPASSFILE: '/dev/null',
         PGSSLMODE: 'disable', PGCLIENTENCODING: 'UTF8', PGAPPNAME: 'pilot-test-' + name,
         PGOPTIONS: '-c statement_timeout=25000 -c lock_timeout=20000 -c standard_conforming_strings=on' },
@@ -116,7 +117,10 @@ export class DisposableSession implements Database {
     this.process.stderr.setEncoding('utf8')
     this.process.stderr.on('data', (chunk: string) => { this.stderr = (this.stderr + chunk).slice(-8000) })
     this.process.stdout.on('data', (chunk: string) => this.onOutput(chunk))
-    this.process.on('error', (error) => this.fail(error))
+    this.process.on('error', (error) => {
+      if (this.process.pid === undefined) this.ended = true // spawn failed; no child exists to await
+      this.fail(error)
+    })
     this.process.on('exit', (code) => { this.ended = true; this.fail(new Error('Disposable psql exited: ' + code)) })
   }
   static async open(name: string): Promise<DisposableSession> {
@@ -189,12 +193,25 @@ export class DisposableSession implements Database {
   }
   async close(): Promise<void> {
     if (this.ended) return
+    if (this.closePromise) return this.closePromise
     this.closing = true
     this.fail(new Error('Disposable session closed'))
-    await new Promise<void>(resolve => {
-      const timer = setTimeout(() => this.process.kill('SIGKILL'), 1000)
-      this.process.once('exit', () => { clearTimeout(timer); resolve() })
-      this.process.stdin.end('\\q\n')
+    this.closePromise = new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(killTimer)
+        clearTimeout(exitDeadline)
+        this.process.removeListener('exit', exited)
+      }
+      const exited = () => { cleanup(); resolve() }
+      const killTimer = setTimeout(() => this.process.kill('SIGKILL'), 1000)
+      const exitDeadline = setTimeout(() => {
+        cleanup()
+        reject(new Error('Disposable psql did not confirm exit within five seconds'))
+      }, 5000)
+      this.process.once('exit', exited)
+      if (this.ended) exited()
+      else if (!this.process.stdin.destroyed) this.process.stdin.end('\\q\n')
     })
+    return this.closePromise
   }
 }

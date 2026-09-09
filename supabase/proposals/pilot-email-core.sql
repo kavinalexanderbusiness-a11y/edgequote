@@ -247,7 +247,9 @@ begin
   for s in select value from jsonb_array_elements(p_steps) loop
     if jsonb_typeof(s)<>'object' or (s-array['subject','text','html','due_at'])<>'{}'::jsonb
       or jsonb_typeof(s->'subject') is distinct from 'string' or length(s->>'subject') not between 1 and 500
+      or (s->>'subject') !~ '[^[:space:]]'
       or (s->>'subject') ~ E'[\r\n]' or jsonb_typeof(s->'text') is distinct from 'string' or length(s->>'text') not between 1 and 30000
+      or (s->>'text') !~ '[^[:space:]]'
       or (s ? 'html' and (jsonb_typeof(s->'html') is distinct from 'string' or length(s->>'html') not between 1 and 100000))
       or jsonb_typeof(s->'due_at') is distinct from 'string' then return jsonb_build_object('code','invalid_steps'); end if;
     begin v_due:=(s->>'due_at')::timestamptz; exception when invalid_datetime_format or datetime_field_overflow then return jsonb_build_object('code','invalid_steps'); end;
