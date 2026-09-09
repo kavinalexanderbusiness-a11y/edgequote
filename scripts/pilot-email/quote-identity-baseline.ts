@@ -147,7 +147,7 @@ function assertResidue(f: Fixture, before: Snapshot, after: Snapshot, trace: Bas
     const current = after.customers.find(c => c.id === customer.id)!
     if (f.kind === 'confident-enrichment' && customer.id === f.customerB) {
       assert.deepEqual(withoutUpdatedAt(current), { ...withoutUpdatedAt(customer), phone: values.customer_phone,
-        email: values.customer_email, acquisition_source: 'Referral' })
+        email: values.customer_email, acquisition_source: 'Referral', phone_digits: '7805550142' })
       assert.notEqual(current.updated_at, customer.updated_at)
     } else assert.deepEqual(current, customer)
   }
