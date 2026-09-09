@@ -293,7 +293,7 @@ begin
   if ci<>'null'::jsonb then
     insert into public.customers(id,user_id,name,email,phone,address,city,province,postal_code,acquisition_source)
       values(target_id,p_owner,ci->>'name',ci->>'email',ci->>'phone',ci->>'address',ci->>'city',
-        ci->>'province',ci->>'postal_code',ci->>'acquisition_source);
+        ci->>'province',ci->>'postal_code',ci->>'acquisition_source');
   elsif cp<>'null'::jsonb then
     update public.customers set phone=case when cp ? 'phone' then cp->>'phone' else phone end,
       email=case when cp ? 'email' then cp->>'email' else email end,

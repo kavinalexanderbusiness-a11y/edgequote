@@ -17,7 +17,7 @@ import { runQuoteIdentityConcurrency } from './quote-identity-concurrency'
 const source = resolve(__dirname, '../..')
 const output = join(source, 'outputs/pilot-quote-reassignment-20260909')
 const PROPOSAL_HASH = '434048ade9a3625a280707f12877f694281e72efbaa78b29ae141503876540fb'
-const IDENTITY_PROPOSAL_HASH = '7a4b94422309f1318f6f708b645ce0ff041357bcc59e9a9f2013adf76788985e'
+const IDENTITY_PROPOSAL_HASH = '7308c0db5f2f60e5c5ffc338bb9245e7484ff76525be527a12e0352b487b681d'
 const sourcePins: Record<string, string> = {}
 const read = (path: string) => {
   const text = readFileSync(join(source, path), 'utf8').replace(/\r\n/g, '\n')

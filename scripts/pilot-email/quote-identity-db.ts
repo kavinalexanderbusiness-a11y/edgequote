@@ -103,7 +103,7 @@ export function baselineSqlSupabase(db: Database, owner: string, trace: Baseline
             set_config('request.jwt.claim.role','authenticated',true),set_config('request.jwt.claims',$2,true)`,
           [owner, JSON.stringify({ sub: owner, role: 'authenticated' })])
           context = (await db.query<{ transaction: string; backend: number; role: string; owner: string }>(
-            `select pg_current_xact_id()::text as transaction,pg_backend_pid() as backend,current_user as role,auth.uid()::text as owner`)).rows[0]
+            `select pg_current_xact_id()::text as transaction,pg_backend_pid() as backend,current_user as role,current_setting('request.jwt.claim.sub',true) as owner`)).rows[0]
           assert.equal(context.role, 'authenticated'); assert.equal(context.owner, owner)
           const result = await db.query(sql, params)
           if (single) assert.equal(result.rows.length, 1, 'Successful single-row request must return exactly one row')
