@@ -148,7 +148,8 @@ export async function runRuntimeReviewCases(db: Database): Promise<TestResult[]>
     const fetched = { ...content(state.to), text: null, html: '<img src="https://tracking.example.invalid/pixel"><script>fetch("https://script.example.invalid")</script>' }
     assert.equal((await invoke({ store, credentials, http: httpFixture(() => fetched, calls) }, state.cid, event(state.to))).status, 503)
     assert.equal(await workflowState(state.wid), 'held'); assert.equal(await count('messages'), 0)
-    assert.equal(await value('select state as value from public.pilot_email_webhook_events'), 'pending')
+    assert.equal(await value('select state as value from public.pilot_email_webhook_events'), 'needs_review')
+    assert.equal(await value('select error_code as value from public.pilot_email_webhook_events'), 'metadata_mismatch')
     assert.deepEqual(calls, [`https://api.resend.com/emails/receiving/${RECEIVED}?html_format=cid`])
   })
   await test('review: fetched email ID mismatch cannot write another message under the signed ID', async () => {

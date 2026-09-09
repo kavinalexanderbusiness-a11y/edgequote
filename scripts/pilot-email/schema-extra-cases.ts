@@ -162,6 +162,16 @@ export async function runExtraCases(db: Database): Promise<CaseResult[]> {
     assert.deepEqual(JSON.parse(String(started.payload_json)), started.payload)
     assert.equal(createHash('sha256').update(String(started.payload_json)).digest('hex'), started.payload_hash)
   })
+  await test('extra: blank subject or text cannot freeze an unsendable approved workflow', async () => {
+    const cid = await connection()
+    for (const changes of [{ subject: '   ' }, { text: ' \t\n ' }]) {
+      const steps = await copy(); steps[0] = { ...steps[0], ...changes }
+      assert.equal((await approve(cid, CA, QA, steps)).code, 'invalid_steps')
+      assert.equal(await count('select count(*) as value from public.pilot_quote_followup_workflows'), 0)
+      assert.equal(await count('select count(*) as value from public.pilot_email_send_attempts'), 0)
+    }
+    assert.equal(typeof await workflow(cid), 'string')
+  })
   await test('extra: verified route holds next step before content retrieval and survives fetch failure', async () => {
     const state = await sent(), second = await claim(state.wid, 2)
     const reply = await event(state.cid, 'reply-before-content', 'email.received', 'inbound-1', state.token)
