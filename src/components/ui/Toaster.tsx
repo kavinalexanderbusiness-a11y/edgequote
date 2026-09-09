@@ -11,9 +11,9 @@ import { CheckCircle2, AlertTriangle, Info, X, Undo2, Loader2 } from 'lucide-rea
 
 const TONE: Record<ToastItem['tone'], { icon: typeof Info; cls: string }> = {
   info: { icon: Info, cls: 'border-border-strong bg-surface text-ink' },
-  success: { icon: CheckCircle2, cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' },
-  warning: { icon: AlertTriangle, cls: 'border-amber-500/30 bg-amber-500/10 text-amber-200' },
-  error: { icon: AlertTriangle, cls: 'border-red-500/30 bg-red-500/10 text-red-200' },
+  success: { icon: CheckCircle2, cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 [[data-theme=light]_&]:bg-emerald-50 [[data-theme=light]_&]:text-emerald-800' },
+  warning: { icon: AlertTriangle, cls: 'border-amber-500/30 bg-amber-500/10 text-amber-200 [[data-theme=light]_&]:bg-amber-50 [[data-theme=light]_&]:text-amber-800' },
+  error: { icon: AlertTriangle, cls: 'border-red-500/30 bg-red-500/10 text-red-200 [[data-theme=light]_&]:bg-red-50 [[data-theme=light]_&]:text-red-800' },
   loading: { icon: Loader2, cls: 'border-border-strong bg-surface text-ink' },
 }
 
@@ -109,7 +109,7 @@ function ToastRow({ t }: { t: ToastItem }) {
           {t.action.label}
         </button>
       )}
-      <button type="button" onClick={() => dismissToast(t.id)} aria-label="Dismiss" className="shrink-0 p-1 -m-1 rounded text-ink-faint hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+      <button type="button" onClick={() => dismissToast(t.id)} aria-label="Dismiss" className="shrink-0 p-1 -m-1 rounded text-ink-faint hover:text-ink [[data-theme=light]_&]:text-ink-muted [[data-theme=light]_&]:hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <X className="w-3.5 h-3.5" />
       </button>
     </div>
