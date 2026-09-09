@@ -11,8 +11,8 @@ import { CheckCircle2, AlertTriangle, Info, X, Undo2, Loader2 } from 'lucide-rea
 
 const TONE: Record<ToastItem['tone'], { icon: typeof Info; cls: string }> = {
   info: { icon: Info, cls: 'border-border-strong bg-surface text-ink' },
-  success: { icon: CheckCircle2, cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' },
-  warning: { icon: AlertTriangle, cls: 'border-amber-500/30 bg-amber-500/10 text-amber-200' },
+  success: { icon: CheckCircle2, cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 [[data-theme=light]_&]:bg-emerald-50 [[data-theme=light]_&]:text-emerald-800' },
+  warning: { icon: AlertTriangle, cls: 'border-amber-500/30 bg-amber-500/10 text-amber-200 [[data-theme=light]_&]:bg-amber-50 [[data-theme=light]_&]:text-amber-800' },
   error: { icon: AlertTriangle, cls: 'border-red-500/30 bg-red-500/10 text-red-200 [[data-theme=light]_&]:bg-red-50 [[data-theme=light]_&]:text-red-800' },
   loading: { icon: Loader2, cls: 'border-border-strong bg-surface text-ink' },
 }
