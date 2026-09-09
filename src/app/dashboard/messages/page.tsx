@@ -187,9 +187,31 @@ export default function MessagesPage() {
   const filterRef = useRef(filter); filterRef.current = filter
   const uidRef = useRef<string | null>(null)
 
+  // A destructive confirmation belongs to the owner and view that opened it.
+  // Changing away and back must not revive a pending confirmation or response.
+  const deleteView = useRef({ uid, filter, query })
+  if (deleteView.current.uid !== uid || deleteView.current.filter !== filter || deleteView.current.query !== query) {
+    deleteView.current = { uid, filter, query }
+  }
+  const deleteLifetime = useRef({ mounted: false, generation: 0, owner: undefined as string | null | undefined, busy: false })
+  useEffect(() => {
+    const lifetime = deleteLifetime.current
+    lifetime.mounted = true
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const owner = session?.user.id ?? null
+      if (lifetime.owner !== undefined && lifetime.owner !== owner) lifetime.generation++
+      lifetime.owner = owner
+    })
+    return () => {
+      lifetime.mounted = false
+      lifetime.generation++
+      subscription.unsubscribe()
+    }
+  }, [supabase])
+
   // ONE round trip (inbox_counts RPC) for every pill — this used to be six COUNT
   // queries fired on every realtime event and every optimistic mutation.
-  async function loadCounts(u: string) {
+  async function loadCounts(u: string, stillCurrent?: () => boolean) {
     // Two reads, one state update, so the pill row can never paint a Requests
     // count from one moment beside conversation counts from another.
     const [{ data }, reqRes] = await Promise.all([
@@ -197,6 +219,7 @@ export default function MessagesPage() {
       supabase.from('service_requests').select('customer_id')
         .eq('user_id', u).eq('from_portal', true).eq('status', 'new'),
     ])
+    if (stillCurrent && !stillCurrent()) return
     const j = (data as Record<string, number> | null) || {}
     // A failed request read leaves the previous set alone rather than emptying
     // it: a null payload with an error is how Supabase reports a dropped
@@ -369,13 +392,6 @@ export default function MessagesPage() {
     setSel(s => s && s.id === c.id ? next : s)
     if (uid) loadCounts(uid)
   }
-  function removeLocal(id: string) {
-    setRows(cs => cs.filter(c => c.id !== id))
-    setSearchResults(rs => rs ? rs.filter(c => c.id !== id) : rs)
-    setSel(s => s && s.id === id ? null : s)
-    if (uid) loadCounts(uid)
-  }
-
   const actions = {
     // Archive acts instantly but is fully reversible — the shared Undo toast restores
     // it in one tap (recovering from the Archived filter costs 4+ clicks otherwise).
@@ -423,20 +439,8 @@ export default function MessagesPage() {
       if (error) { patch(c.id, { muted: c.muted }); toast.error('Could not change notifications for this conversation.') }
     },
     del: async (c: Convo) => {
-      const ok = await confirmDialog({
-        title: `Delete conversation with ${nameOf(c)}?`,
-        message: 'This erases the entire message history and cannot be undone. Archiving keeps everything instead.',
-        confirmLabel: 'Delete permanently', destructive: true,
-      })
-      if (!ok) return
-      // Delete BEFORE removing it from the list. The dialog just promised this "erases the
-      // entire message history and cannot be undone" — a customer may have asked for that
-      // erasure. Optimistically hiding the row made a failed delete look identical to a
-      // successful one, leaving the history fully intact while the owner is certain it's
-      // gone. This action is confirm-gated, so waiting for the write costs nothing.
-      const { error } = await supabase.from('conversations').delete().eq('id', c.id)
-      if (error) { toast.error('Could not delete this conversation: ' + error.message); return }
-      removeLocal(c.id)
+      if (!c.archived_at) return
+      await deleteConversations([c.id], `Delete conversation with ${nameOf(c)}?`)
     },
     select: (c: Convo) => { setSel(c); if (c.unread > 0) { patch(c.id, { unread: 0 }); if (uid) loadCounts(uid) } },
     // Snooze = "come back to this later" without losing it: hidden from active
@@ -546,25 +550,75 @@ export default function MessagesPage() {
   // ── Bulk actions ──
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const selectedIdsRef = useRef(selectedIds); selectedIdsRef.current = selectedIds
+  const selectModeRef = useRef(selectMode); selectModeRef.current = selectMode
   const toggleSelect = (id: string) => setSelectedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const exitSelect = () => { setSelectMode(false); setSelectedIds(new Set()) }
+
+  async function deleteConversations(requested: string[], title: string, bulkDelete = false) {
+    const owner = uid
+    const view = deleteView.current
+    const generation = deleteLifetime.current.generation
+    const selection = selectedIdsRef.current
+    const ids = [...new Set(requested)]
+    if (!owner || !ids.length || deleteLifetime.current.busy || (bulkDelete && filter !== 'archived')) return
+    const stillCurrent = () => deleteLifetime.current.mounted
+      && deleteLifetime.current.generation === generation && deleteView.current === view
+      && uidRef.current === owner
+      && (deleteLifetime.current.owner === undefined || deleteLifetime.current.owner === owner)
+    const sameSelection = () => !bulkDelete || (selectModeRef.current && selectedIdsRef.current === selection)
+    const unconfirmed = () => toast.error(bulkDelete
+      ? 'Deletion wasn’t confirmed. Your conversations are still shown.'
+      : 'Deletion wasn’t confirmed. This conversation is still shown.')
+    if (!stillCurrent()) return
+    deleteLifetime.current.busy = true
+    try {
+      const ok = await confirmDialog({
+        title,
+        message: bulkDelete ? 'This erases their message history and cannot be undone.'
+          : 'This erases the entire message history and cannot be undone. Archiving keeps everything instead.',
+        confirmLabel: 'Delete permanently', destructive: true,
+      })
+      if (!ok || !stillCurrent() || !sameSelection()) return
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      if (!stillCurrent() || !sameSelection()) return
+      if (sessionError || session?.user.id !== owner) { unconfirmed(); return }
+
+      // A successful request can delete zero rows. Returned IDs are the only
+      // confirmation; never hide the whole requested selection on error:null.
+      const { data, error } = await supabase.from('conversations').delete()
+        .eq('user_id', owner).in('id', ids).not('archived_at', 'is', null).select('id')
+      if (!stillCurrent()) return
+      if (error || !Array.isArray(data)) { unconfirmed(); return }
+      const requestedIds = new Set(ids)
+      const confirmed = new Set<string>(data.flatMap(row =>
+        row && typeof row.id === 'string' && requestedIds.has(row.id) ? [row.id] : []))
+      if (!confirmed.size) { unconfirmed(); return }
+
+      setRows(cs => cs.filter(c => !confirmed.has(c.id)))
+      setSearchResults(rs => rs ? rs.filter(c => !confirmed.has(c.id)) : rs)
+      setSel(s => s && confirmed.has(s.id) ? null : s)
+      setSelectedIds(current => new Set([...current].filter(id => !confirmed.has(id))))
+      // New selections made during the request still belong to the owner.
+      // Keep them, and keep unconfirmed rows selected after a partial result.
+      if (bulkDelete && confirmed.size === ids.length && selectedIdsRef.current === selection) setSelectMode(false)
+      if (confirmed.size !== ids.length) {
+        toast.error(`Deleted ${confirmed.size} of ${ids.length} conversations. The rest are still shown.`)
+      }
+      void loadCounts(owner, stillCurrent).catch(() => {})
+    } catch {
+      if (stillCurrent()) unconfirmed()
+    } finally {
+      deleteLifetime.current.busy = false
+    }
+  }
+
   async function bulk(op: 'archive' | 'unarchive' | 'read' | 'unread' | 'mute' | 'unmute' | 'pin' | 'delete') {
     const ids = [...selectedIds]
     if (!ids.length) return
     if (op === 'delete') {
-      const ok = await confirmDialog({
-        title: `Delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}?`,
-        message: 'This erases their message history and cannot be undone.',
-        confirmLabel: 'Delete permanently', destructive: true,
-      })
-      if (!ok) return
-      // Verify before hiding — the dialog promised "erases their message history and
-      // cannot be undone", and the rows silently vanishing IS the only success signal
-      // this path has. A failed delete left every conversation intact.
-      const { error } = await supabase.from('conversations').delete().in('id', ids)
-      if (error) { toast.error('Could not delete these conversations: ' + error.message); return }
-      setRows(cs => cs.filter(c => !selectedIds.has(c.id)))
-      setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
+      await deleteConversations(ids, `Delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}?`, true)
+      return
     } else {
       const now = new Date().toISOString()
       // Bulk archive clears unread for the same reason the single-row action does.

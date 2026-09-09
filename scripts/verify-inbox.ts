@@ -62,8 +62,14 @@ console.log('\n═══ Optimism never outruns its error branch ═══')
 check('a failed reply removes the optimistic bubble AND restores the draft',
   /setItems\(prev => prev\.filter\(i => i\.id !== pendId\)\)\s*\n\s*setText\(t\)/.test(THREAD),
   'a bubble that stays after a failed send is a reply the customer never got')
-check('delete verifies BEFORE the row disappears',
-  PAGE.indexOf("from('conversations').delete().eq('id', c.id)") < PAGE.indexOf('removeLocal(c.id)'))
+check('delete requests returned IDs within the owner and archived scope',
+  /\.eq\('user_id', owner\)\.in\('id', ids\)\.not\('archived_at', 'is', null\)\.select\('id'\)/.test(PAGE))
+check('zero confirmed deletions keep the rows visible',
+  /if \(!confirmed\.size\) \{ unconfirmed\(\); return \}/.test(PAGE) &&
+  PAGE.indexOf('if (!confirmed.size)') < PAGE.indexOf('setRows(cs => cs.filter(c => !confirmed.has(c.id)))'))
+check('partial deletion removes only confirmed rows and checked IDs',
+  /setSearchResults\(rs => rs \? rs\.filter\(c => !confirmed\.has\(c\.id\)\) : rs\)/.test(PAGE) &&
+  /setSelectedIds\(current => new Set\(\[\.\.\.current\]\.filter\(id => !confirmed\.has\(id\)\)\)\)/.test(PAGE))
 check('archiving clears unread with it (no phantom badge)',
   /archived_at: now, unread: 0/.test(PAGE))
 check('label toggles re-read current labels (search rows may not carry them)',
