@@ -10,10 +10,14 @@ import { runTransportCases } from './transport-cases'
 import { runRuntimeCases } from './runtime-cases'
 import { runRuntimeReviewCases } from './runtime-review-cases'
 import { runDriverCases } from './driver-cases'
+import { runQuoteIdentityBaseline, quoteIdentityBaselineEvidence } from './quote-identity-baseline'
+import { runQuoteIdentityCases } from './quote-identity-cases'
+import { runQuoteIdentityConcurrency } from './quote-identity-concurrency'
 
 const source = resolve(__dirname, '../..')
-const output = join(source, 'outputs/pilot-archive-suppression-20260909')
+const output = join(source, 'outputs/pilot-quote-reassignment-20260909')
 const PROPOSAL_HASH = '434048ade9a3625a280707f12877f694281e72efbaa78b29ae141503876540fb'
+const IDENTITY_PROPOSAL_HASH = '7a4b94422309f1318f6f708b645ce0ff041357bcc59e9a9f2013adf76788985e'
 const sourcePins: Record<string, string> = {}
 const read = (path: string) => {
   const text = readFileSync(join(source, path), 'utf8').replace(/\r\n/g, '\n')
@@ -24,6 +28,7 @@ const read = (path: string) => {
 async function main() {
   let db: DisposableSession | undefined
   let concurrencyClosed = true
+  let identityConcurrencyClosed = true
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(), sourcePins, groups: {}, platformSubstitutions: [],
     scope: 'Actual baseline/all migrations/proposal on isolated marked PostgreSQL17 service, including native triggers/publication/RLS. Separate psql backends prove recorded lock interleavings. Supabase auth/storage/net are the existing platform test doubles; external provider/auth calls are synthetic. No production database, live client or provider activation.',
@@ -34,6 +39,12 @@ async function main() {
     // Verify the reviewed proposal before even opening the synthetic database.
     read('supabase/proposals/pilot-email-core.sql')
     if (sourcePins['supabase/proposals/pilot-email-core.sql'] !== PROPOSAL_HASH) throw new Error('Proposal differs from independently reviewed SQL; rebind explicitly')
+    read('supabase/proposals/pilot-quote-identity.sql')
+    if (sourcePins['supabase/proposals/pilot-quote-identity.sql'] !== IDENTITY_PROPOSAL_HASH) throw new Error('Quote identity proposal differs from independently reviewed SQL; rebind explicitly')
+    read('src/lib/quotes/pilotQuoteIdentity.ts')
+    read('src/lib/customers.ts')
+    read('src/lib/attribution.ts')
+    read('src/app/dashboard/quotes/[id]/page.tsx')
     read('.github/workflows/pilot-email-schema.yml')
     for (const file of readdirSync(join(source, 'scripts/pilot-email')).filter(f => /\.(ts|sql|md)$/.test(f)).sort()) read('scripts/pilot-email/' + file)
     for (const file of readdirSync(join(source, 'src/lib/comms')).filter(f => /^pilotEmail.*\.ts$/.test(f)).sort()) read('src/lib/comms/' + file)
@@ -54,6 +65,7 @@ async function main() {
     await apply('scripts/schema/platform-prelude.sql')
     for (const file of readdirSync(join(source, 'supabase/migrations')).filter(f => f.endsWith('.sql')).sort()) await apply('supabase/migrations/' + file)
     await apply('supabase/proposals/pilot-email-core.sql')
+    await apply('supabase/proposals/pilot-quote-identity.sql')
     const nativeDefinition = async () => (await db!.query<{ value: unknown }>(`select jsonb_build_object(
       'triggers',(select jsonb_agg(pg_get_triggerdef(t.oid) order by t.tgname) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal and c.relname in ('messages','notification_log','customers','conversations')),
       'publications',(select jsonb_agg(to_jsonb(p) order by p.pubname) from pg_publication p),
@@ -71,6 +83,14 @@ async function main() {
     concurrencyClosed = true
     groups.concurrency = concurrency.tests
     report.concurrency = { barriers: concurrency.barriers, sessions: concurrency.sessions, observer: db.pid }
+    groups.quoteIdentityBaseline = await runQuoteIdentityBaseline(db)
+    report.quoteIdentityBaseline = quoteIdentityBaselineEvidence
+    groups.quoteIdentity = await runQuoteIdentityCases(db)
+    identityConcurrencyClosed = false
+    const identityConcurrency = await runQuoteIdentityConcurrency(db)
+    identityConcurrencyClosed = true
+    groups.quoteIdentityConcurrency = identityConcurrency.tests
+    report.quoteIdentityConcurrency = { barriers: identityConcurrency.barriers, sessions: identityConcurrency.sessions, observer: db.pid }
     const nativeAfter = await nativeDefinition()
     groups.preservation = [{ name: 'native trigger, RLS and publication definitions remain intact after all cases', pass: JSON.stringify(nativeBefore) === JSON.stringify(nativeAfter) }]
     report.nativeDefinitions = nativeAfter
@@ -88,7 +108,7 @@ async function main() {
       report.pass = false
       report.error = 'Main fixture session exit could not be confirmed'
     }
-    report.allSessionsClosed = mainClosed && concurrencyClosed
+    report.allSessionsClosed = mainClosed && concurrencyClosed && identityConcurrencyClosed && quoteIdentityBaselineEvidence.every(e => e.sessionsClosed === true)
     if (!report.allSessionsClosed) report.pass = false
     report.completedAt = new Date().toISOString()
     mkdirSync(output, { recursive: true })

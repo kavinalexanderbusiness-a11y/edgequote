@@ -9,7 +9,12 @@ on:
       - 'scripts/schema/platform-prelude.sql'
       - 'supabase/migrations/**'
       - 'supabase/proposals/pilot-email-core.sql'
+      - 'supabase/proposals/pilot-quote-identity.sql'
       - 'src/lib/comms/**'
+      - 'src/lib/quotes/pilotQuoteIdentity.ts'
+      - 'src/lib/customers.ts'
+      - 'src/lib/attribution.ts'
+      - 'src/app/dashboard/quotes/**'
       - 'src/lib/followup.ts'
       - 'package.json'
       - 'package-lock.json'
@@ -67,6 +72,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pilot-email-native-pg17-${{ github.sha }}
-          path: outputs/pilot-archive-suppression-20260909/native-pg17-proof.json
+          path: outputs/pilot-quote-reassignment-20260909/native-pg17-proof.json
           if-no-files-found: error
           retention-days: 14
