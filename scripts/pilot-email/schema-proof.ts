@@ -12,8 +12,8 @@ import { runRuntimeReviewCases } from './runtime-review-cases'
 import { runDriverCases } from './driver-cases'
 
 const source = resolve(__dirname, '../..')
-const output = join(source, 'outputs/pilot-email-core-20260908')
-const PROPOSAL_HASH = '9c63fa732c9b701c1d1fbc86acbc8ec863c4160f5af15a029b8ddf5ddfbf062a'
+const output = join(source, 'outputs/pilot-archive-suppression-20260909')
+const PROPOSAL_HASH = '434048ade9a3625a280707f12877f694281e72efbaa78b29ae141503876540fb'
 const sourcePins: Record<string, string> = {}
 const read = (path: string) => {
   const text = readFileSync(join(source, path), 'utf8').replace(/\r\n/g, '\n')

@@ -49,6 +49,41 @@ are fixtures. This does not prove a deployed route, a real provider account or
 an owner-facing inbox UI. Full project checks run in the existing cloud CI;
 do not install or run a full local build on the constrained owner machine.
 
+## Customer archive contract in this dormant successor
+
+The pilot customer query explicitly loads `archived_at`; only an explicit null
+permits the early dispatch checks to continue. Missing, malformed or failed
+reads stop before credentials or HTTP. SQL approval and start independently
+check the locked current customer, so a cached active read cannot authorize a
+send after archive wins the database ordering.
+
+The private native customer archive trigger holds every approved workflow for
+that exact owner/customer in the same transaction as active-to-archived. It
+does not change existing holds, completed workflows or any attempt payload,
+identity, fence or receipt. Restore never resumes held work; replaying the same
+approval cannot make the owner handler report that held workflow as approved.
+This successor adds no reapproval or resume mechanism.
+
+The archive trigger takes customer-to-workflow locks only, never the pilot
+owner advisory or attempt lock. Supported archive transactions use **READ
+COMMITTED**; the trigger refuses other isolation levels with SQLSTATE `0A000`,
+including when its older snapshot cannot see a newly approved workflow. This
+is a proposed change to native archive behavior and must be included in any
+later DDL release review. The proof binds the actual adapters' separate RPC
+transactions. Arbitrary multi-RPC transaction composition is unsupported.
+
+If archive wins, a waiting approval/start cannot authorize new mail. If start
+commits first, its returned envelope may already be in flight when archive
+commits: archive cannot recall it or prove it unsent. Known provider receipts
+still reconcile after archive without another HTTP request. Unknown results
+keep their existing truthful state; later dispatch stays held after restore.
+No all-channel cancellation guarantee follows from this pilot-only contract.
+
+Frozen PR116 at `c8e90911a1abe2c667c8595a89b1be235cf68bcc` and its 125-check
+receipt remain predecessor evidence only. This successor needs its own exact
+SQL/source pins and cloud PostgreSQL proof under
+`outputs/pilot-archive-suppression-20260909`; it has no landing authority.
+
 ## Production release gates still open
 
 - Explicit reviewed operational approval for DDL, including the new parent

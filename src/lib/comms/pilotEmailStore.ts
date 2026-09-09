@@ -14,11 +14,13 @@ export type PilotWorkflow = {
   id: string; user_id: string; connection_id: string; account_scope: string
   credential_version: string; customer_id: string; quote_id: string; state: string
 }
+// Missing archive data is unknown, never evidence that this customer is active.
+export type PilotCustomer = ReachCustomer & { archived_at: string | null }
 export interface PilotStore {
   rpc(name: string, args: PilotRecord): Promise<PilotRecord>
   connection(id: string): Promise<PilotConnection | null>
   workflow(id: string): Promise<PilotWorkflow | null>
-  customer(owner: string, id: string): Promise<ReachCustomer | null>
+  customer(owner: string, id: string): Promise<PilotCustomer | null>
   govern(owner: string, customer: string): Promise<boolean>
 }
 
@@ -52,7 +54,7 @@ export function createPilotStore(sb: SupabaseClient): PilotStore {
       return await read('pilot_quote_followup_workflows', 'id,user_id,connection_id,account_scope,credential_version,customer_id,quote_id,state', id) as PilotWorkflow | null
     },
     async customer(owner, id) {
-      return await read('customers', 'phone,email,sms_opt_in,email_opt_in,message_prefs,preferred_channel', id, owner) as ReachCustomer | null
+      return await read('customers', 'phone,email,sms_opt_in,email_opt_in,message_prefs,preferred_channel,archived_at', id, owner) as PilotCustomer | null
     },
     async govern(owner, customer) {
       // Keep the shared policy as an early check. Its service-message count

@@ -67,6 +67,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pilot-email-native-pg17-${{ github.sha }}
-          path: outputs/pilot-email-core-20260908/native-pg17-proof.json
+          path: outputs/pilot-archive-suppression-20260909/native-pg17-proof.json
           if-no-files-found: error
           retention-days: 14

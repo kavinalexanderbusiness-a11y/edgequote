@@ -46,7 +46,7 @@ export async function dispatchApprovedPilotEmail(runtime: PilotEmailRuntime, wor
     if (!uuid(claim.attempt_id) || !Number.isSafeInteger(claim.fence) || Number(claim.fence) < 1) return { code: 'unavailable' }
     attemptId = claim.attempt_id; fence = Number(claim.fence)
     // A known provider result is history to record, even after consent changes,
-    // disconnection or the provider retry window. This never calls transport.
+    // archive, disconnection or the provider retry window. This never calls transport.
     if (claim.code === 'reconcile') return await finalized()
 
     const workflow = await store.workflow(workflowId)
@@ -57,8 +57,13 @@ export async function dispatchApprovedPilotEmail(runtime: PilotEmailRuntime, wor
       await fail('store_failed'); return { code: 'unavailable' }
     }
     const customer = await store.customer(workflow.user_id, workflow.customer_id)
+    if (!customer || customer.archived_at === undefined
+      || (customer.archived_at !== null && (typeof customer.archived_at !== 'string' || !Number.isFinite(Date.parse(customer.archived_at))))) {
+      await fail('store_failed'); return { code: 'unavailable' }
+    }
+    if (customer.archived_at !== null) { await fail('store_failed'); return { code: 'blocked' } }
     const key = await runtime.credentials(connection)
-    if (!customer || !credentialsMatch(connection, key)) { await fail('store_failed'); return { code: 'unavailable' } }
+    if (!credentialsMatch(connection, key)) { await fail('store_failed'); return { code: 'unavailable' } }
     // This capability represents this verified client-owned connection. It is
     // not a grant to the founder's shared email identity; no legacy fallback.
     const gate = reachCheck(customer, ['email'], 'estimate_followup', { caps: { outboundEmail: true, outboundSms: false } })

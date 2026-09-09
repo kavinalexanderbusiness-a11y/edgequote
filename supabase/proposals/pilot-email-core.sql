@@ -1,5 +1,5 @@
 -- DORMANT PROPOSAL ONLY. Not a migration, not applied, no activation authority.
--- Base 0bb65f2bb53009b8a67364536df7932498c8a845. Requires the existing baseline.
+-- Dormant archive successor reconciled with main 217f71b89900eff960af9753a6ba4b3ef6e708eb.
 -- Four empty private tables; no seeds, backfill, founder grants or scheduler.
 -- Parent indexes below are material DDL: pilot history RESTRICTs deletion and
 -- reassignment of its quote/customer/native rows. Retention approval is separate.
@@ -45,7 +45,7 @@ create table public.pilot_quote_followup_workflows (
   approved_steps jsonb not null check (jsonb_typeof(approved_steps)='array' and jsonb_array_length(approved_steps) between 1 and 2),
   step_count smallint not null check (step_count between 1 and 2),
   state text not null default 'approved' check (state in ('approved','held','completed')),
-  hold_reason text check (hold_reason in ('owner_paused','reply_received','reply_review','quote_changed','quote_decided','invoiced','expired','consent_changed','recipient_changed','connection_unavailable','needs_review')),
+  hold_reason text check (hold_reason in ('owner_paused','reply_received','reply_review','quote_changed','quote_decided','invoiced','expired','consent_changed','recipient_changed','connection_unavailable','needs_review','customer_archived')),
   created_at timestamptz not null default clock_timestamp(),
   held_at timestamptz,
   foreign key(connection_id,user_id,account_scope,credential_version)
@@ -172,6 +172,27 @@ create trigger pilot_workflow_immutable before update or delete on public.pilot_
 create trigger pilot_attempt_immutable before update or delete on public.pilot_email_send_attempts for each row execute function public._pilot_email_immutable();
 create trigger pilot_event_immutable before update or delete on public.pilot_email_webhook_events for each row execute function public._pilot_email_immutable();
 
+-- Native customer archive writers do not call pilot RPCs. Hold eligible work in
+-- the archive transaction; restore must never silently resume it. The native
+-- UPDATE already locks the customer: do NOT acquire owner or attempt locks here.
+-- Standalone RPCs use customer-before-workflow order where both are required.
+create function public._pilot_email_customer_archived() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  -- A retained snapshot could miss a workflow inserted by an approval that
+  -- merely SHARE-locked this customer. Refuse that unsupported archive model.
+  if current_setting('transaction_isolation') <> 'read committed' then
+    raise exception 'pilot_archive_requires_read_committed' using errcode='0A000';
+  end if;
+  update public.pilot_quote_followup_workflows
+    set state='held',hold_reason='customer_archived',held_at=clock_timestamp()
+    where user_id=new.user_id and customer_id=new.id and state='approved';
+  return new;
+end $$;
+create trigger pilot_customer_archived after update of archived_at on public.customers
+  for each row when (old.archived_at is null and new.archived_at is not null)
+  execute function public._pilot_email_customer_archived();
+
 create function public._pilot_email_owner_lock(p_owner uuid) returns void
 language sql set search_path='' as $$
   select pg_advisory_xact_lock(hashtextextended('pilot-email:'||p_owner::text,0));
@@ -223,6 +244,7 @@ begin
   perform 1 from public.business_settings where user_id=c.user_id for share;
   select * into customer from public.customers where id=p_customer and user_id=c.user_id for share;
   if not found then return jsonb_build_object('code','customer_unavailable'); end if;
+  if customer.archived_at is not null then return jsonb_build_object('code','customer_archived'); end if;
   select * into q from public.quotes where id=p_quote and user_id=c.user_id and customer_id=p_customer for update;
   if not found then return jsonb_build_object('code','quote_unavailable'); end if;
   if q.status<>'sent' or q.sent_at is null or public.quote_acceptance_is_current(q.id) then return jsonb_build_object('code','quote_decided'); end if;
@@ -323,8 +345,14 @@ begin
   select * into c from public.pilot_email_connections where id=a.connection_id for update;
   select timezone into v_zone from public.business_settings where user_id=a.user_id for share;
   select * into customer from public.customers where id=a.customer_id and user_id=a.user_id for share;
+  if not found then return jsonb_build_object('code','customer_unavailable'); end if;
   select * into q from public.quotes where id=a.quote_id and user_id=a.user_id and customer_id=a.customer_id for update;
   select * into w from public.pilot_quote_followup_workflows where id=a.workflow_id for update;
+  if customer.archived_at is not null then
+    update public.pilot_quote_followup_workflows set state='held',hold_reason='customer_archived',held_at=clock_timestamp()
+      where id=w.id and state='approved';
+    return jsonb_build_object('code','customer_archived');
+  end if;
   perform 1 from public.quote_services where quote_id=q.id for share;
   perform 1 from public.quote_options where quote_id=q.id for share;
   perform 1 from public.quote_addons where quote_id=q.id for share;
@@ -569,7 +597,7 @@ end $$;
 -- listed public entrypoints are callable by the trusted service role.
 do $$ declare r record; begin
   for r in select p.oid::regprocedure as signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-    where n.nspname='public' and p.proname=any(array['_pilot_email_immutable','_pilot_email_owner_lock',
+    where n.nspname='public' and p.proname=any(array['_pilot_email_immutable','_pilot_email_owner_lock','_pilot_email_customer_archived',
       'pilot_email_create_connection','pilot_email_set_connection_state','pilot_email_approve_workflow','pilot_email_hold_workflow',
       'pilot_email_claim','pilot_email_start','pilot_email_confirm','pilot_email_finalize','pilot_email_fail',
       'pilot_email_claim_event','pilot_email_finalize_event','pilot_email_fail_event']) loop
