@@ -32,8 +32,9 @@ export async function runExtraCases(db: Database): Promise<CaseResult[]> {
       return value as Verdict
     } finally { await db.exec('reset role').catch(() => {}) }
   }
-  const test = async (name: string, work: () => Promise<void>) => {
-    await db.exec('begin')
+  const test = async (name: string, work: () => Promise<void>, isolation = 'read committed') => {
+    assert.ok(['read committed', 'read uncommitted', 'repeatable read', 'serializable'].includes(isolation))
+    await db.exec(`begin isolation level ${isolation}`)
     try {
       await db.exec(`update public.business_settings set timezone=case
         when extract(hour from clock_timestamp() at time zone 'UTC')::int=12 then 'Etc/UTC'
@@ -407,5 +408,82 @@ export async function runExtraCases(db: Database): Promise<CaseResult[]> {
     assert.equal((await rpc('select public.pilot_email_confirm($1::uuid,null,$2) as value', [attempt.attempt_id, 'fake-receipt'])).code, 'stale_lease')
     assert.equal((await start(attempt)).code, 'started')
   })
+  const archive = () => db.query('update public.customers set archived_at=clock_timestamp() where id=$1::uuid', [CA])
+  const workflows = () => scalar('select jsonb_agg(to_jsonb(w) order by id) as value from public.pilot_quote_followup_workflows w')
+  const attempts = () => scalar('select jsonb_agg(to_jsonb(a) order by id) as value from public.pilot_email_send_attempts a')
+  await test('archive: owner UPDATE holds every approved quote for only that customer; private trigger and attempts stay protected', async () => {
+    const cid = await connection(), first = await workflow(cid), second = await workflow(cid, CA, QA2)
+    const other = await workflow(await connection(B), CB, QB, B)
+    const otherBefore = await scalar('select to_jsonb(w) as value from public.pilot_quote_followup_workflows w where id=$1::uuid', [other])
+    const leased = await claim(first), before = await attempts()
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      assert.equal(await scalar("select has_function_privilege($1,'public._pilot_email_customer_archived()','EXECUTE') as value", [role]), false)
+    }
+    await db.exec('set local role authenticated')
+    await db.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)", [A, JSON.stringify({ sub: A, role: 'authenticated' })])
+    const updated = await db.query<{ id: string }>('update public.customers set archived_at=clock_timestamp() where id=$1::uuid returning id', [CA])
+    assert.deepEqual(updated.rows, [{ id: CA }], 'Actual authenticated owner archive must execute the private trigger')
+    await db.exec('reset role')
+    for (const wid of [first, second]) assert.deepEqual(await scalar("select jsonb_build_object('state',state,'reason',hold_reason,'held',held_at is not null) as value from public.pilot_quote_followup_workflows where id=$1::uuid", [wid]), { state: 'held', reason: 'customer_archived', held: true })
+    assert.deepEqual(await scalar('select to_jsonb(w) as value from public.pilot_quote_followup_workflows w where id=$1::uuid', [other]), otherBefore)
+    assert.deepEqual(await attempts(), before, 'Archive must not rewrite any attempt, lease, payload or receipt field')
+    assert.equal((await start(leased)).code, 'customer_archived')
+    assert.equal((await rpc('select public.pilot_email_claim($1::uuid,2) as value', [first])).code, 'held')
+  })
+  await test('archive: pre-archived approval refuses without inserting a workflow', async () => {
+    const cid = await connection()
+    await archive()
+    assert.equal((await approve(cid, CA, QA, await copy())).code, 'customer_archived')
+    assert.equal(await count('select count(*) as value from public.pilot_quote_followup_workflows'), 0)
+    assert.equal(await count('select count(*) as value from public.pilot_email_send_attempts'), 0)
+  })
+  await test('archive: restore and same-version approval replay never resume held work', async () => {
+    const cid = await connection(), steps = await copy()
+    const approved = await approve(cid, CA, QA, steps), wid = String(approved.workflow_id)
+    assert.equal(approved.code, 'approved')
+    await archive()
+    const held = await workflows(), before = await attempts()
+    await db.query('update public.customers set archived_at=null where id=$1::uuid', [CA])
+    assert.equal((await approve(cid, CA, QA, steps)).code, 'existing')
+    assert.equal((await rpc('select public.pilot_email_claim($1::uuid,1) as value', [wid])).code, 'held')
+    assert.deepEqual(await workflows(), held)
+    assert.deepEqual(await attempts(), before)
+  })
+  await test('archive: statement rollback restores both customer and eligible workflows', async () => {
+    await workflow(await connection())
+    const before = await workflows(), payloads = await attempts()
+    await db.exec('savepoint rollback_archive')
+    await archive()
+    assert.notDeepEqual(await workflows(), before)
+    await db.exec('rollback to savepoint rollback_archive; release savepoint rollback_archive')
+    assert.equal(await scalar('select archived_at as value from public.customers where id=$1::uuid', [CA]), null)
+    assert.deepEqual(await workflows(), before)
+    assert.deepEqual(await attempts(), payloads)
+  })
+  await test('archive: existing held reason and completed receipt history are never overwritten', async () => {
+    const cid = await connection(), done = await approve(cid, CA, QA, await copy(1))
+    assert.equal(done.code, 'approved')
+    const completed = await claim(String(done.workflow_id))
+    assert.equal((await start(completed)).code, 'started')
+    await confirm(completed, 'archive-completed-receipt')
+    assert.equal((await finalize(completed)).code, 'finalized')
+    const wid = await workflow(cid, CA, QA2), leased = await claim(wid)
+    assert.equal((await rpc('select public.pilot_email_hold_workflow($1::uuid,$2) as value', [wid, 'owner_paused'])).code, 'held')
+    const before = await workflows(), payloads = await attempts()
+    await archive()
+    assert.deepEqual(await workflows(), before)
+    assert.deepEqual(await attempts(), payloads)
+    assert.equal((await start(leased)).code, 'customer_archived')
+    assert.deepEqual(await workflows(), before, 'Start must not replace an earlier owner hold')
+    assert.equal(await count('select count(*) as value from public.messages'), 1)
+  })
+  for (const isolation of ['read uncommitted', 'repeatable read', 'serializable']) {
+    await test(`archive: ${isolation} transition refuses with 0A000 even without a visible workflow`, async () => {
+      assert.equal(await scalar("select current_setting('transaction_isolation') as value"), isolation)
+      await mustRejectSql('update public.customers set archived_at=clock_timestamp() where id=$1::uuid', [CA], ['0A000'])
+      assert.equal(await scalar('select archived_at as value from public.customers where id=$1::uuid', [CA]), null)
+      assert.equal(await count('select count(*) as value from public.pilot_quote_followup_workflows'), 0)
+    }, isolation)
+  }
   return results
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import type { Database, TestResult } from './database'
 import { sqlSupabase } from './runtime-cases'
-import { createPilotStore, type PilotConnection, type PilotRecord } from '../../src/lib/comms/pilotEmailStore'
+import { createPilotStore, type PilotConnection, type PilotCustomer, type PilotRecord, type PilotStore } from '../../src/lib/comms/pilotEmailStore'
 import { dispatchApprovedPilotEmail, type PilotEmailRuntime } from '../../src/lib/comms/pilotEmailAttempt'
 import { processPilotEmailWebhook } from '../../src/lib/comms/pilotEmailEvents'
 import { approvePilotEmailRequest } from '../../src/lib/comms/pilotEmailOwner'
@@ -211,6 +211,125 @@ export async function runRuntimeReviewCases(db: Database): Promise<TestResult[]>
     await db.exec('drop trigger pilot_review_confirm_fault on public.pilot_email_send_attempts; drop function public.pilot_review_confirm_fault()')
     assert.equal((await dispatchApprovedPilotEmail({ store, credentials, http }, state.wid, 1)).code, 'finalized')
     assert.equal(sends.length, 2); assert.deepEqual(sends[0], sends[1]); assert.equal(await count('messages'), 1)
+  })
+
+  // Archive successor: real store/handler/worker and SQL verdicts. Only missing
+  // or malformed customer transport shapes and a rejected read are injected;
+  // no claim/start/confirmation result is mocked. The first original case is
+  // the active-customer actual TS→SQL→synthetic HTTP success control.
+  const archiveCustomer = () => db.query('update public.customers set archived_at=clock_timestamp() where user_id=$1::uuid and id=$2::uuid', [A, CA])
+  const restoreCustomer = () => db.query('update public.customers set archived_at=null where user_id=$1::uuid and id=$2::uuid', [A, CA])
+  const observeWorker = (candidateStore: PilotStore = store) => {
+    const credentialCalls: string[] = [], calls: string[] = []
+    const runtime: PilotEmailRuntime = { store: candidateStore, credentials: async c => {
+      credentialCalls.push(c.id); return credentials(c)
+    }, http: httpFixture(() => ({ id: SENT }), calls) }
+    return { runtime, credentialCalls, calls }
+  }
+  const noNativeSend = async () => {
+    assert.equal(await count('messages'), 0); assert.equal(await count('notification_log'), 0)
+    assert.equal(await value('select count(*)::int as value from public.pilot_email_send_attempts where first_started_at is not null'), 0)
+  }
+
+  await test('archive review: actual required customer SELECT returns explicit active and archived values', async () => {
+    await setup()
+    const reads: { sql: string; params?: unknown[] }[] = []
+    const traced: Database = { exec: sql => db.exec(sql), query: async <T>(sql: string, params?: unknown[]) => {
+      reads.push({ sql, params }); return db.query<T>(sql, params)
+    } }
+    const tracedStore = createPilotStore(sqlSupabase(traced))
+    const active = await tracedStore.customer(A, CA)
+    assert.ok(active); assert.equal(Object.hasOwn(active, 'archived_at'), true); assert.equal(active.archived_at, null)
+    await archiveCustomer()
+    const archived = await tracedStore.customer(A, CA)
+    assert.ok(archived); assert.equal(typeof archived.archived_at, 'string'); assert.ok(Number.isFinite(Date.parse(archived.archived_at!)))
+    const customerReads = reads.filter(r => r.sql.includes('from public."customers"'))
+    assert.equal(customerReads.length, 2)
+    for (const read of customerReads) {
+      assert.match(read.sql, /^select [^*]*"archived_at"[^*]* from public\."customers"/)
+      assert.match(read.sql, /"id" = \$1 and "user_id" = \$2/); assert.deepEqual(read.params, [CA, A])
+    }
+  })
+  await test('archive review: archive after actual claim stops before credentials and provider HTTP', async () => {
+    const state = await setup(), rpcCalls: string[] = []
+    const observed = observeWorker({ ...store,
+      rpc: async (name, args) => { rpcCalls.push(name); return store.rpc(name, args) },
+      customer: async (owner, id) => { await archiveCustomer(); return store.customer(owner, id) },
+    })
+    assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 1)).code, 'blocked')
+    assert.ok(rpcCalls.includes('pilot_email_claim')); assert.equal(rpcCalls.includes('pilot_email_start'), false)
+    assert.deepEqual(observed.credentialCalls, []); assert.deepEqual(observed.calls, []); await noNativeSend()
+    assert.equal(await workflowState(state.wid), 'held')
+    assert.equal(await value('select hold_reason as value from public.pilot_quote_followup_workflows where id=$1::uuid', [state.wid]), 'customer_archived')
+  })
+  for (const fault of ['missing', 'malformed', 'null', 'throw'] as const) {
+    await test(`archive review: ${fault} customer archive read stops before credentials and HTTP`, async () => {
+      const state = await setup()
+      const observed = observeWorker({ ...store, customer: async (owner, id) => {
+        if (fault === 'null') return store.customer(owner, SENT) // Real SELECT, no matching customer.
+        const actual = await store.customer(owner, id); assert.ok(actual)
+        if (fault === 'throw') throw new Error('synthetic_customer_transport_rejected')
+        const damaged = { ...actual } as Record<string, unknown>
+        if (fault === 'missing') delete damaged.archived_at
+        else damaged.archived_at = 'not-a-timestamp'
+        return damaged as unknown as PilotCustomer
+      } })
+      assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 1)).code, fault === 'throw' ? 'pending' : 'unavailable')
+      assert.deepEqual(observed.credentialCalls, []); assert.deepEqual(observed.calls, []); await noNativeSend()
+      assert.equal(await workflowState(state.wid), 'approved')
+    })
+  }
+  await test('archive review: actual customer SELECT denial fails before credentials and HTTP', async () => {
+    const state = await setup(), observed = observeWorker()
+    await db.exec('revoke select on public.customers from service_role')
+    assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 1)).code, 'pending')
+    assert.deepEqual(observed.credentialCalls, []); assert.deepEqual(observed.calls, []); await noNativeSend()
+    assert.equal(await workflowState(state.wid), 'approved')
+  })
+  for (const restore of [false, true]) {
+    await test(`archive review: cached active customer cannot bypass SQL ${restore ? 'archive-restore latch' : 'archive start check'}`, async () => {
+      const state = await setup(), startCodes: unknown[] = []
+      const observed = observeWorker({ ...store, rpc: async (name, args) => {
+        if (name === 'pilot_email_start') { await archiveCustomer(); if (restore) await restoreCustomer() }
+        const result = await store.rpc(name, args)
+        if (name === 'pilot_email_start') startCodes.push(result.code)
+        return result
+      } })
+      assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 1)).code, 'blocked')
+      assert.deepEqual(startCodes, [restore ? 'held' : 'customer_archived'])
+      assert.equal(observed.credentialCalls.length, 1); assert.deepEqual(observed.calls, []); await noNativeSend()
+      assert.equal(await workflowState(state.wid), 'held')
+    })
+  }
+  await test('archive review: restore owner replay refuses without replacing approval or resuming work', async () => {
+    const state = await setup()
+    await archiveCustomer(); await restoreCustomer()
+    assert.equal((await approvePilotEmailRequest(store, auth, request(state.body))).status, 409)
+    assert.equal(await workflowState(state.wid), 'held'); assert.equal(await count('pilot_quote_followup_workflows'), 1)
+    assert.equal(await count('pilot_email_send_attempts'), 2)
+    const observed = observeWorker()
+    assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 1)).code, 'blocked')
+    assert.deepEqual(observed.credentialCalls, []); assert.deepEqual(observed.calls, []); await noNativeSend()
+  })
+  await test('archive review: known confirmed receipt reconciles after archive without credentials or HTTP', async () => {
+    const state = await setup()
+    // Seed a known provider result through the real native lifecycle RPCs;
+    // this fictional receipt is history to finalize, not a request to resend.
+    const claim = await store.rpc('pilot_email_claim', { p_workflow: state.wid, p_step: 1 })
+    assert.equal(claim.code, 'claimed')
+    const args = { p_attempt: claim.attempt_id, p_fence: claim.fence }
+    assert.equal((await store.rpc('pilot_email_start', args)).code, 'started')
+    assert.equal((await store.rpc('pilot_email_confirm', { ...args, p_provider_email_id: SENT })).code, 'confirmed')
+    assert.equal((await store.rpc('pilot_email_fail', { ...args, p_code: 'store_failed' })).code, 'released')
+    await archiveCustomer()
+    const observed = observeWorker({ ...store, customer: async () => { throw new Error('Reconciliation must not read customer eligibility') } })
+    assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 1)).code, 'finalized')
+    assert.deepEqual(observed.credentialCalls, []); assert.deepEqual(observed.calls, [])
+    assert.equal(await count('messages'), 1); assert.equal(await count('notification_log'), 1)
+    assert.equal(await workflowState(state.wid), 'held')
+    assert.equal(await value('select provider_email_id as value from public.pilot_email_send_attempts where id=$1::uuid', [claim.attempt_id]), SENT)
+    assert.equal((await dispatchApprovedPilotEmail(observed.runtime, state.wid, 2)).code, 'blocked')
+    assert.deepEqual(observed.credentialCalls, []); assert.deepEqual(observed.calls, [])
   })
   return results
 }

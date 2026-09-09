@@ -26,6 +26,22 @@ async function lockBarrier(observer: Database, waiter: number, holder: number) {
   throw new Error('Expected separate-session advisory lock barrier was not observed')
 }
 
+// Row UPDATE versus SELECT FOR SHARE normally waits on the holder's transaction
+// ID (and may queue a tuple lock). Require both the exact blocker and a real row
+// dependency; do not weaken the four original advisory-lock barriers above.
+async function customerBarrier(observer: Database, waiter: number, holder: number) {
+  const deadline = Date.now() + 8000
+  while (Date.now() < deadline) {
+    const row = (await observer.query<{ blocked: boolean; locks: string[] }>(`select
+      $2::int=any(pg_blocking_pids($1::int)) as blocked,
+      array(select locktype from pg_locks where pid=$1::int and not granted
+        and locktype in ('transactionid','tuple') order by locktype) as locks`, [waiter, holder])).rows[0]
+    if (row.blocked && row.locks.length) return { waiter, holder, evidence: 'pg_blocking_pids + ungranted customer row dependency', locks: row.locks }
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error('Expected separate-session customer row lock barrier was not observed')
+}
+
 async function seed(db: Database, tag: number, twoSteps = false) {
   const id = (n: number) => `11111111-1111-4111-8111-${String(tag * 100 + n).padStart(12, '0')}`
   const owner = id(1), customer = id(2), customer2 = id(3), quote = id(4), quote2 = id(5)
@@ -55,7 +71,7 @@ async function seed(db: Database, tag: number, twoSteps = false) {
     const w1 = await approve(customer, quote), w2 = await approve(customer2, quote2)
     assert.equal(w1.code, 'approved'); assert.equal(w2.code, 'approved')
     await db.exec('commit')
-    return { owner, customer, quote, cid, w1: w1.workflow_id, w2: w2.workflow_id }
+    return { owner, customer, quote, cid, steps, w1: w1.workflow_id, w2: w2.workflow_id }
   } catch (error) { await db.exec('rollback'); throw error }
 }
 
@@ -144,6 +160,134 @@ export async function runConcurrencyCases(observer: Database) {
           })
           assert.equal(Number(await scalar(observer, 'select count(*) as value from public.notification_log where user_id=$1::uuid', [f.owner])), 2)
         }
+      })
+    }
+
+    const archive = (db: Database, customer: string) => db.query('update public.customers set archived_at=clock_timestamp() where id=$1::uuid', [customer])
+    const restore = (db: Database, customer: string) => db.query('update public.customers set archived_at=null where id=$1::uuid', [customer])
+    const workflowRow = (wid: unknown) => scalar(observer, 'select to_jsonb(w) as value from public.pilot_quote_followup_workflows w where id=$1::uuid', [wid])
+    const held = async (wid: unknown) => assert.deepEqual(await scalar(observer,
+      "select jsonb_build_object('state',state,'reason',hold_reason) as value from public.pilot_quote_followup_workflows where id=$1::uuid", [wid]),
+    { state: 'held', reason: 'customer_archived' })
+    const freshQuote = (f: Awaited<ReturnType<typeof seed>>, tag: number) => scalar(observer, `insert into public.quotes
+      (id,user_id,customer_id,quote_number,customer_name,address,service_type,initial_price,status,sent_at,issued_date,valid_until)
+      select gen_random_uuid(),user_id,customer_id,$2,customer_name,address,service_type,initial_price,status,sent_at,issued_date,valid_until
+      from public.quotes where id=$1::uuid returning id as value`, [f.quote, `ARCHIVE-APPROVAL-${tag}`])
+    const approve = (db: Database, f: Awaited<ReturnType<typeof seed>>, quote: unknown) => rpc(db,
+      'select public.pilot_email_approve_workflow($1::uuid,$2::uuid,$3::uuid,$4::jsonb,$5::uuid) as value',
+      [f.cid, f.customer, quote, JSON.stringify(f.steps), f.owner])
+    for (const archiveFirst of [true, false]) {
+      await test(archiveFirst ? 'archive row commits before waiting start: leased attempt never receives an envelope'
+        : 'start row lock wins before archive: authorized receipt reconciles but future work remains held', async () => {
+        const f = await seed(observer, archiveFirst ? 5 : 6, true)
+        const a = await asService(observer, () => claim(observer, f.w1)); assert.equal(a.code, 'claimed')
+        const other = await workflowRow(f.w2)
+        await left.exec('begin isolation level read committed')
+        assert.equal(await scalar(left, "select current_setting('transaction_isolation') as value"), 'read committed')
+        if (archiveFirst) await archive(left, f.customer)
+        else {
+          await left.exec('set local role service_role')
+          assert.equal((await start(left, a)).code, 'started')
+        }
+        await right.exec('begin isolation level read committed')
+        if (archiveFirst) await right.exec('set local role service_role')
+        const waiting = archiveFirst ? start(right, a) : archive(right, f.customer)
+        void waiting.catch(() => undefined)
+        barriers.push(await customerBarrier(observer, right.pid, left.pid))
+        await left.exec('commit')
+        const result = await waiting
+        if (archiveFirst) assert.equal((result as Verdict).code, 'customer_archived')
+        await right.exec('commit')
+        await held(f.w1)
+        assert.deepEqual(await workflowRow(f.w2), other, 'Same-owner other customer must remain untouched')
+        assert.equal((await asService(observer, () => claim(observer, f.w1, 2))).code, 'held')
+        if (archiveFirst) assert.equal(await scalar(observer, 'select first_started_at as value from public.pilot_email_send_attempts where id=$1::uuid', [a.attempt_id]), null)
+        else {
+          const frozen = await scalar(observer, 'select jsonb_build_object(\'payload\',payload::text,\'hash\',payload_hash,\'key\',idempotency_key,\'first\',first_started_at) as value from public.pilot_email_send_attempts where id=$1::uuid', [a.attempt_id])
+          await asService(observer, async () => {
+            assert.equal((await rpc(observer, 'select public.pilot_email_confirm($1::uuid,$2::bigint,$3) as value', [a.attempt_id, a.fence, 'archive-authorized-receipt'])).code, 'confirmed')
+            assert.equal((await rpc(observer, 'select public.pilot_email_finalize($1::uuid,$2::bigint) as value', [a.attempt_id, a.fence])).code, 'finalized')
+          })
+          assert.deepEqual(await scalar(observer, 'select jsonb_build_object(\'payload\',payload::text,\'hash\',payload_hash,\'key\',idempotency_key,\'first\',first_started_at) as value from public.pilot_email_send_attempts where id=$1::uuid', [a.attempt_id]), frozen)
+          assert.equal(Number(await scalar(observer, 'select count(*) as value from public.notification_log where user_id=$1::uuid', [f.owner])), 1)
+          await held(f.w1)
+        }
+      })
+    }
+    await test('archive commits before waiting approval: archived customer receives no new workflow', async () => {
+      const f = await seed(observer, 11), quote = await freshQuote(f, 11)
+      await left.exec('begin isolation level read committed'); await archive(left, f.customer)
+      await right.exec('begin isolation level read committed; set local role service_role')
+      const waiting = approve(right, f, quote); void waiting.catch(() => undefined)
+      barriers.push(await customerBarrier(observer, right.pid, left.pid))
+      await left.exec('commit')
+      assert.equal((await waiting).code, 'customer_archived')
+      await right.exec('commit')
+      assert.equal(Number(await scalar(observer, 'select count(*) as value from public.pilot_quote_followup_workflows where quote_id=$1::uuid', [quote])), 0)
+      await held(f.w1)
+    })
+    await test('approval commits before blocked archive: Read Committed sees newly approved workflow and immediate restore stays held', async () => {
+      const f = await seed(observer, 7), quote = await freshQuote(f, 7)
+      await left.exec('begin isolation level read committed; set local role service_role')
+      const approved = await approve(left, f, quote); assert.equal(approved.code, 'approved')
+      await right.exec('begin isolation level read committed')
+      assert.equal(await scalar(right, "select current_setting('transaction_isolation') as value"), 'read committed')
+      const waiting = archive(right, f.customer); void waiting.catch(() => undefined)
+      barriers.push(await customerBarrier(observer, right.pid, left.pid))
+      await left.exec('commit'); await waiting
+      await restore(right, f.customer); await right.exec('commit')
+      assert.equal(await scalar(observer, 'select archived_at as value from public.customers where id=$1::uuid', [f.customer]), null)
+      await held(approved.workflow_id); await held(f.w1)
+      assert.equal((await asService(observer, () => claim(observer, approved.workflow_id))).code, 'held')
+      const replay = await asService(observer, () => approve(observer, f, quote))
+      assert.equal(replay.code, 'existing'); await held(replay.workflow_id)
+    })
+    await test('Repeatable Read snapshot predates approval: blocked archive raises 0A000 and rolls back rather than missing new workflow', async () => {
+      const f = await seed(observer, 8), quote = await freshQuote(f, 8)
+      await left.exec('begin isolation level repeatable read')
+      assert.equal(await scalar(left, 'select archived_at as value from public.customers where id=$1::uuid', [f.customer]), null)
+      await right.exec('begin; set local role service_role')
+      const approved = await approve(right, f, quote); assert.equal(approved.code, 'approved')
+      const waiting = archive(left, f.customer); void waiting.catch(() => undefined)
+      barriers.push(await customerBarrier(observer, left.pid, right.pid))
+      await right.exec('commit')
+      await assert.rejects(waiting, (error: unknown) => !!error && typeof error === 'object' && 'code' in error && error.code === '0A000')
+      await left.exec('rollback')
+      assert.equal(await scalar(observer, 'select archived_at as value from public.customers where id=$1::uuid', [f.customer]), null)
+      assert.equal(await scalar(observer, 'select state as value from public.pilot_quote_followup_workflows where id=$1::uuid', [approved.workflow_id]), 'approved')
+    })
+    for (const inbound of [false, true]) {
+      await test(inbound ? 'archive versus matched unsubscribe finalization: approved processing-event fixture has no customer/workflow deadlock'
+        : 'archive versus outbound finalization: native customer-touch trigger preserves confirmed delivery without deadlock', async () => {
+        const f = await seed(observer, inbound ? 10 : 9, true)
+        const a = await asService(observer, () => claim(observer, f.w1)); assert.equal(a.code, 'claimed')
+        assert.equal((await asService(observer, () => start(observer, a))).code, 'started')
+        assert.equal((await asService(observer, () => rpc(observer, 'select public.pilot_email_confirm($1::uuid,$2::bigint,$3) as value',
+          [a.attempt_id, a.fence, `archive-finalize-${inbound}`]))).code, 'confirmed')
+        // Valid, explicitly provisioned processing receipt: intentionally keep
+        // the workflow approved to avoid relying on claim_event's earlier hold.
+        // This models verified metadata only, never signature/provider proof.
+        const eventId = inbound ? await scalar(observer, `insert into public.pilot_email_webhook_events
+          (connection_id,provider_event_id,event_type,provider_email_id,route_token,attempt_id,state,fence,lease_until)
+          select connection_id,'archive-unsubscribe-event','email.received','archive-unsubscribe-email',reply_token,id,'processing',1,clock_timestamp()+interval '5 minutes'
+          from public.pilot_email_send_attempts where id=$1::uuid returning id as value`, [a.attempt_id]) : null
+        assert.equal(await scalar(observer, 'select state as value from public.pilot_quote_followup_workflows where id=$1::uuid', [f.w1]), 'approved')
+        const sender = await scalar(observer, 'select recipient_email as value from public.pilot_quote_followup_workflows where id=$1::uuid', [f.w1])
+        await left.exec('begin isolation level read committed'); await archive(left, f.customer)
+        await right.exec('begin; set local role service_role')
+        const waiting = inbound ? rpc(right, 'select public.pilot_email_finalize_event($1::uuid,1,$2,$3,clock_timestamp(),$4) as value',
+          [eventId, sender, 'unsubscribe', '<archive-fixture@example.invalid>'])
+          : rpc(right, 'select public.pilot_email_finalize($1::uuid,$2::bigint) as value', [a.attempt_id, a.fence])
+        void waiting.catch(() => undefined)
+        barriers.push(await customerBarrier(observer, right.pid, left.pid))
+        await left.exec('commit')
+        assert.equal((await waiting).code, inbound ? 'completed' : 'finalized')
+        await right.exec('commit'); await held(f.w1)
+        assert.equal(Number(await scalar(observer, 'select count(*) as value from public.messages where user_id=$1::uuid', [f.owner])), 1)
+        if (inbound) {
+          assert.equal(await scalar(observer, 'select email_opt_in as value from public.customers where id=$1::uuid', [f.customer]), false)
+          assert.equal(Number(await scalar(observer, 'select count(*) as value from public.consent_changes where user_id=$1::uuid', [f.owner])), 1)
+        } else assert.equal(Number(await scalar(observer, 'select count(*) as value from public.notification_log where user_id=$1::uuid', [f.owner])), 1)
       })
     }
   } finally {
