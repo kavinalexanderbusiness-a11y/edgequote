@@ -1181,5 +1181,12 @@
   "sql_md5": "f9b75a627b8d16c512bb93896b4b8e39",
   "version": "20260905205937",
   "stmt_count": 1
+ },
+ {
+  "name": "restrict_job_session_minutes",
+  "sql_len": 943,
+  "sql_md5": "4d7bea696b5f58738df7a524381be929",
+  "version": "20260910151337",
+  "stmt_count": 1
  }
 ]
