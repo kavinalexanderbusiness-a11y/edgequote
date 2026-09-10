@@ -241,6 +241,13 @@ export default function SetupPage() {
             <p key={s.surface} className="text-ink-faint flex items-center gap-2"><ShieldCheck className="w-4 h-4 shrink-0" /> {s.reason}</p>
           ))}
         </div>
+        {firstRun && (
+          <aside className="mt-5 rounded-xl border border-border bg-bg-secondary p-4 text-sm">
+            <h2 className="font-semibold text-ink">Explore Base and Premium</h2>
+            <p className="mt-1 text-ink-muted">Preview plans from CA$29/month. Subscription checkout is coming later; you have not been charged.</p>
+            <Link href="/plans" className="mt-2 inline-flex min-h-11 items-center font-medium text-accent-text hover:underline">Compare plans</Link>
+          </aside>
+        )}
         <div className="flex gap-2 mt-6">
           {firstRun ? (
             <>

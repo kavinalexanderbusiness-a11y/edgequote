@@ -11,6 +11,7 @@ import { Zap, MailCheck, ShieldCheck, KeyRound } from 'lucide-react'
 import { BETA_TOKEN_RE, MIN_PASSWORD, SIGNUP_CONFIRM_PATH, type BetaInviteState, type BetaSignupResponse } from '@/lib/betaInvite'
 import { REGISTER_INTENT, REGISTER_STATUS_PATH, REGISTRATION_CLOSED, RESEND_COOLDOWN_SECONDS, RESENT_NOTE, resendOutcome, signUpOutcome } from '@/lib/registration'
 import { GoogleButton, AuthDivider } from '@/components/auth/GoogleButton'
+import Link from 'next/link'
 
 // ── /signup — two front doors, one gate ──────────────────────────────────────
 // With ?invite=eqb_… this is the private-beta door, unchanged: the operator's
@@ -213,6 +214,10 @@ function SignupFlow() {
                 Create account
               </Button>
             </form>
+            <p className="mt-5 text-center text-sm text-ink-muted">
+              No subscription charge at signup.{' '}
+              <Link href="/plans" className="text-accent-text hover:underline">Preview Base and Premium plans</Link>
+            </p>
           </div>
           <p className="text-center text-xs text-ink-faint mt-6">
             We’ll email you a confirmation link — your business gets set up right after.
