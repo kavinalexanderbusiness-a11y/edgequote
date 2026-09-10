@@ -17,12 +17,15 @@
    screen. An old-but-working app beats no app; network-first means anyone with
    signal gets the new one anyway. (Cost: old chunks accumulate. They're small and
    bounded by how often we ship.) */
-const VERSION = 'v3'
+const VERSION = 'v4'
 const CORE = `eq-core-${VERSION}`
 const SHELL = 'eq-shell'
 const STATIC = 'eq-static'
 const KEEP = [CORE, SHELL, STATIC]
-const PRECACHE = ['/offline.html', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg']
+const PRECACHE = [
+  '/offline.html', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg',
+  '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/icon-maskable-1024.png',
+]
 
 // The FIELD routes, listed explicitly. This was `/dashboard` + everything under it,
 // which was wrong and was my error: I justified it by claiming every page below the
@@ -156,10 +159,14 @@ self.addEventListener('fetch', (event) => {
   const cacheFirst = url.pathname.startsWith('/_next/static')
     || url.pathname.startsWith('/icon')
     || url.pathname.endsWith('.svg')
+    || url.pathname === '/apple-touch-icon.png'
     || url.pathname === '/manifest.webmanifest'
   if (cacheFirst) {
+    // Read versioned icons/manifest from the current core cache. An older copy in
+    // eq-static must not hide the new install metadata after an update.
+    const cacheName = PRECACHE.indexOf(url.pathname) !== -1 ? CORE : STATIC
     event.respondWith(
-      caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      caches.open(cacheName).then((cache) => cache.match(req).then((hit) => hit || fetch(req).then((res) => {
         // `res.ok` is the difference between a blip and a brick. Without it a chunk
         // that resolved 404/500 once — a deploy rotation, an edge blip, a captive
         // portal answering with its own HTML — was cached PERMANENTLY under a
@@ -169,10 +176,10 @@ self.addEventListener('fetch', (event) => {
         // checked this; this one didn't.)
         if (res && res.ok) {
           const copy = res.clone()
-          caches.open(STATIC).then((c) => c.put(req, copy)).catch(() => {})
+          cache.put(req, copy).catch(() => {})
         }
         return res
-      }))
+      })))
     )
     return
   }
