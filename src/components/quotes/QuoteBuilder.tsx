@@ -11,6 +11,7 @@ import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import { ServicePicker } from '@/components/ui/ServicePicker'
 import { useAutosave } from '@/hooks/useAutosave'
+import type { PilotQuoteSaveCaller } from '@/lib/quotes/pilotQuoteSaveCaller'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
 import { Select } from '@/components/ui/Select'
@@ -91,6 +92,9 @@ interface QuoteBuilderProps {
       section, on a deep link), leaving "did it save?" uncertainty plus a stale
       draft banner on the next Edit. New-quote callers omit it and keep back(). */
   onCancel?: () => void
+  /** Dormant, explicitly injected full-Save transport/recovery. No mounted route
+   * uses this yet. Its structured acknowledgement bypasses legacy boolean clear. */
+  pilotSave?: PilotQuoteSaveCaller
 }
 
 // Where the price in the field came from. NEVER inferred by comparing the field to
@@ -127,9 +131,14 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel,
+  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel, pilotSave,
 }: QuoteBuilderProps) {
   const router = useRouter()
+  const pilotSaveCurrent = useRef(pilotSave)
+  pilotSaveCurrent.current = pilotSave
+  const pilotSaveMounted = useRef(true)
+  const [pilotSaveMessage, setPilotSaveMessage] = useState<string | null>(null)
+  useEffect(() => { pilotSaveMounted.current = true; return () => { pilotSaveMounted.current = false } }, [])
   // One workday, in minutes, for THIS business — the same figure the calendar's
   // capacity bar and every scheduling engine read. Falls back to the shared 8h
   // default when settings haven't resolved, exactly as workdayMinutes defines.
@@ -250,8 +259,9 @@ export function QuoteBuilder({
   // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
   const formValues = watch()
   const autosave = useAutosave<QuoteFormValues>({
-    key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
-    ownership: isEdit ? undefined : 'verified-owner',
+    key: pilotSave?.autosaveKey ?? (autosaveKey || (isEdit ? 'quote:edit' : 'quote:new')),
+    ownership: pilotSave ? 'verified-owner' : isEdit ? undefined : 'verified-owner',
+    submission: pilotSave?.submission,
     value: formValues,
     canReplaceDraft: hasUserEdited,
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
@@ -343,6 +353,26 @@ export function QuoteBuilder({
       // bug DNA). Second tap saves unchanged. Arming resets the moment a price
       // exists, so a fixed quote is back to one-tap Save.
       if (effectiveTotal <= 0 && !zeroTotalArmed) { setZeroTotalArmed(true); return }
+      if (pilotSave) {
+        const submittedBy = pilotSave
+        const outcome = await submittedBy.dispatch(v, autosave)
+        // The form can type, navigate, remount or change accounts during await.
+        // Read RHF now; the captured watch() value is not this boundary's truth.
+        if (!pilotSaveMounted.current || pilotSaveCurrent.current !== submittedBy || !submittedBy.active()) return
+        if (outcome.code === 'committed') {
+          const cleared = submittedBy.complete(outcome, autosave, getValues())
+          setPilotSaveMessage(cleared ? null : submittedBy.hasPending()
+            ? 'The submitted version was saved, but we could not finish protecting your current edits. Keep this editor open and review recovery.'
+            : 'Saved the submitted version. Your newer edits are still here for review.')
+        } else {
+          setPilotSaveMessage(outcome.code === 'unknown'
+            ? 'We could not confirm this Save. Your submitted copy and current edits are kept. Review recovery before saving again.'
+            : outcome.reason === 'pending_recovery'
+              ? 'An earlier Save needs review. Your current edits are still here.'
+              : 'We could not save a recovery copy. Keep this editor open and try again when browser storage is available.')
+        }
+        return
+      }
       if (await onSubmit(v) !== false) autosave.clear()
     },
     // Save used to fail SILENTLY. `crew_size` is required and lives inside a
@@ -1353,9 +1383,23 @@ export function QuoteBuilder({
     </p>
   ) : null
   const saveLabel = zeroTotalArmed && effectiveTotal <= 0 ? 'Save anyway' : isEdit ? 'Update quote' : 'Save quote'
+  const cancelPilotSave = () => {
+    if (!autosave.flushCurrent(getValues())) {
+      setPilotSaveMessage('We could not protect your current edits. Keep this editor open until browser storage is available.')
+      return
+    }
+    const leave = onCancel ?? (() => router.back())
+    leave()
+  }
 
   return (
     <form onSubmit={submit} className="pb-24 lg:pb-0">
+      {pilotSave && pilotSave.active() && (pilotSaveMessage || pilotSave.hasPending()) && (
+        <div role="status" className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+          <p>{pilotSaveMessage || 'An earlier Save has a recovery copy available. Review it alongside the saved quote.'}</p>
+          {pilotSave.hasPending() && <button type="button" className="mt-2 font-medium underline" onClick={() => pilotSave.requestRecovery()}>Review recovery</button>}
+        </div>
+      )}
       {autosave.draft && (
         <div className="mb-4">
           <DraftRestoreBanner
@@ -2576,7 +2620,7 @@ export function QuoteBuilder({
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
                   {saveLabel}
                 </Button>
-                <Button type="button" variant="ghost" className="w-full" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={pilotSave ? cancelPilotSave : onCancel ?? (() => router.back())}>Cancel</Button>
               </div>
             </CardBody>
           </Card>
@@ -2600,7 +2644,7 @@ export function QuoteBuilder({
             <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
           </button>
           <div className="flex items-center gap-2 shrink-0">
-            <Button type="button" variant="ghost" size="sm" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={pilotSave ? cancelPilotSave : onCancel ?? (() => router.back())}>Cancel</Button>
             <Button type="submit" size="lg" loading={isSubmitting}>{saveLabel}</Button>
           </div>
         </div>

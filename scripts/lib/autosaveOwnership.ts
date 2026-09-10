@@ -319,9 +319,9 @@ export function verifyAutosaveOwnership(check: Check): void {
     ts.forEachChild(node, visit)
   }
   visit(qb)
-  check('actual QuoteBuilder expression opts in only new quotes', !!expression &&
-    runInNewContext(expression.getText(qb), { isEdit: false }) === 'verified-owner' &&
-    runInNewContext(expression.getText(qb), { isEdit: true }) === undefined)
+  check('default QuoteBuilder expression opts in only new quotes', !!expression &&
+    runInNewContext(expression.getText(qb), { isEdit: false, pilotSave: undefined }) === 'verified-owner' &&
+    runInNewContext(expression.getText(qb), { isEdit: true, pilotSave: undefined }) === undefined)
   const customer = read('src/components/customers/CustomerForm.tsx')
   check('CustomerForm creation opts in while edits retain the default contract',
     customerOptions(customer, { isEdit: false }, {}).ownership === 'verified-owner' &&
