@@ -23,7 +23,8 @@ export interface Equipment {
   purchase_date: string | null
   purchase_price: number | null
   status: EquipmentStatus
-  hours: number
+  /** Null means unknown or not applicable; zero is an actual meter reading. */
+  hours: number | null
   service_interval_hours: number | null
   service_interval_days: number | null
   // Derived by the DB trigger from the service log — never written by app code.
@@ -155,12 +156,22 @@ export function serviceStatus(eq: Equipment, todayISO: string): ServiceStatus {
     return { state: 'untracked', reason: 'No service schedule set', hoursRemaining: null, daysRemaining: null, tone: 'neutral' }
   }
 
+  const missing: string[] = []
   let hoursRemaining: number | null = null
   if (trackHours) {
-    // Hours since the last service — or since new when never serviced.
-    const base = eq.last_service_hours != null ? Number(eq.last_service_hours) : 0
-    const run = Math.max(0, Number(eq.hours) - base)
-    hoursRemaining = Math.round((eq.service_interval_hours! - run) * 10) / 10
+    // Only a machine with no service history can count from zero (since new).
+    // A service logged without a meter reading has an UNKNOWN hour baseline.
+    const base = eq.last_service_hours ?? (eq.last_service_at == null ? 0 : null)
+    if (eq.hours == null) {
+      missing.push('Add engine hours to check the hour schedule')
+    } else if (base == null) {
+      missing.push('Hours at the last service are missing')
+    } else if (eq.hours < base) {
+      missing.push('Check engine hours — the meter is below the last service reading')
+    } else {
+      const run = eq.hours - base
+      hoursRemaining = Math.round((eq.service_interval_hours! - run) * 10) / 10
+    }
   }
 
   let daysRemaining: number | null = null
@@ -168,7 +179,10 @@ export function serviceStatus(eq: Equipment, todayISO: string): ServiceStatus {
     // Days since the last service — or since purchase when never serviced.
     const from = eq.last_service_at ?? eq.purchase_date
     if (from) daysRemaining = eq.service_interval_days! - daysBetween(from, todayISO)
+    else missing.push('Add a purchase or last-service date to start the countdown')
   }
+
+  const withMissing = (reason: string) => missing.length ? `${reason} · ${missing.join(' · ')}` : reason
 
   const hoursDue = hoursRemaining != null && hoursRemaining <= 0
   const daysDue = daysRemaining != null && daysRemaining <= 0
@@ -176,7 +190,7 @@ export function serviceStatus(eq: Equipment, todayISO: string): ServiceStatus {
     const why = hoursDue && hoursRemaining != null
       ? `${Math.abs(hoursRemaining)} h past its ${eq.service_interval_hours} h service`
       : `${Math.abs(daysRemaining!)} days past its ${eq.service_interval_days}-day service`
-    return { state: 'due', reason: `Service due — ${why}`, hoursRemaining, daysRemaining, tone: 'danger' }
+    return { state: 'due', reason: withMissing(`Service due — ${why}`), hoursRemaining, daysRemaining, tone: 'danger' }
   }
 
   const hoursSoon = hoursRemaining != null && hoursRemaining <= Math.max(1, (eq.service_interval_hours || 0) * 0.1)
@@ -185,19 +199,24 @@ export function serviceStatus(eq: Equipment, todayISO: string): ServiceStatus {
     const why = hoursSoon && hoursRemaining != null
       ? `${hoursRemaining} h left`
       : `${daysRemaining} days left`
-    return { state: 'due_soon', reason: `Service soon — ${why}`, hoursRemaining, daysRemaining, tone: 'warn' }
+    return { state: 'due_soon', reason: withMissing(`Service soon — ${why}`), hoursRemaining, daysRemaining, tone: 'warn' }
   }
 
-  // A DAY interval with nothing to count from (no last service, no purchase date)
-  // left daysRemaining null while every due/soon test read false — so this line
-  // templated the null and the card announced "null days until next service" in
-  // GREEN. Reachable on a first run: the dialog needs only a name, and its own
-  // hint invites a 180-day interval. Say what's missing instead of a fake all-clear.
+  // Known due/soon reminders still win. Missing data on either configured axis
+  // prevents an all-clear, even when the other axis has time remaining.
   if (hoursRemaining == null && daysRemaining == null) {
-    return { state: 'untracked', reason: 'Add a purchase or last-service date to start the countdown', hoursRemaining, daysRemaining, tone: 'neutral' }
+    return { state: 'untracked', reason: missing.join(' · '), hoursRemaining, daysRemaining, tone: 'neutral' }
   }
   const why = hoursRemaining != null ? `${hoursRemaining} h until next service` : `${daysRemaining} days until next service`
+  if (missing.length) {
+    return { state: 'untracked', reason: withMissing(why), hoursRemaining, daysRemaining, tone: 'neutral' }
+  }
   return { state: 'ok', reason: why, hoursRemaining, daysRemaining, tone: 'success' }
+}
+
+/** A recorded service can establish an unknown meter, including a real zero. */
+export function shouldUpdateHourMeter(current: number | null, logged: number | null): boolean {
+  return logged != null && (current == null || logged > current)
 }
 
 // THE needs-service predicate. Both the fleet rollup and the page's filter call
@@ -263,13 +282,13 @@ export function costOfOwnership(eq: Equipment, services: EquipmentService[]) {
   const maintenance = round2(services.reduce((s, r) => s + (Number(r.cost) || 0), 0))
   const purchase = Number(eq.purchase_price) || 0
   const total = round2(purchase + maintenance)
-  const hours = Number(eq.hours) || 0
+  const hours = eq.hours
   return {
     purchase,
     maintenance,
     total,
     /** Blended $/hour — null until the machine has logged hours. */
-    perHour: hours > 0 ? round2(total / hours) : null,
+    perHour: hours != null && hours > 0 ? round2(total / hours) : null,
   }
 }
 
