@@ -60,6 +60,7 @@ async function main() {
     read('supabase/proposals/pilot-quote-save-contract-resolutions.md')
     for (const file of [
       'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts',
+      'src/lib/quotes/pilotQuoteSaveReceipt.ts',
       'src/types/index.ts', 'src/lib/quoteServices.ts', 'src/lib/quoteOptions.ts',
       'src/lib/payments/depositGate.ts', 'src/lib/pricingConfig.ts', 'src/lib/servicePricing.ts',
       'src/lib/utils.ts', 'src/lib/measure/data.ts', 'src/lib/measurePricing.ts',
@@ -153,6 +154,19 @@ async function main() {
     // Neither proposal is a migration or mounted production API.
     await apply('supabase/proposals/pilot-quote-save.sql')
     await apply('supabase/proposals/pilot-quote-versioned-acceptance.sql')
+    // The platform prelude permits deferred body validation. Compile the new
+    // entrypoints with empty, rejected authority before running fault cases so
+    // a syntax error cannot masquerade as an intended transactional rollback.
+    const compiled = (await db.query<{ value: string[] }>(`select jsonb_build_array(
+      public.pilot_quote_save(null,null,null)->>'code',
+      public.pilot_quote_acceptance_preview(null,null,null,null)->>'code',
+      public.pilot_quote_acceptance_commit(null,null,null,null,null,null,null,null,false)->>'code',
+      public.pilot_quote_acceptance_reconcile(null,null,null,null,null,null,null,null)->>'code'
+    ) as value`)).rows[0].value
+    if (JSON.stringify(compiled) !== JSON.stringify(['not_found','invalid_request','invalid_request','invalid_request'])) {
+      throw new Error('Candidate entrypoint compile/refusal preflight returned unexpected verdicts')
+    }
+    groups.candidateEntrypoints = [{ name: 'Candidate entrypoints compile and reject empty authority before transactional fault cases', pass: true }]
     report.candidateFullSaveImplemented = true
     report.candidateVersionedAcceptanceImplemented = true
     report.mountedFullSaveImplemented = false

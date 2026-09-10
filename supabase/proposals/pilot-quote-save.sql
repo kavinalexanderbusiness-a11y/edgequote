@@ -366,7 +366,7 @@ begin
   end if;
   select coalesce(jsonb_agg(to_jsonb(e) order by e.id),'[]'::jsonb) into after_events
     from public.property_measurement_events e where e.user_id=p_owner and e.property_id=target_property;
-  if not (after_events @> before_events) or jsonb_array_length(after_events)<>jsonb_array_length(before_events)+case when coalesce(expected_event,false) then 1 else 0 end
+  if not (after_events @> before_events) or jsonb_array_length(after_events)<>jsonb_array_length(before_events)+(case when coalesce(expected_event,false) then 1 else 0 end)
     then raise exception 'pilot_quote_save_measurement_history_mismatch' using errcode='P0001'; end if;
   if coalesce(expected_event,false) and not exists(select 1 from jsonb_array_elements(after_events) e
     where not before_events @> jsonb_build_array(e) and e->>'measurement_id'=meas.id::text and e->>'action'='measured'
@@ -376,7 +376,7 @@ begin
   after_s:=public._pilot_qs_snapshot(p_owner,p_quote);
   if after_s->>'code'<>'snapshot' then raise exception 'pilot_quote_save_receipt_unavailable' using errcode='P0001'; end if;
   if public._pilot_qs_pick(after_s#>'{quote,row}',patch_keys) is distinct from public._pilot_qs_pick(to_jsonb(pq),patch_keys)
-    or (after_s#>'{quote,row}'-(base_keys||array['updated_at','man_hours','subtotal','total','price_source','pricing_config_version_id','value_grade','nearby_count']))
+    or ((after_s#>'{quote,row}')-(base_keys||array['updated_at','man_hours','subtotal','total','price_source','pricing_config_version_id','value_grade','nearby_count']))
       is distinct from (before_q-(base_keys||array['updated_at','man_hours','subtotal','total','price_source','pricing_config_version_id','value_grade','nearby_count']))
     or after_s->'addons' is distinct from s->'addons' or after_s#>'{acceptance,latest}' is distinct from s#>'{acceptance,latest}'
     or public._pilot_qs_retained(p_owner,p_quote) is distinct from retained

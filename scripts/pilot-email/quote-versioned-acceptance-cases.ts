@@ -129,6 +129,31 @@ export async function runQuoteVersionedAcceptanceCases(observer: Database) {
     assert.match(core, /where id = p_quote_id and status in \('draft', 'sent'\);\s+GET DIAGNOSTICS v_quote_rows = ROW_COUNT;/)
     assert.match(core, /return v_quote_rows = 1;/); assert.ok(!core.includes('return found;'))
   })
+  await test('versioned acceptance: its native preview survives the actual JSON numeric-scale round trip', async (f, item) => {
+    await seed(observer, f, 'services')
+    const exp = await expected(observer, f), before = await snapshot(observer, f.owner)
+    const diagnostic = await transaction(observer, () => value<Row>(observer, `with p as materialized (
+      select public.pilot_quote_acceptance_preview(null,$1,$2::uuid,null)->'expected' as v
+    ) select jsonb_build_object(
+      'raw_shape_valid',public._pilot_qva_expected_valid(v,$2::uuid),
+      'transport_shape_valid',public._pilot_qva_expected_valid($3::jsonb,$2::uuid),
+      'same_expected_value',v=$3::jsonb,
+      'native_preview_revision',v->>'previewRevision',
+      'transport_text_hash',md5(($3::jsonb->'offered')::text),
+      'native_initial_text',v#>>'{offered,public,initial_price}',
+      'transport_initial_text',$3::jsonb#>>'{offered,public,initial_price}') as value from p`,
+    [f.token, f.quote, JSON.stringify(exp)]), 'postgres')
+    item.transportDiagnostic = diagnostic
+    assert.equal(diagnostic.raw_shape_valid, true); assert.equal(diagnostic.transport_shape_valid, true)
+    assert.equal(diagnostic.same_expected_value, true)
+    assert.equal(diagnostic.native_preview_revision, exp.previewRevision)
+    assert.notEqual(diagnostic.native_preview_revision, diagnostic.transport_text_hash,
+      'The regression must exercise different SQL numeric text after the real JSON transport')
+    assert.equal(diagnostic.native_initial_text, '100.00'); assert.equal(diagnostic.transport_initial_text, '100')
+    assert.deepEqual(await snapshot(observer, f.owner), before)
+    const receipt = await transaction(observer, () => commit(observer, f, exp, true, null, [f.addon]))
+    assert.equal(receipt.code, 'accepted'); assert.equal(receipt.accepted_amount, 122)
+  })
   for (const door of ['portal','owner','alias'] as const) {
     await test(`versioned acceptance: retired ${door} entrance refuses before all business/ledger writes`, async f => {
       await seed(observer, f, 'services'); const before = await snapshot(observer, f.owner)
@@ -147,6 +172,7 @@ export async function runQuoteVersionedAcceptanceCases(observer: Database) {
       const exp = await expected(observer, f, portal, choice)
       assert.deepEqual(await snapshot(observer, f.owner), before)
       const offered = (exp.offered as Row).public as Row
+      item.expected = exp
       assert.deepEqual(offered.included_addon_ids, [f.addon]); assert.equal(offered.accepted_amount, mode === 'options' ? 222 : 122)
       const serialized = JSON.stringify(exp)
       for (const forbidden of ['PRIVATE_SENTINEL_NOT_FOR_PREVIEW', f.token, f.owner, 'terms_payment_claim', 'no_charge_reason', 'no_charge_by', 'internal_notes']) assert.ok(!serialized.includes(forbidden))
@@ -198,7 +224,9 @@ export async function runQuoteVersionedAcceptanceCases(observer: Database) {
     assert.equal((await transaction(observer, () => commit(observer, f, { ...exp, extra: true }))).code, 'invalid_request')
     const tampered = JSON.parse(JSON.stringify(exp)) as Row
     ;(((tampered.offered as Row).public as Row).notes) = 'Forged shown scope'
-    assert.equal((await transaction(observer, () => commit(observer, f, tampered))).code, 'invalid_request')
+    assert.equal((await transaction(observer, () => commit(observer, f, tampered))).code, 'quote_changed')
+    assert.equal((await transaction(observer, () => commit(observer, f, { ...exp, previewRevision: 'malformed' }))).code, 'invalid_request')
+    assert.equal((await transaction(observer, () => commit(observer, f, { ...exp, previewRevision: '0'.repeat(32) }))).code, 'quote_changed')
     assert.deepEqual(await snapshot(observer, f.owner), before)
   })
   await test('versioned acceptance: missing portal terms acknowledgement rolls back preceding native choice and add-on provenance', async f => {

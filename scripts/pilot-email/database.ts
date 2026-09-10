@@ -94,6 +94,8 @@ export class DisposableSession implements Database {
   private pending: Pending | null = null
   private outputBuffer = ''
   private stderr = ''
+  private stderrTail = ''
+  private stderrBytes = 0
   private queue: Promise<unknown> = Promise.resolve()
   private ended = false
   private closing = false
@@ -115,7 +117,13 @@ export class DisposableSession implements Database {
     })
     this.process.stdout.setEncoding('utf8')
     this.process.stderr.setEncoding('utf8')
-    this.process.stderr.on('data', (chunk: string) => { this.stderr = (this.stderr + chunk).slice(-8000) })
+    this.process.stderr.on('data', (chunk: string) => {
+      // Keep the primary ERROR/LINE as well as the final native context. Large
+      // PL/pgSQL diagnostics can otherwise replace the error with body text.
+      this.stderrBytes += chunk.length
+      this.stderr = (this.stderr + chunk).slice(0, 6000)
+      this.stderrTail = (this.stderrTail + chunk).slice(-2000)
+    })
     this.process.stdout.on('data', (chunk: string) => this.onOutput(chunk))
     this.process.on('error', (error) => {
       if (this.process.pid === undefined) this.ended = true // spawn failed; no child exists to await
@@ -153,7 +161,8 @@ export class DisposableSession implements Database {
         const parts = line.slice(pending.marker.length + 1).trim().split(/\s+/)
         clearTimeout(pending.timer); this.pending = null
         if (parts[0] === 'false' && parts[1] === '00000') pending.resolve(pending.output)
-        else if (parts[0] === 'true' && /^[0-9A-Z]{5}$/.test(parts[1] ?? '')) pending.reject(new SqlStateError(parts[1], this.stderr || 'statement refused'))
+        else if (parts[0] === 'true' && /^[0-9A-Z]{5}$/.test(parts[1] ?? '')) pending.reject(new SqlStateError(parts[1],
+          (this.stderrBytes > 6000 ? this.stderr + '\n[bounded diagnostic tail]\n' + this.stderrTail : this.stderr) || 'statement refused'))
         else pending.reject(new Error('Unexpected psql result marker'))
       } else pending.output.push(line)
     }
@@ -162,6 +171,8 @@ export class DisposableSession implements Database {
     const operation = this.queue.then(() => new Promise<string[]>((resolve, reject) => {
       if (this.ended || this.closing) { reject(new Error('Disposable session is closed')); return }
       this.stderr = ''
+      this.stderrTail = ''
+      this.stderrBytes = 0
       const marker = 'PILOT_' + randomUUID().replace(/-/g, '')
       const timer = setTimeout(() => { this.fail(new Error('Disposable SQL timeout')); this.process.kill() }, 30000)
       this.pending = { marker, output: [], resolve, reject, timer }

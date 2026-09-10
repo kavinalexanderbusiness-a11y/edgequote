@@ -6,6 +6,7 @@ import { DisposableSession, SqlStateError, type Database, type TestResult } from
 import { identityRows, identityValue, seedQuoteIdentity, type IdentityFixture } from './quote-identity-fixtures'
 import { quoteSaveIntentFixture } from './quote-save-plan-cases'
 import { buildPilotQuoteSavePlan, type PilotQuoteSaveEditorSnapshot, type PilotQuoteSavePlan, type PilotQuoteSaveTargetRequest } from '../../src/lib/quotes/pilotQuoteSavePlan'
+import { parsePilotQuoteSaveReceipt } from '../../src/lib/quotes/pilotQuoteSaveReceipt'
 import type { QuoteFormValues, QuoteServiceInput } from '../../src/types'
 
 type Row = Record<string, unknown>
@@ -46,6 +47,22 @@ export async function quoteSavePlan(db: Database, f: Pick<IdentityFixture, 'owne
   assert.equal(snapshot.code, 'snapshot')
   return buildPilotQuoteSavePlan(snapshot, quoteSaveIntentFixture(snapshot as unknown as PilotQuoteSaveEditorSnapshot, changes), selection => quoteSaveTargets(db, selection))
 }
+// Missing settings is a real supported state. The predecessor identity fixture
+// always creates a retained pilot connection whose native FK correctly forbids
+// deleting its settings; build a separate minimal native fixture instead.
+async function seedQuoteWithoutSettings(db: Database, tag: number) {
+  const id = (part: number) => `23000000-0000-4000-8000-${String(tag * 100 + part).padStart(12, '0')}`
+  const owner = id(1), customer = id(2), property = id(3), quote = id(4)
+  await db.query('insert into auth.users(id,email,email_confirmed_at) values($1::uuid,$2,clock_timestamp())', [owner, `missing-settings-${tag}@fixture.example.invalid`])
+  await db.query("insert into public.customers(id,user_id,name,address) values($1::uuid,$2::uuid,'Missing Settings Customer','100 Fixture Road')", [customer, owner])
+  await db.query("insert into public.properties(id,user_id,customer_id,address,is_primary) values($1::uuid,$2::uuid,$3::uuid,'100 Fixture Road',true)", [property, owner, customer])
+  await db.query(`insert into public.quotes(id,user_id,customer_id,property_id,quote_number,customer_name,address,service_type,initial_price,travel_fee,status)
+    values($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,'Missing Settings Customer','100 Fixture Road','General visit',100,5,'sent')`,
+  [quote, owner, customer, property, `NO-SETTINGS-${tag}`])
+  assert.equal(Number(await identityValue(db, 'select count(*) as value from public.business_settings where user_id=$1::uuid', [owner])), 0)
+  assert.equal(Number(await identityValue(db, 'select count(*) as value from public.pilot_email_connections where user_id=$1::uuid', [owner])), 0)
+  return { owner, customer, property, quote }
+}
 async function allRows(db: Database, owner: string) {
   const out = await identityRows(db, owner)
   for (const table of ['business_settings', 'service_templates', 'measurements', 'property_measurements', 'property_measurement_events', 'pricing_config_versions', 'quote_acceptances', 'notifications']) {
@@ -82,7 +99,8 @@ export async function runQuoteSaveNativeCases(db: Database): Promise<TestResult[
   })
   await test('full Save native: notes preserve price provenance, protected quote state, retained bindings and add-ons', async n => {
     const f = await seedQuoteIdentity(db, n, true), before = await allRows(db, f.owner)
-    const p = await quoteSavePlan(db, f, { notes: 'Changed public scope', internal_notes: 'Changed private note' })
+    const changes = { notes: 'Changed public scope', internal_notes: 'Changed private note' }
+    const p = await quoteSavePlan(db, f, changes)
     assert.equal(p.provenance.mode, 'preserve')
     const result = await quoteSaveWrite(db, f, p); assert.equal(result.code, 'committed')
     const after = await allRows(db, f.owner), q = after.quotes[0]
@@ -91,6 +109,10 @@ export async function runQuoteSaveNativeCases(db: Database): Promise<TestResult[
     for (const table of ['quote_addons', 'quote_acceptances', 'pilot_quote_followup_workflows', 'pilot_email_send_attempts', 'pricing_config_versions', 'property_measurement_events']) assert.deepEqual(after[table], before[table], table)
     assert.equal(result.client_operation_id, p.client_operation_id); assert.equal(result.editor_generation, p.editor_generation)
     assert.notEqual(result.after_revision, result.before_revision)
+    const submitted = quoteSaveIntentFixture(p.expected.editor, changes)
+    assert.ok(parsePilotQuoteSaveReceipt(result, { version: 1, owner: f.owner, quoteId: f.quote, clientOperationId: submitted.clientOperationId,
+      editorGeneration: submitted.editorGeneration, originalEditorRevision: submitted.expectedEditorRevision,
+      submittedValues: submitted.values, submittedSerialization: JSON.stringify(submitted.values), stagedAt: 0, state: 'pending' }))
     assert.equal((result.quote as Row).notes, q.notes)
     assert.equal('portal_token' in (result.quote as Row), false); assert.equal('no_charge_reason' in (result.quote as Row), false)
   })
@@ -151,8 +173,7 @@ export async function runQuoteSaveNativeCases(db: Database): Promise<TestResult[
     assert.deepEqual(await allRows(db, f.owner), before)
   })
   await test('full Save native: missing pricing settings are an explicit planning refusal with zero writes', async n => {
-    const f = await seedQuoteIdentity(db, n)
-    await db.query('delete from public.business_settings where user_id=$1::uuid', [f.owner])
+    const f = await seedQuoteWithoutSettings(db, n)
     const before = await allRows(db, f.owner)
     await assert.rejects(() => quoteSavePlan(db, f, { initial_price: 200 }))
     assert.deepEqual(await allRows(db, f.owner), before)
@@ -199,7 +220,9 @@ export async function runQuoteSaveNativeCases(db: Database): Promise<TestResult[
         ${failure === 'measurement_error' ? "raise exception 'synthetic late measurement fault';" : failure === 'parent_suppressed' ? 'if new.initial_price is distinct from old.initial_price then return null; end if; return new;' : 'return null;'}
         end $$; create trigger pilot_full_save_fault before ${op} on public.${table} for each row execute function public.pilot_full_save_fault()`)
       const before = await allRows(db, f.owner)
-      await assert.rejects(() => quoteSaveWrite(db, f, p))
+      const expectedError = { parent_suppressed: 'pilot_quote_save_parent_missing', service_suppressed: 'pilot_quote_save_service_insert_mismatch',
+        measurement_error: 'synthetic late measurement fault', history_suppressed: 'pilot_quote_save_measurement_history_mismatch' }[failure]
+      await assert.rejects(() => quoteSaveWrite(db, f, p), error => error instanceof SqlStateError && error.code === 'P0001' && error.detail.includes(expectedError))
       const after = await allRows(db, f.owner); assert.deepEqual(after, before)
       quoteSaveNativeEvidence.push({ kind: 'whole-save-abort', fault: failure, owner: f.owner, before: digest(before), after: digest(after) })
     })
@@ -239,20 +262,28 @@ export async function runQuoteSaveNativeCases(db: Database): Promise<TestResult[
     const p = await quoteSavePlan(db, f), before = await allRows(db, f.owner), otherBefore = await allRows(db, other.owner)
     // Synthetic negative authentication control only. Production RPCs never set
     // or impersonate JWT state; both user IDs exist only in this rollback fixture.
-    await db.query("select set_config('request.jwt.claim.sub',$1,true)", [other.owner])
-    await db.exec('set local role service_role')
+    await db.exec('savepoint foreign_owner_control')
     try {
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [other.owner])
+      await db.exec('set local role service_role')
       for (const sql of ['select public.pilot_quote_save_snapshot($1::uuid,$2::uuid) as value',
         'select public.pilot_quote_save($1::uuid,$2::uuid,$3::jsonb) as value']) {
         const result = await identityValue(db, sql, [f.owner, f.quote, JSON.stringify(p)]) as Verdict
         assert.equal(result.code, 'not_found')
       }
     } finally {
-      await db.exec('reset role'); await db.query("select set_config('request.jwt.claim.sub','',true)")
+      // Recover the subtransaction before RESET ROLE so a genuine RPC failure
+      // is not obscured by a secondary "current transaction is aborted" error.
+      await db.exec('rollback to savepoint foreign_owner_control; reset role; release savepoint foreign_owner_control')
     }
     assert.deepEqual(await allRows(db, f.owner), before); assert.deepEqual(await allRows(db, other.owner), otherBefore)
   })
   await test('full Save native: privileges and actual nondeferrable owner/parent FK fences are pinned', async () => {
+    const standingFunctions = (await db.query<{ signature: string; volatility: string }>(`select oid::regprocedure::text as signature,provolatile::text as volatility
+      from pg_proc where oid=any(array['public.quote_acceptance_is_current(uuid)'::regprocedure,'public.quote_material_fingerprint(uuid)'::regprocedure,
+        'public.quote_terms_fingerprint(uuid)'::regprocedure]) order by oid::regprocedure::text`)).rows
+    assert.equal(standingFunctions.length, 3)
+    for (const fn of standingFunctions) assert.equal(fn.volatility, 's', 'Canonical snapshot dependency must remain STABLE: ' + fn.signature)
     const signatures = ['pilot_quote_save_snapshot(uuid,uuid)', 'pilot_quote_save_targets(uuid,uuid,text,jsonb,uuid[],text)', 'pilot_quote_save(uuid,uuid,jsonb)']
     for (const signature of signatures) {
       const value = (await db.query<{ anon: boolean; authenticated: boolean; service: boolean; definer: boolean; config: string[] }>(`select
@@ -270,7 +301,7 @@ export async function runQuoteSaveNativeCases(db: Database): Promise<TestResult[
       const fence = fk.find(r => String(r.child).replace(/^public\./, '') === table && r.parent === 'auth.users' && String(r.definition).includes('FOREIGN KEY (user_id)'))
       assert.ok(fence, 'Missing auth owner FK: ' + table); assert.equal(fence.condeferrable, false); assert.equal(fence.convalidated, true)
     }
-    quoteSaveNativeEvidence.push({ kind: 'actual-fk-metadata', constraints: fk })
+    quoteSaveNativeEvidence.push({ kind: 'actual-fk-metadata', constraints: fk, stableCanonicalDependencies: standingFunctions })
   })
   return results
 }
@@ -393,9 +424,8 @@ export async function runQuoteSaveNativeConcurrency(observer: Database) {
     for (const dependency of ['quote', 'property', 'settings_insert'] as const) {
       await test(`full Save race: ${dependency} commits first; post-wait recheck refuses stale dependencies`, async () => {
         const f = await transaction(observer, async () => {
-          const seed = await seedQuoteIdentity(observer, { quote: 602, property: 603, settings_insert: 604 }[dependency])
-          if (dependency === 'settings_insert') await observer.query('delete from public.business_settings where user_id=$1::uuid', [seed.owner])
-          return seed
+          return dependency === 'settings_insert' ? seedQuoteWithoutSettings(observer, 604)
+            : seedQuoteIdentity(observer, { quote: 602, property: 603 }[dependency])
         })
         const p = await transaction(observer, () => quoteSavePlan(observer, f, { notes: 'Must not overwrite' }))
         await left.exec('begin isolation level read committed')
@@ -412,9 +442,8 @@ export async function runQuoteSaveNativeConcurrency(observer: Database) {
     for (const dependency of ['settings', 'template', 'service', 'measurement'] as const) {
       await test(`full Save race: unseen ${dependency} INSERT waits on the actual owner/parent FK fence`, async () => {
         const f = await transaction(observer, async () => {
-          const seed = await seedQuoteIdentity(observer, { settings: 605, template: 606, service: 607, measurement: 608 }[dependency])
-          if (dependency === 'settings') await observer.query('delete from public.business_settings where user_id=$1::uuid', [seed.owner])
-          return seed
+          return dependency === 'settings' ? seedQuoteWithoutSettings(observer, 605)
+            : seedQuoteIdentity(observer, { template: 606, service: 607, measurement: 608 }[dependency])
         })
         const p = await transaction(observer, () => quoteSavePlan(observer, f, { notes: 'Saved before unseen dependency' }))
         await left.exec('begin isolation level read committed'); assert.equal((await quoteSaveWrite(left, f, p)).code, 'committed')

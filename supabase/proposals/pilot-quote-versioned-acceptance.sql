@@ -165,7 +165,12 @@ begin
         and (p_expected->>'priorAcceptanceSeq') ~ '^[1-9][0-9]*$')),false)
     or not public._pilot_qi_keys(p_expected->'offered',array['public','authorityFence'])
     or coalesce(p_expected#>>'{offered,authorityFence}','') !~ '^[0-9a-f]{32}$'
-    or p_expected->>'previewRevision' is distinct from md5((p_expected->'offered')::text) then return false; end if;
+    or coalesce(p_expected->>'previewRevision','') !~ '^[0-9a-f]{32}$' then return false; end if;
+  -- The revision is opaque server output. JSON transport changes 100.00 to 100:
+  -- equal jsonb numeric values can have different ::text bytes and MD5 hashes.
+  -- Commit still compares the ENTIRE expected value (including this revision
+  -- and the private authority fence) against a fresh native projection under
+  -- the shared locks. Rehashing client serialization would reject valid previews.
   p:=p_expected#>'{offered,public}';
   if not public._pilot_qi_keys(p,array['quote_id','customer_name','quote_number','address','service_type','notes','status','valid_until',
     'initial_price','travel_fee','addons_total','total','weekly_price','biweekly_price','monthly_price','deposit_type','deposit_value',
