@@ -13,9 +13,10 @@ import { runDriverCases } from './driver-cases'
 import { runQuoteIdentityBaseline, quoteIdentityBaselineEvidence } from './quote-identity-baseline'
 import { runQuoteIdentityCases } from './quote-identity-cases'
 import { runQuoteIdentityConcurrency } from './quote-identity-concurrency'
+import { runAcceptanceBaseline } from './acceptance-baseline-cases'
 
 const source = resolve(__dirname, '../..')
-const output = join(source, 'outputs/pilot-quote-reassignment-20260909')
+const output = join(source, 'outputs/pilot-full-quote-save-20260910')
 const PROPOSAL_HASH = '434048ade9a3625a280707f12877f694281e72efbaa78b29ae141503876540fb'
 const IDENTITY_PROPOSAL_HASH = '7308c0db5f2f60e5c5ffc338bb9245e7484ff76525be527a12e0352b487b681d'
 const sourcePins: Record<string, string> = {}
@@ -29,6 +30,7 @@ async function main() {
   let db: DisposableSession | undefined
   let concurrencyClosed = true
   let identityConcurrencyClosed = true
+  let acceptanceBaselineClosed = true
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(), sourcePins, groups: {}, platformSubstitutions: [],
     scope: 'Actual baseline/all migrations/proposal on isolated marked PostgreSQL17 service, including native triggers/publication/RLS. Separate psql backends prove recorded lock interleavings. Supabase auth/storage/net are the existing platform test doubles; external provider/auth calls are synthetic. No production database, live client or provider activation.',
@@ -45,6 +47,11 @@ async function main() {
     read('src/lib/customers.ts')
     read('src/lib/attribution.ts')
     read('src/app/dashboard/quotes/[id]/page.tsx')
+    read('src/app/portal/[token]/PortalClient.tsx')
+    read('src/components/quotes/RecordAcceptanceDialog.tsx')
+    read('src/lib/payments/termsTimingConflict.ts')
+    read('supabase/proposals/pilot-quote-save-contract.md')
+    read('supabase/proposals/pilot-quote-save-contract-resolutions.md')
     read('.github/workflows/pilot-email-schema.yml')
     for (const file of readdirSync(join(source, 'scripts/pilot-email')).filter(f => /\.(ts|sql|md)$/.test(f)).sort()) read('scripts/pilot-email/' + file)
     for (const file of readdirSync(join(source, 'src/lib/comms')).filter(f => /^pilotEmail.*\.ts$/.test(f)).sort()) read('src/lib/comms/' + file)
@@ -94,6 +101,16 @@ async function main() {
     const nativeAfter = await nativeDefinition()
     groups.preservation = [{ name: 'native trigger, RLS and publication definitions remain intact after all cases', pass: JSON.stringify(nativeBefore) === JSON.stringify(nativeAfter) }]
     report.nativeDefinitions = nativeAfter
+    // Phase separation is deliberate: the preceding 183 are predecessor safety
+    // cases. The next group reproduces defects in unchanged native acceptance;
+    // passing reproductions do not mean full Save or acceptance has been fixed.
+    acceptanceBaselineClosed = false
+    const acceptanceBaseline = await runAcceptanceBaseline(db)
+    acceptanceBaselineClosed = acceptanceBaseline.allSessionsClosed
+    groups.acceptanceBaseline = acceptanceBaseline.tests
+    report.acceptanceBaseline = acceptanceBaseline
+    report.candidateFullSaveImplemented = false
+    report.candidateVersionedAcceptanceImplemented = false
     const all = Object.values(groups).flat()
     report.passed = all.filter(t => t.pass).length
     report.failed = all.filter(t => !t.pass).length
@@ -108,7 +125,7 @@ async function main() {
       report.pass = false
       report.error = 'Main fixture session exit could not be confirmed'
     }
-    report.allSessionsClosed = mainClosed && concurrencyClosed && identityConcurrencyClosed && quoteIdentityBaselineEvidence.every(e => e.sessionsClosed === true)
+    report.allSessionsClosed = mainClosed && concurrencyClosed && identityConcurrencyClosed && acceptanceBaselineClosed && quoteIdentityBaselineEvidence.every(e => e.sessionsClosed === true)
     if (!report.allSessionsClosed) report.pass = false
     report.completedAt = new Date().toISOString()
     mkdirSync(output, { recursive: true })

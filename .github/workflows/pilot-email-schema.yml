@@ -10,6 +10,7 @@ on:
       - 'supabase/migrations/**'
       - 'supabase/proposals/pilot-email-core.sql'
       - 'supabase/proposals/pilot-quote-identity.sql'
+      - 'supabase/proposals/pilot-quote-save-contract*.md'
       - 'src/lib/comms/**'
       - 'src/lib/quotes/pilotQuoteIdentity.ts'
       - 'src/lib/customers.ts'
@@ -72,6 +73,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pilot-email-native-pg17-${{ github.sha }}
-          path: outputs/pilot-quote-reassignment-20260909/native-pg17-proof.json
+          path: outputs/pilot-full-quote-save-20260910/native-pg17-proof.json
           if-no-files-found: error
           retention-days: 14
