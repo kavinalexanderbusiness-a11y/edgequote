@@ -1,6 +1,6 @@
 // ── Custom fields: the definition/value engine ───────────────────────────────
 //
-// A service business needs to record things EdgeHQ ships no column for — a gate
+// A service business needs to record things EdgeQuote ships no column for — a gate
 // code on a service location, a permit number on a visit, a referral partner on
 // a customer. This module is the ONE place that knows what a custom field is,
 // what its answers may look like, and how an answer becomes a database row.

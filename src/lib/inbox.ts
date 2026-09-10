@@ -1,5 +1,5 @@
 // ── THE Owner Inbox composer ─────────────────────────────────────────────────
-// One calm answer to "when I open EdgeHQ, what genuinely needs me?" — composed
+// One calm answer to "when I open EdgeQuote, what genuinely needs me?" — composed
 // from the engines that already exist, never a second opinion beside them.
 //
 // TWO HALVES, NEVER MIXED:

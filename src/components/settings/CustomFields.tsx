@@ -22,7 +22,7 @@ import type { CustomFieldDefinition } from '@/types'
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, ChevronUp, ChevronDown, ListPlus, X, Lock } from 'lucide-react'
 
 // ── Settings › Custom fields ─────────────────────────────────────────────────
-// Where an owner adds the handful of things their trade records that EdgeHQ ships
+// Where an owner adds the handful of things their trade records that EdgeQuote ships
 // no column for — a gate code, a permit number, a referral partner.
 //
 // ⭐ IT IS A LIST, NOT A BUILDER. Name it, say what it is about, pick a type. There
@@ -195,7 +195,7 @@ export function CustomFields() {
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-ink">Custom fields</h2>
           <p className="text-xs text-ink-muted mt-0.5">
-            Record the things your trade tracks that EdgeHQ has no box for.
+            Record the things your trade tracks that EdgeQuote has no box for.
           </p>
         </div>
         <Button size="sm" variant="secondary" onClick={() => setDraft(blankDraft('customer'))} className="shrink-0">

@@ -110,7 +110,7 @@ export default function HelpPage() {
             <div>
               <p className="text-sm font-medium text-ink">Still stuck?</p>
               <p className="text-xs text-ink-muted mt-0.5">
-                Tell us what you were trying to do. For help using EdgeHQ, email{' '}
+                Tell us what you were trying to do. For help using EdgeQuote, email{' '}
                 <a href="mailto:kavin.alexander.business@gmail.com" className="font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   kavin.alexander.business@gmail.com
                 </a>.

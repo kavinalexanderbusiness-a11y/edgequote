@@ -283,7 +283,7 @@ const DEAD_TITLES: Record<'invalid' | 'expired' | 'revoked' | 'used', string> = 
 const DEAD_BODIES: Record<'invalid' | 'expired' | 'revoked' | 'used', string> = {
   invalid: 'This invitation link is invalid. Check the link you were sent or request a fresh invitation.',
   expired: 'This invitation has expired. Request a fresh invitation to continue.',
-  revoked: 'This invite is no longer active. Contact EdgeHQ if you think that’s a mistake.',
+  revoked: 'This invite is no longer active. Contact EdgeQuote if you think that’s a mistake.',
   used: 'Each invite creates exactly one business. If that was you, sign in below.',
 }
 
@@ -293,7 +293,7 @@ function Brand({ sub }: { sub: string }) {
       <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center mb-4 shadow-lg shadow-accent/20">
         <Zap className="w-6 h-6 text-black fill-black" />
       </div>
-      <h1 className="text-xl font-bold tracking-tight text-ink">EdgeHQ</h1>
+      <h1 className="text-xl font-bold tracking-tight text-ink">EdgeQuote</h1>
       <p className="text-sm text-ink-muted mt-1">{sub}</p>
     </div>
   )

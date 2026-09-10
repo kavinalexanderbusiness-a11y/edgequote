@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
+import { PageTips } from './PageTips'
 
 interface PageHeaderProps {
   title: string
@@ -30,7 +31,10 @@ export function PageHeader({ title, description, action, crumb }: PageHeaderProp
           <p className="text-sm text-ink-muted mt-0.5">{description}</p>
         )}
       </div>
-      {action && <div className="shrink-0">{action}</div>}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <PageTips />
+        {action}
+      </div>
     </div>
   )
 }

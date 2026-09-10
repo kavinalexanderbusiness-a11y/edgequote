@@ -377,7 +377,7 @@ export function acceptanceSentence(status: QuoteStatus | string, s: AcceptanceSt
   // claim that anyone consented in any particular way.
   if (s.kind === 'legacy_unrecorded') {
     const amt = s.accepted_amount == null ? '' : ` at ${formatMoney(s.accepted_amount)}`
-    return `Accepted${amt} before EdgeHQ started keeping acceptance records — who accepted it, and when, was never captured.`
+    return `Accepted${amt} before EdgeQuote started keeping acceptance records — who accepted it, and when, was never captured.`
   }
   // ⭐ The two sentences differ in their SUBJECT, which is the whole point. One
   // says the customer acted; the other says the business recorded that they did,

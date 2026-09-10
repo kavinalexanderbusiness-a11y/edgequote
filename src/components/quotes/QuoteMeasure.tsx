@@ -355,7 +355,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
         let center: { lat: number; lng: number } | null = null
         let precise = false
 
-        // ⭐ THE CANONICAL SERVICE LOCATION FIRST. A property EdgeHQ already knows
+        // ⭐ THE CANONICAL SERVICE LOCATION FIRST. A property EdgeQuote already knows
         // carries its own lat/lng, saved when the address was resolved. Asking
         // Google to re-resolve the same address on every open was a round trip to
         // re-learn a fact we had already stored — slower, billed, and the single

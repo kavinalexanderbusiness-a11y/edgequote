@@ -229,7 +229,7 @@ export const FEATURE_MODULES: FeatureModule[] = [
   // still holds all of it — the pitch just stops opening with it.
   { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
     category: 'admin', navigation: 'settings', version: 1, updatedAt: '2026-08-09',
-    description: 'Connect other apps to EdgeHQ — plus a developer API, if yours needs one.',
+    description: 'Connect other apps to EdgeQuote — plus a developer API, if yours needs one.',
     permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'],
     keywords: 'api webhooks zapier make connect apps developer accounts' },
 ]

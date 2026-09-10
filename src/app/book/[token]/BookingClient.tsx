@@ -638,7 +638,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
           </div>
         )}
 
-        <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeHQ</p>
+        <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeQuote</p>
       </div>
     </div>
   )

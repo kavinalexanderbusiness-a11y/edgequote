@@ -1,14 +1,14 @@
 import { CrewWelcomeForm } from '@/components/crew/CrewWelcomeForm'
 
 export const metadata = {
-  title: 'Set up your login — EdgeHQ',
+  title: 'Set up your login — EdgeQuote',
   // The token is in the URL. Nothing about this page should ever be indexed or
   // followed by a crawler that finds a forwarded invitation.
   robots: { index: false, follow: false },
 }
 
 // ── Accepting an owner-provisioned invite ────────────────────────────────────
-// The worker's first contact with EdgeHQ. They arrive from a one-time link,
+// The worker's first contact with EdgeQuote. They arrive from a one-time link,
 // holding a token and NO session — which is exactly why this page sits outside
 // every gate (see routeFor: /crew/welcome is allowed to everyone). It is inert
 // without a valid token: all it can do is set a password for whoever that token
