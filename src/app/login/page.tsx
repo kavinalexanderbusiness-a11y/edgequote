@@ -160,6 +160,17 @@ function LoginForm() {
             </Button>
           </form>
 
+          <div className="mt-5 text-center">
+            <p className="text-sm text-ink-muted">New to EdgeQuote?</p>
+            <Link
+              href="/signup"
+              className="mt-2 flex min-h-12 w-full items-center justify-center rounded-xl border border-accent px-4 py-3 text-sm font-semibold text-accent hover:bg-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent transition-colors"
+            >
+              Create account
+            </Link>
+            <Link href="/plans" className="mt-3 inline-flex min-h-11 items-center text-sm text-accent-text hover:underline">Compare Base and Premium</Link>
+          </div>
+
           {/* Below the button, not beside the password label: somebody reaches
               for this AFTER a sign-in has failed, and that is where their eye
               already is. */}

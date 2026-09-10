@@ -742,7 +742,7 @@
   "proname": "job_forms_freeze_guard"
  },
  {
-  "acl": "{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+  "acl": "{postgres=X/postgres,service_role=X/postgres}",
   "def": "CREATE OR REPLACE FUNCTION public.job_session_minutes(p_job_id uuid)\n RETURNS integer\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'public', 'pg_temp'\nAS $function$\n  select sum(minutes)::integer from public.job_work_sessions where job_id = p_job_id;\n$function$\n",
   "args": "p_job_id uuid",
   "owner": "postgres",
