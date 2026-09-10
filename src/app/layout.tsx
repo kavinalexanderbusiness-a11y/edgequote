@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next'
-import { DM_Sans, Syne } from 'next/font/google'
+import localFont from 'next/font/local'
 import { ThemeWatcher } from '@/components/layout/ThemeWatcher'
 import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister'
 import './globals.css'
@@ -7,24 +7,27 @@ import './globals.css'
 // Applies the saved theme BEFORE first paint (no flash). Defaults to dark.
 const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem('eq-theme');t=(t==='light'||t==='system')?t:'dark';var r=t==='system'?(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):t;document.documentElement.dataset.theme=r;document.documentElement.dataset.themePref=t;}catch(e){}})()`
 
-const dmSans = DM_Sans({
-  subsets: ['latin'],
+const dmSans = localFont({
+  src: './fonts/DM-Sans.ttf',
+  weight: '100 1000',
+  display: 'swap',
   variable: '--font-dm-sans',
 })
 
-const syne = Syne({
-  subsets: ['latin'],
+const syne = localFont({
+  src: './fonts/Syne.ttf',
+  display: 'swap',
   variable: '--font-syne',
-  weight: ['400', '500', '600', '700', '800'],
+  weight: '400 800',
 })
 
 export const metadata: Metadata = {
-  title: 'EdgeHQ — Field Service Platform',
+  title: 'EdgeQuote — Field Service Platform',
   description: 'Quoting, scheduling, messaging, invoicing and payments for field service businesses.',
-  applicationName: 'EdgeHQ',
+  applicationName: 'EdgeQuote',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'EdgeHQ', statusBarStyle: 'default' },
-  icons: { icon: '/icon.svg', shortcut: '/icon.svg', apple: '/icon.svg' },
+  appleWebApp: { capable: true, title: 'EdgeQuote', statusBarStyle: 'default' },
+  icons: { icon: '/icon.svg', shortcut: '/icon.svg', apple: '/apple-touch-icon.png' },
   formatDetection: { telephone: false },
 }
 

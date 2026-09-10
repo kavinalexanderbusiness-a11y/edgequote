@@ -1,6 +1,6 @@
 import { CrewInbox } from '@/components/crew/CrewInbox'
 
-export const metadata = { title: 'Messages — EdgeHQ' }
+export const metadata = { title: 'Messages — EdgeQuote' }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 // Client-rendered on purpose, unlike Week: this list is the ONE crew surface

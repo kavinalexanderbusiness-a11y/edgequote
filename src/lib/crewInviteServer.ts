@@ -46,12 +46,12 @@ export function crewInviteEmail(setupUrl: string, businessName: string | null, w
   const business = (businessName || '').trim()
   const who = (workerName || '').trim()
   // The subject names the employer when we know it: in an inbox, "Set up your
-  // EdgeHQ login" from an unknown sender is indistinguishable from phishing.
+  // EdgeQuote login" from an unknown sender is indistinguishable from phishing.
   const subject = business ? `${business}: set up your work login` : 'Set up your work login'
   const greeting = who ? `Hi ${who},` : 'Hi,'
   const opener = business
-    ? `${business} has set up a login for you in EdgeHQ, the app the crew uses for the day's work.`
-    : 'Your employer has set up a login for you in EdgeHQ, the app the crew uses for the day\'s work.'
+    ? `${business} has set up a login for you in EdgeQuote, the app the crew uses for the day's work.`
+    : 'Your employer has set up a login for you in EdgeQuote, the app the crew uses for the day\'s work.'
 
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;padding:28px 22px;color:#111827">
   <p style="margin:0 0 14px;font-size:16px">${esc(greeting)}</p>
@@ -68,7 +68,7 @@ export function crewInviteEmail(setupUrl: string, businessName: string | null, w
   <p style="margin:14px 0 0;font-size:13px;line-height:1.5;color:#6b7280">
     If you weren’t expecting this, ignore it — the link is the only way in, and it stops working on its own.
   </p>
-  <p style="margin:18px 0 0;font-size:13px;color:#9ca3af">— EdgeHQ</p>
+  <p style="margin:18px 0 0;font-size:13px;color:#9ca3af">— EdgeQuote</p>
 </div>`
 
   const text = [
@@ -84,7 +84,7 @@ export function crewInviteEmail(setupUrl: string, businessName: string | null, w
     '',
     'If you weren’t expecting this, ignore it — the link is the only way in, and it stops working on its own.',
     '',
-    '— EdgeHQ',
+    '— EdgeQuote',
   ].join('\n')
 
   return { subject, html, text }

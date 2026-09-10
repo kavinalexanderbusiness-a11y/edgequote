@@ -17,7 +17,7 @@
 // working second front door to the same product that structurally cannot hold a
 // session.
 //
-// ⭐⭐ THAT IS THE BUG THE OWNER REPORTED. "Every time I reopen EdgeHQ on desktop
+// ⭐⭐ THAT IS THE BUG THE OWNER REPORTED. "Every time I reopen EdgeQuote on desktop
 // it makes me sign in with Google again" is not a session expiring — the session
 // was measured surviving a genuine browser quit and relaunch, 400-day cookie
 // intact. It is a person whose shortcut, bookmark or address-bar autocomplete

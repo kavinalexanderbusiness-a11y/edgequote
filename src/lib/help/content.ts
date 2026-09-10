@@ -37,6 +37,32 @@ export const HELP_CATEGORIES: { key: HelpCategory; label: string; blurb: string 
 ]
 
 export const HELP_ARTICLES: HelpArticle[] = [
+  {
+    id: 'quick-tips',
+    title: 'Quick tips for everyday work',
+    category: 'start',
+    summary: 'A practical checklist from adding a customer to recording payment.',
+    keywords: ['tips', 'field', 'reports', 'settings', 'search', 'cash', 'e-transfer'],
+    sections: [
+      { heading: 'Customers and quotes', body: [
+        'Search for an existing customer before adding another record. Check the service address, contact details and scope before creating a quote.',
+        'Review quantities, labour, materials, travel, tax and the final total. Make inclusions, exclusions and any deposit requirement clear before sending.',
+      ] },
+      { heading: 'Scheduling and field work', body: [
+        'Confirm approval and any required deposit before scheduling. Review the visit date, crew, route and weather before heading out.',
+        'Record work time and completion notes while the details are fresh. Keep the app open until photo uploads finish, and check any pending sync before closing it.',
+      ] },
+      { heading: 'Invoices and payments', body: [
+        'Review draft invoices before sending. Check that completed work, deposits, tax and the remaining balance match the customer agreement.',
+        'Review the amount and any displayed fee before confirming a card payment. Record cash or e-transfer only after receiving it, using the correct invoice and payment method.',
+      ] },
+      { heading: 'Messages, reports and settings', body: [
+        'Check the recipient and channel before sending. Review automated-message settings so you know which reminders are enabled.',
+        'Check report date ranges and distinguish invoiced work from collected money. Resolve failed loads before relying on a total.',
+        'Keep business details, services and payment connections current. Use the navigation search to find a record or page, and the Tips link for help with the current task.',
+      ] },
+    ],
+  },
   // ── Getting started ────────────────────────────────────────────────────────
   {
     id: 'first-week',

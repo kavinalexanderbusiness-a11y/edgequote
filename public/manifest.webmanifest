@@ -1,6 +1,6 @@
 {
-  "name": "EdgeHQ — Field Service Platform",
-  "short_name": "EdgeHQ",
+  "name": "EdgeQuote — Field Service Platform",
+  "short_name": "EdgeQuote",
   "description": "Quoting, scheduling and field operations for your business.",
   "start_url": "/dashboard",
   "scope": "/",
@@ -8,9 +8,34 @@
   "orientation": "portrait-primary",
   "background_color": "#090a0c",
   "theme_color": "#090a0c",
-  "categories": ["business", "productivity"],
+  "categories": [
+    "business",
+    "productivity"
+  ],
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/edgequote-dock-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/edgequote-dock-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
   ]
 }

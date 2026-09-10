@@ -9,7 +9,7 @@
 // WHAT SIGNING IN WITH GOOGLE MEANS HERE — and what it does not.
 //
 // Google proves ONE thing: that the person controls a mailbox. It does not make
-// them an EdgeHQ owner, it does not grant beta access, it does not create a
+// them an EdgeQuote owner, it does not grant beta access, it does not create a
 // business, and it does not make them anybody's employee. Every one of those
 // remains a DATABASE decision keyed on auth.uid():
 //
@@ -51,7 +51,7 @@ export const OAUTH_START_PATH = '/api/auth/google/start'
  *
  * ⛔ `access_type=offline` is deliberately absent. It is what makes Google issue
  * a REFRESH token, and a refresh token is a standing key to the person's Google
- * account that we would then be storing. EdgeHQ reads nothing from Google after
+ * account that we would then be storing. EdgeQuote reads nothing from Google after
  * sign-in — no calendar, no contacts, no mail — so requesting offline access
  * would be collecting a credential with no use for it. Adding it is a decision
  * that needs its own reason; verify:google-auth fails if it appears.
@@ -186,7 +186,7 @@ export function buildCallbackUrl(appOrigin: string, next?: string | null): strin
 // "Signed in with Google" does NOT imply "Google verified this address". A
 // Google Workspace administrator controls the mailboxes on their own domain and
 // can mint an account whose email claim is unverified; historically that is the
-// exact shape of the Sign-in-with-Google account-takeover writeups. If EdgeHQ
+// exact shape of the Sign-in-with-Google account-takeover writeups. If EdgeQuote
 // bound an invite to an address on the strength of "Google said so" alone,
 // anyone who could stand up a Workspace domain could claim an invite addressed
 // to someone at that domain.
@@ -259,14 +259,14 @@ export const GOOGLE_AUTH_ERROR_TEXT: Record<GoogleAuthError, string> = {
   'no-verifier': 'This browser didn’t keep the security key that finishes Google sign-in. Start again from this page — and if you began on a different address, use app.edgehq.ca.',
   'provider-config': 'Google sign-in isn’t working right now — that’s a problem on our side, not with your account or your Google password. Use your email and password for now; we’ve been told about it.',
   unverified: 'Google did not confirm that email address, so we can’t use it to sign in. Try email and password instead.',
-  'no-invite': 'That Google account isn’t part of the EdgeHQ beta yet. Use the invite link you were sent, or sign in with the account you already have.',
+  'no-invite': 'That Google account isn’t part of the EdgeQuote beta yet. Use the invite link you were sent, or sign in with the account you already have.',
   // The platform owner's words for the closed state (root owns login strings).
-  'not-registered': 'That Google account isn’t set up with an EdgeHQ business yet. To create one, start from Sign up — signing in on its own never creates a business.',
+  'not-registered': 'That Google account isn’t set up with an EdgeQuote business yet. To create one, start from Sign up — signing in on its own never creates a business.',
   closed: 'Account creation is temporarily unavailable. Please try again later. If you already have an account, sign in with it.',
-  'invite-invalid': 'That invite is no longer valid — it may have expired or already been used. Ask EdgeHQ for a new one.',
+  'invite-invalid': 'That invite is no longer valid — it may have expired or already been used. Ask EdgeQuote for a new one.',
   'invite-mismatch': 'This invite was issued for a different email address. Sign in with that address, or ask for a new invite.',
   'invite-taken': 'That invite already has a signup in progress under a different account.',
-  'link-ambiguous': 'That Google account isn’t connected to this EdgeHQ account. Connecting a second sign-in method isn’t supported yet — sign in the way you normally do.',
+  'link-ambiguous': 'That Google account isn’t connected to this EdgeQuote account. Connecting a second sign-in method isn’t supported yet — sign in the way you normally do.',
   unavailable: 'We couldn’t reach the server to finish signing you in. Please try again.',
 }
 

@@ -9,7 +9,7 @@ import { readUser } from '@/lib/authState'
 import { AuthUnavailable } from '@/components/auth/AuthUnavailable'
 import { ShieldOff } from 'lucide-react'
 
-export const metadata = { title: 'Your access — EdgeHQ' }
+export const metadata = { title: 'Your access — EdgeQuote' }
 
 // ── The one page a signed-in account with NO role may reach ──────────────────
 // It sits outside the crew gate deliberately: this is how 'none' stops being
