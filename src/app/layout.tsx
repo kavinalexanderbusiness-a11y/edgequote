@@ -27,7 +27,14 @@ export const metadata: Metadata = {
   applicationName: 'EdgeHQ',
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, title: 'EdgeHQ', statusBarStyle: 'default' },
-  icons: { icon: '/icon.svg', shortcut: '/icon.svg', apple: '/icon.svg' },
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml', sizes: 'any' },
+      { url: '/icon-192.png', type: 'image/png', sizes: '192x192' },
+    ],
+    shortcut: '/icon-192.png',
+    apple: { url: '/apple-touch-icon.png', type: 'image/png', sizes: '180x180' },
+  },
   formatDetection: { telephone: false },
 }
 
