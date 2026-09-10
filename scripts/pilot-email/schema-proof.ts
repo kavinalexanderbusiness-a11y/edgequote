@@ -14,6 +14,10 @@ import { runQuoteIdentityBaseline, quoteIdentityBaselineEvidence } from './quote
 import { runQuoteIdentityCases } from './quote-identity-cases'
 import { runQuoteIdentityConcurrency } from './quote-identity-concurrency'
 import { runAcceptanceBaseline } from './acceptance-baseline-cases'
+import { runQuoteSavePlanCases, quoteSavePlanEvidence } from './quote-save-plan-cases'
+import { runQuoteSaveEditorCases, quoteSaveEditorEvidence } from './quote-save-editor-cases'
+import { runQuoteSaveNativeCases, runQuoteSaveNativeConcurrency, quoteSaveNativeEvidence } from './quote-save-native-cases'
+import { runQuoteVersionedAcceptanceCases } from './quote-versioned-acceptance-cases'
 
 const source = resolve(__dirname, '../..')
 const output = join(source, 'outputs/pilot-full-quote-save-20260910')
@@ -31,6 +35,8 @@ async function main() {
   let concurrencyClosed = true
   let identityConcurrencyClosed = true
   let acceptanceBaselineClosed = true
+  let saveConcurrencyClosed = true
+  let versionedAcceptanceClosed = true
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(), sourcePins, groups: {}, platformSubstitutions: [],
     scope: 'Actual baseline/all migrations/proposal on isolated marked PostgreSQL17 service, including native triggers/publication/RLS. Separate psql backends prove recorded lock interleavings. Supabase auth/storage/net are the existing platform test doubles; external provider/auth calls are synthetic. No production database, live client or provider activation.',
@@ -52,6 +58,12 @@ async function main() {
     read('src/lib/payments/termsTimingConflict.ts')
     read('supabase/proposals/pilot-quote-save-contract.md')
     read('supabase/proposals/pilot-quote-save-contract-resolutions.md')
+    for (const file of [
+      'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts',
+      'src/types/index.ts', 'src/lib/quoteServices.ts', 'src/lib/quoteOptions.ts',
+      'src/lib/payments/depositGate.ts', 'src/lib/pricingConfig.ts', 'src/lib/servicePricing.ts',
+      'src/lib/utils.ts', 'src/lib/measure/data.ts', 'src/lib/measurePricing.ts',
+    ]) read(file)
     read('.github/workflows/pilot-email-schema.yml')
     for (const file of readdirSync(join(source, 'scripts/pilot-email')).filter(f => /\.(ts|sql|md)$/.test(f)).sort()) read('scripts/pilot-email/' + file)
     for (const file of readdirSync(join(source, 'src/lib/comms')).filter(f => /^pilotEmail.*\.ts$/.test(f)).sort()) read('src/lib/comms/' + file)
@@ -80,6 +92,24 @@ async function main() {
       'policies',(select jsonb_agg(to_jsonb(p) order by p.tablename,p.policyname) from pg_policies p where schemaname='public' and tablename in ('messages','notification_log','customers','conversations'))
     ) as value`)).rows[0].value
     const nativeBefore = await nativeDefinition()
+    const quoteNativeDefinition = async () => (await db!.query<{ value: {
+      relations: unknown; functions: { signature: string; definition_md5: string; acl: unknown }[];
+    } }>(`select jsonb_build_object(
+      'relations',(select jsonb_agg(jsonb_build_object('table',c.relname,'rls',c.relrowsecurity,'force_rls',c.relforcerowsecurity,
+        'columns',(select jsonb_agg(jsonb_build_object('name',a.attname,'type',format_type(a.atttypid,a.atttypmod),'required',a.attnotnull,
+          'generated',a.attgenerated,'default',pg_get_expr(d.adbin,d.adrelid)) order by a.attnum)
+          from pg_attribute a left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),
+        'constraints',(select jsonb_agg(pg_get_constraintdef(k.oid) order by k.conname) from pg_constraint k where k.conrelid=c.oid),
+        'triggers',(select jsonb_agg(pg_get_triggerdef(t.oid) order by t.tgname) from pg_trigger t where t.tgrelid=c.oid and not t.tgisinternal),
+        'policies',(select jsonb_agg(to_jsonb(p) order by p.policyname) from pg_policies p where p.schemaname='public' and p.tablename=c.relname)
+      ) order by c.relname) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='public' and c.relname in ('quotes','quote_options','quote_services','quote_addons','quote_acceptances','customers','properties',
+        'property_measurements','property_measurement_events','business_settings','service_templates','customer_portal_tokens','pricing_config_versions')),
+      'functions',(select jsonb_agg(jsonb_build_object('signature',p.oid::regprocedure::text,'definition_md5',md5(pg_get_functiondef(p.oid)),
+        'acl',p.proacl) order by p.oid::regprocedure::text) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public' and p.prokind='f')
+    ) as value`)).rows[0].value
+    const quoteNativeBefore = await quoteNativeDefinition()
     groups.schema = await runCases(db)
     groups.supplemental = await runExtraCases(db)
     groups.transport = await runTransportCases()
@@ -109,8 +139,62 @@ async function main() {
     acceptanceBaselineClosed = acceptanceBaseline.allSessionsClosed
     groups.acceptanceBaseline = acceptanceBaseline.tests
     report.acceptanceBaseline = acceptanceBaseline
-    report.candidateFullSaveImplemented = false
-    report.candidateVersionedAcceptanceImplemented = false
+    const baseline = Object.values(groups).flat()
+    report.preCandidate = {
+      passed: baseline.filter(t => t.pass).length, failed: baseline.filter(t => !t.pass).length,
+      scope: 'Unchanged predecessor assertions and defect reproductions before candidate proposals are installed',
+    }
+    if (baseline.some(test => !test.pass)) throw new Error('Pre-candidate safety or defect reproduction failed; candidate application refused')
+    groups.quoteSavePlan = await runQuoteSavePlanCases()
+    report.quoteSavePlan = quoteSavePlanEvidence
+    groups.quoteSaveEditor = await runQuoteSaveEditorCases()
+    report.quoteSaveEditor = quoteSaveEditorEvidence
+    // Candidate-only SQL is installed after preserving the unchanged baseline.
+    // Neither proposal is a migration or mounted production API.
+    await apply('supabase/proposals/pilot-quote-save.sql')
+    await apply('supabase/proposals/pilot-quote-versioned-acceptance.sql')
+    report.candidateFullSaveImplemented = true
+    report.candidateVersionedAcceptanceImplemented = true
+    report.mountedFullSaveImplemented = false
+    report.mountedVersionedAcceptanceImplemented = false
+    groups.quoteSaveNative = await runQuoteSaveNativeCases(db)
+    report.quoteSaveNative = quoteSaveNativeEvidence
+    saveConcurrencyClosed = false
+    const saveConcurrency = await runQuoteSaveNativeConcurrency(db)
+    saveConcurrencyClosed = saveConcurrency.allSessionsClosed
+    groups.quoteSaveConcurrency = saveConcurrency.tests
+    report.quoteSaveConcurrency = saveConcurrency
+    versionedAcceptanceClosed = false
+    const versionedAcceptance = await runQuoteVersionedAcceptanceCases(db)
+    versionedAcceptanceClosed = versionedAcceptance.allSessionsClosed
+    groups.quoteVersionedAcceptance = versionedAcceptance.tests
+    report.quoteVersionedAcceptance = versionedAcceptance
+    const nativeAfterCandidate = await nativeDefinition()
+    groups.candidatePreservation = [{
+      name: 'Candidate proposals preserve native message/customer trigger, RLS and publication definitions',
+      pass: JSON.stringify(nativeBefore) === JSON.stringify(nativeAfterCandidate),
+    }]
+    report.candidateNativeDefinitions = { before: nativeBefore, after: nativeAfterCandidate }
+    const quoteNativeAfter = await quoteNativeDefinition()
+    const afterFunctions = new Map(quoteNativeAfter.functions.map(fn => [fn.signature, fn]))
+    const changedFunctions = quoteNativeBefore.functions.filter(fn => fn.definition_md5 !== afterFunctions.get(fn.signature)?.definition_md5)
+      .map(fn => fn.signature).sort()
+    const intendedChanges = [
+      'quote_apply_choice(uuid,uuid,uuid[],text)',
+      'quote_record_acceptance(uuid,text,text,uuid,text,text,text,boolean)',
+      'portal_accept_quote(text,uuid,uuid,uuid[],boolean)',
+      'owner_record_customer_acceptance(uuid,text,uuid,uuid[],text)',
+      'owner_select_quote_option(uuid,uuid,uuid[],text,text)',
+    ].sort()
+    groups.candidatePreservation.push({
+      name: 'Quote, choice, acceptance, measurement and dependency table definitions remain unchanged',
+      pass: JSON.stringify(quoteNativeBefore.relations) === JSON.stringify(quoteNativeAfter.relations),
+    }, {
+      name: 'Only the five explicitly reviewed native acceptance function definitions change; existing function grants stay intact',
+      pass: JSON.stringify(changedFunctions) === JSON.stringify(intendedChanges)
+        && quoteNativeBefore.functions.every(fn => JSON.stringify(fn.acl) === JSON.stringify(afterFunctions.get(fn.signature)?.acl)),
+    })
+    report.quoteNativeDefinitions = { before: quoteNativeBefore, after: quoteNativeAfter, changedFunctions, intendedChanges }
     const all = Object.values(groups).flat()
     report.passed = all.filter(t => t.pass).length
     report.failed = all.filter(t => !t.pass).length
@@ -125,7 +209,8 @@ async function main() {
       report.pass = false
       report.error = 'Main fixture session exit could not be confirmed'
     }
-    report.allSessionsClosed = mainClosed && concurrencyClosed && identityConcurrencyClosed && acceptanceBaselineClosed && quoteIdentityBaselineEvidence.every(e => e.sessionsClosed === true)
+    report.allSessionsClosed = mainClosed && concurrencyClosed && identityConcurrencyClosed && acceptanceBaselineClosed
+      && saveConcurrencyClosed && versionedAcceptanceClosed && quoteIdentityBaselineEvidence.every(e => e.sessionsClosed === true)
     if (!report.allSessionsClosed) report.pass = false
     report.completedAt = new Date().toISOString()
     mkdirSync(output, { recursive: true })
