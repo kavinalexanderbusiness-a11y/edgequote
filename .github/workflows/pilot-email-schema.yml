@@ -14,9 +14,11 @@ on:
       - 'supabase/proposals/pilot-quote-save-contract*.md'
       - 'supabase/proposals/pilot-quote-save.sql'
       - 'supabase/proposals/pilot-quote-versioned-acceptance.sql'
+      - 'supabase/proposals/pilot-quote-acceptance-callers-contract.md'
       - 'src/lib/comms/**'
       - 'src/lib/quotes/pilotQuoteIdentity.ts'
       - 'src/lib/quotes/pilotQuoteSave*.ts'
+      - 'src/lib/quotes/pilotQuoteAcceptance*.ts'
       - 'src/types/**'
       - 'src/lib/utils.ts'
       - 'src/lib/quoteServices.ts'
@@ -29,13 +31,15 @@ on:
       - 'src/lib/customers.ts'
       - 'src/lib/attribution.ts'
       - 'src/app/dashboard/quotes/**'
-      - 'src/app/portal/[token]/PortalClient.tsx'
+      - 'src/app/portal/**'
       - 'src/components/quotes/RecordAcceptanceDialog.tsx'
       - 'src/components/quotes/QuoteBuilder.tsx'
       - 'src/components/quotes/PilotQuoteSaveEditorShell.tsx'
+      - 'src/components/quotes/PilotQuoteAcceptanceModal.tsx'
       - 'src/components/layout/CacheOwner.tsx'
       - 'src/hooks/useAutosave.ts'
       - 'src/hooks/useAutosaveOwner.ts'
+      - 'src/hooks/usePilotQuoteAcceptance.ts'
       - 'src/lib/clientCache.ts'
       - 'src/lib/autosaveSubmission.ts'
       - 'src/lib/payments/termsTimingConflict.ts'
@@ -97,6 +101,8 @@ jobs:
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-server-proof.ts
       - name: Isolated quote Save browser and default autosave proof
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-browser-proof.ts /usr/bin/google-chrome
+      - name: Isolated actual acceptance callers with native response captures
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/acceptance-caller-browser-proof.ts /usr/bin/google-chrome
       - name: Preserve the exact proof receipt
         if: always()
         uses: actions/upload-artifact@v4
@@ -119,5 +125,13 @@ jobs:
         with:
           name: pilot-quote-save-server-${{ github.sha }}
           path: outputs/pilot-full-quote-save-20260910/server-save-proof.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve the separate acceptance browser proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quote-acceptance-browser-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/browser-acceptance-proof.json
           if-no-files-found: error
           retention-days: 14

@@ -8,6 +8,8 @@ import { runQuoteSaveServerNativeCases, quoteSaveServerNativeEvidence } from './
 import { runQuoteSaveValuesCases, quoteSaveValuesEvidence } from './quote-save-values-cases'
 import { runQuoteSaveBaselineCases, quoteSaveBaselineEvidence } from './quote-save-baseline-cases'
 import { runQuoteSaveBaselineNativeCases, quoteSaveBaselineNativeEvidence } from './quote-save-baseline-native-cases'
+import { runAcceptanceCallerServerCases, acceptanceCallerServerEvidence } from './acceptance-caller-server-cases'
+import { runAcceptanceCallerNativeCases, acceptanceCallerNativeEvidence, acceptanceCallerResponseFixtures } from './acceptance-caller-native-cases'
 
 const output = resolve('outputs/pilot-full-quote-save-20260910')
 const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -17,7 +19,7 @@ async function main() {
   let openAttempted = false, openCompleted = false
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(), pass: false,
-    scope: 'Actual dormant Save and read-only baseline HTTP adapters, shared browser values schema and planner with synthetic verified auth; service-role SQL transport on the same marked PostgreSQL17 fixture. No mounted app, live Auth or PostgREST transport E2E.',
+    scope: 'Actual dormant Save, read-only baseline and versioned acceptance HTTP adapters with synthetic verified auth; service-role SQL transport on the same marked PostgreSQL17 fixture. No mounted app, live Auth, PostgREST or durable outer-COMMIT transport E2E.',
     mountedRoute: false, productionCalls: 0, externalProviderCalls: 0,
   }
   try {
@@ -40,6 +42,9 @@ async function main() {
       'scripts/pilot-email/quote-save-server-cases.ts', 'scripts/pilot-email/quote-save-server-native-cases.ts',
       'scripts/pilot-email/quote-save-values-cases.ts', 'scripts/pilot-email/quote-save-baseline-cases.ts',
       'scripts/pilot-email/quote-save-baseline-fixtures.ts', 'scripts/pilot-email/quote-save-baseline-native-cases.ts',
+      'scripts/pilot-email/acceptance-caller-server-cases.ts', 'scripts/pilot-email/acceptance-caller-fixtures.ts',
+      'scripts/pilot-email/acceptance-caller-native-cases.ts',
+      'src/lib/quotes/pilotQuoteAcceptance.ts', 'src/lib/quotes/pilotQuoteAcceptanceServer.ts',
       'src/lib/quotes/pilotQuoteSave.ts', 'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveReceipt.ts',
       'src/lib/quotes/pilotQuoteSaveValues.ts', 'src/lib/quotes/pilotQuoteSaveBaseline.ts',
       'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts',
@@ -63,6 +68,11 @@ async function main() {
     report.baselineEvidence = quoteSaveBaselineEvidence
     assert.equal(baseline.length, 11, 'Missing baseline HTTP controls')
     assert.ok(baseline.every(test => test.pass), 'Baseline HTTP boundary failed')
+    const acceptance = await runAcceptanceCallerServerCases()
+    report.acceptance = acceptance
+    report.acceptanceEvidence = acceptanceCallerServerEvidence
+    assert.equal(acceptance.length, 13, 'Missing acceptance HTTP controls')
+    assert.ok(acceptance.every(test => test.pass), 'Acceptance HTTP boundary failed')
     openAttempted = true
     db = await DisposableSession.open('quote-save-server-proof')
     openCompleted = true
@@ -74,7 +84,14 @@ async function main() {
     report.baselineNative = baselineNative
     report.baselineNativeEvidence = quoteSaveBaselineNativeEvidence
     assert.equal(baselineNative.length, 4, 'Missing native baseline controls')
-    const all: TestResult[] = [...synthetic, ...values, ...baseline, ...integration, ...baselineNative]
+    const acceptanceNative = await runAcceptanceCallerNativeCases(db)
+    report.acceptanceNative = acceptanceNative
+    report.acceptanceNativeEvidence = acceptanceCallerNativeEvidence
+    report.acceptanceResponseFixtures = acceptanceCallerResponseFixtures
+    report.acceptanceResponseFixturesSha256 = sha(JSON.stringify(acceptanceCallerResponseFixtures))
+    assert.equal(acceptanceNative.length, 6, 'Missing native acceptance controls')
+    assert.equal(acceptanceCallerResponseFixtures.length, 4, 'Missing native response-only captures')
+    const all: TestResult[] = [...synthetic, ...values, ...baseline, ...integration, ...baselineNative, ...acceptance, ...acceptanceNative]
     report.passed = all.filter(test => test.pass).length
     report.failed = all.filter(test => !test.pass).length
     report.pass = integration.length > 0 && all.every(test => test.pass)
