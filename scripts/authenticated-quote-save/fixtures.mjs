@@ -1,0 +1,142 @@
+import { randomUUID } from 'node:crypto'
+
+// Disposable authenticated proof fixtures only. createUser owns real GoTrue
+// provisioning; this module never inserts auth rows, creates credentials on a
+// provider, changes platform objects, or constructs a JWT/session.
+const PASSWORD = 'Synthetic-Quote-Save-Only-2026!'
+const STAMP = '2026-09-11T12:00:00.000Z'
+const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
+const uuid = value => {
+  if (typeof value !== 'string' || !uuidPattern.test(value)) throw Error('Expected fixture UUID')
+  return value
+}
+const literal = value => {
+  if (typeof value !== 'string' || value.includes('\0')) throw Error('Expected fixture SQL text')
+  return `E'${value.replaceAll('\\', '\\\\').replaceAll("'", "''")}'`
+}
+const idSql = value => `${literal(uuid(value))}::uuid`
+const jsonSql = value => `${literal(JSON.stringify(value))}::jsonb`
+
+// Explicit table/order vocabulary for independent row observation. Children
+// use commercial order, never response arrival or insertion order. Full rows
+// preserve native timestamps, generated fields and unintended changes; no Save
+// planner, receipt or browser value is consulted by this readback.
+const TABLES = Object.freeze([
+  ['business_settings', 't.id'], ['customers', 't.id'], ['properties', 't.id'], ['quotes', 't.id'],
+  ['quote_services', 't.quote_id,t.sort_order,t.id'], ['quote_options', 't.quote_id,t.sort_order,t.id'],
+  ['quote_addons', 't.quote_id,t.sort_order,t.id'], ['quote_acceptances', 't.quote_id,t.seq,t.id'],
+  ['service_templates', 't.sort_order,t.id'], ['service_units', 't.sort_order,t.id'],
+  ['service_pricing_plans', 't.sort_order,t.id'], ['travel_fee_tiers', 't.sort_order,t.id'],
+  ['pricing_config_versions', 't.id'], ['property_measurements', 't.id'], ['property_measurement_events', 't.id'],
+  ['pilot_quote_followup_workflows', 't.id'], ['pilot_email_send_attempts', 't.id'],
+  ['messages', 't.id'], ['notification_log', 't.id'], ['audit_events', 't.id'],
+  ['integration_events', 't.id'], ['webhook_deliveries', 't.id'],
+])
+
+/** sql(text) returns parsed rows, including native JSON objects. One SELECT
+ * observes all three fixture tenants and shared units in one DB snapshot.
+ * Auth rows are deliberately excluded: actual sign-in timestamps are not
+ * business mutations and no auth secrets belong in a proof artifact. */
+export async function readFixture(sql, fixture) {
+  if (typeof sql !== 'function') throw Error('Actual SQL transport required')
+  const owners = ['ownerA', 'ownerB', 'denied'].map(key => [key, uuid(fixture[key])])
+  if (new Set(owners.map(([, owner]) => owner)).size !== 3) throw Error('Fixture users must be distinct')
+  const ownerRows = owner => `jsonb_build_object(${TABLES.map(([table, order]) =>
+    `${literal(table)},(select coalesce(jsonb_agg(to_jsonb(t) order by ${order}),'[]'::jsonb)
+      from public.${table} t where t.user_id=${idSql(owner)})`).join(',')})`
+  const rows = await sql(`select jsonb_build_object(
+    ${owners.map(([key, owner]) => `${literal(key)},${ownerRows(owner)}`).join(',')},
+    'systemUnits',(select coalesce(jsonb_agg(to_jsonb(t) order by t.sort_order,t.id),'[]'::jsonb)
+      from public.service_units t where t.user_id is null)
+  ) as fixture_rows`)
+  if (!Array.isArray(rows) || rows.length !== 1 || !rows[0]?.fixture_rows
+    || typeof rows[0].fixture_rows !== 'object' || Array.isArray(rows[0].fixture_rows)) {
+    throw Error('SQL transport must return one parsed fixture_rows object')
+  }
+  const result = rows[0].fixture_rows
+  for (const [key] of owners) {
+    if (!result[key] || TABLES.some(([table]) => !Array.isArray(result[key][table]))) {
+      throw Error('Incomplete independent fixture readback')
+    }
+  }
+  if (!Array.isArray(result.systemUnits)) throw Error('Incomplete shared unit readback')
+  return result
+}
+
+function settingsSql(owner, name) {
+  return `insert into public.business_settings(
+    user_id,company_name,owner_name,business_type,timezone,default_rate,base_address,
+    daily_capacity_hours,gst_percent,crew_cost_per_hour,pricing_base_charge,pricing_mow_rate,
+    pricing_recommended_mult,pricing_premium_mult,pricing_travel_rate,payment_fee_strategy,fee_recovery_percent
+  ) values (${idSql(owner)},${literal(name)},'Synthetic Owner','general','Etc/UTC',50,'20 Fixture Office',
+    8,0,30,28,15,1,1.2,1.5,'global_price_increase',0);`
+}
+
+function quoteSql({ owner, customer, property, quote, suffix, price, hours, rate, area }) {
+  // These fixed fixture values are source data, not a reconstructed pricing
+  // engine. General visit is non-lawn; an area >0 renders the actual area input
+  // while avoiding a conditional property/lawn measurement write during Save.
+  if (![price, hours, rate, area].every(Number.isFinite)) throw Error('Finite fixture numbers required')
+  const name = `Synthetic Customer ${suffix}`, address = `${suffix === 'A' ? 10 : suffix === 'B' ? 90 : 190} Fixture Street`
+  const snapshot = { v: 2, type: 'area', unit: 'sqft', value: area,
+    parts: [{ label: 'Synthetic measured area', value: area }], measuredAt: STAMP,
+    serviceTemplateId: null, serviceName: 'General visit', term: 'one_time', basis: 'flat', rate, price }
+  return `insert into public.customers(id,user_id,name,address,city,province,phone,email,archived_at)
+    values(${idSql(customer)},${idSql(owner)},${literal(name)},${literal(address)},null,null,null,null,null);
+    insert into public.properties(id,user_id,customer_id,address,city,province,is_primary)
+    values(${idSql(property)},${idSql(owner)},${idSql(customer)},${literal(address)},null,null,true);
+    insert into public.quotes(id,user_id,customer_id,property_id,quote_number,customer_name,address,
+      service_type,service_template_id,status,initial_price,hours,crew_size,rate,overgrowth_multiplier,
+      travel_fee,measured_sqft,notes,internal_notes,measurement_snapshot)
+    values(${idSql(quote)},${idSql(owner)},${idSql(customer)},${idSql(property)},${literal('AUTH-SAVE-' + suffix)},
+      ${literal(name)},${literal(address)},'General visit',null,'draft',${price},${hours},1,${rate},1,0,${area},
+      ${literal('Original public scope ' + suffix)},${literal('Original internal note ' + suffix)},${jsonSql(snapshot)});`
+}
+
+/** New marked disposable database only; caller owns that check and platform
+ * lifecycle. No retries, upserts, mutation of existing users or implicit cleanup.
+ * createUser(email,password) must return the UUID from real GoTrue, not a fake.
+ * The denied user owns a quote but has no settings, making its owner-role test
+ * meaningful rather than merely asking it to read another tenant's quote. */
+export async function seedFixtures({ sql, createUser }) {
+  if (typeof sql !== 'function' || typeof createUser !== 'function') throw Error('Actual SQL and GoTrue transports required')
+  const run = randomUUID()
+  const fixture = { password: PASSWORD, emailA: `owner-a-${run}@fixture.example.invalid`,
+    emailB: `owner-b-${run}@fixture.example.invalid`, deniedEmail: `denied-${run}@fixture.example.invalid`,
+    customerA: randomUUID(), propertyA: randomUUID(), quoteA: randomUUID(),
+    customerB: randomUUID(), propertyB: randomUUID(), quoteB: randomUUID(),
+    customerDenied: randomUUID(), propertyDenied: randomUUID(), quoteDenied: randomUUID(),
+    unitId: randomUUID(), serviceIdsA: [randomUUID(), randomUUID(), randomUUID()].sort() }
+  fixture.ownerA = uuid(await createUser(fixture.emailA, PASSWORD))
+  fixture.ownerB = uuid(await createUser(fixture.emailB, PASSWORD))
+  fixture.denied = uuid(await createUser(fixture.deniedEmail, PASSWORD))
+  if (new Set([fixture.ownerA, fixture.ownerB, fixture.denied]).size !== 3) throw Error('GoTrue returned duplicate fixture users')
+  const [primary, preparation, cleanup] = fixture.serviceIdsA
+  await sql(`begin;
+    ${settingsSql(fixture.ownerA, 'Synthetic Save Business A')}
+    ${settingsSql(fixture.ownerB, 'Synthetic Save Business B')}
+    ${quoteSql({ owner: fixture.ownerA, customer: fixture.customerA, property: fixture.propertyA, quote: fixture.quoteA,
+      suffix: 'A', price: 101.23, hours: 1.13, rate: 37.17, area: 1234.56 })}
+    ${quoteSql({ owner: fixture.ownerB, customer: fixture.customerB, property: fixture.propertyB, quote: fixture.quoteB,
+      suffix: 'B', price: 207.89, hours: 2.37, rate: 48.19, area: 4321.09 })}
+    ${quoteSql({ owner: fixture.denied, customer: fixture.customerDenied, property: fixture.propertyDenied, quote: fixture.quoteDenied,
+      suffix: 'DENIED', price: 101.23, hours: 1.13, rate: 37.17, area: 1234.56 })}
+    insert into public.service_units(id,user_id,code,label,abbrev,step,decimals,sort_order,active)
+      values(${idSql(fixture.unitId)},null,'each','Each','ea',1,0,0,true);
+    insert into public.quote_services(id,user_id,quote_id,service_type,service_template_id,quantity,unit,unit_price,
+      est_minutes,discount_type,discount_value,notes,sort_order,kind) values
+      (${idSql(cleanup)},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'Included cleanup',null,3,'each',0,30,null,null,'Cleanup scope',20,'service'),
+      (${idSql(preparation)},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'Included preparation',null,2,'each',0,15,null,null,'Preparation scope',3,'service'),
+      (${idSql(primary)},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'General visit',null,1,'each',101.23,68,null,null,null,3,'service');
+    set constraints all immediate;
+    commit;`)
+  fixture.before = await readFixture(sql, fixture)
+  if (fixture.before.ownerA.business_settings.length !== 1 || fixture.before.ownerB.business_settings.length !== 1
+    || fixture.before.denied.business_settings.length !== 0
+    || fixture.before.ownerA.quotes.length !== 1 || fixture.before.ownerB.quotes.length !== 1 || fixture.before.denied.quotes.length !== 1
+    || fixture.before.ownerA.quote_services.length !== 3
+    || JSON.stringify(fixture.before.ownerA.quote_services.map(row => row.id)) !== JSON.stringify(fixture.serviceIdsA)) {
+    throw Error('Seeded fixture shape differs from expected native rows')
+  }
+  return fixture
+}
