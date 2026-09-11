@@ -6,6 +6,7 @@ import { build, type Loader, type Plugin } from 'esbuild'
 import type { TestResult } from './database'
 import { runIsolatedQuoteBrowser } from './quote-save-caller-cases'
 import { acceptanceCallerMountedFixture } from './acceptance-caller-mounted-fixture'
+import { portalRefreshMountedFixture } from '../authenticated-quote-save/portal-refresh-mounted-fixture'
 
 // Dormant synthetic full-component proof. The driver supplies response-only
 // fixtures emitted by the actual native HTTP adapter proof. This module cannot
@@ -24,9 +25,11 @@ const aliases: Record<string, string> = {
 }
 
 export async function runAcceptanceCallerMountedCases(
-  responseFixtures: unknown[], provenance: AcceptanceMountedProvenance, chrome?: string,
+  responseFixtures: unknown[], provenance: AcceptanceMountedProvenance, chrome?: string, selection: 'full' | 'portal-refresh' = 'full',
 ): Promise<TestResult[]> {
   const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
+  if (selection !== 'full' && selection !== 'portal-refresh') throw new Error('Explicit mounted proof selection required')
+  if (selection === 'portal-refresh' && provenance.kind !== 'synthetic-local') throw new Error('Focused refresh proof requires synthetic provenance')
   if (!Array.isArray(responseFixtures) || !responseFixtures.length) throw new Error('Native response-only fixtures are required')
   if (provenance.kind === 'native-http-capture') {
     for (const hash of [provenance.nativeProofSha256, provenance.serverProofSha256]) {
@@ -38,7 +41,7 @@ export async function runAcceptanceCallerMountedCases(
       if (sha(readFileSync(path)) !== hash) throw new Error('Synthetic fixture source changed: ' + path)
     }
   }
-  const fixture = acceptanceCallerMountedFixture(responseFixtures, provenance.kind)
+  const fixture = selection === 'portal-refresh' ? portalRefreshMountedFixture(responseFixtures) : acceptanceCallerMountedFixture(responseFixtures, provenance.kind)
   const loadedBytes = new Map<string, Buffer>()
   const plugin: Plugin = {
     name: 'strict-synthetic-acceptance-io',
@@ -83,11 +86,16 @@ export async function runAcceptanceCallerMountedCases(
     'scripts/pilot-email/quote-save-caller-cases.ts', 'supabase/proposals/pilot-quote-acceptance-callers-contract.md',
     'tsconfig.json', 'package.json', 'package-lock.json']) pins[path] = sha(readFileSync(path))
   for (const key of Object.keys(acceptanceCallerMountedHarnessEvidence)) delete acceptanceCallerMountedHarnessEvidence[key]
+  if (selection === 'portal-refresh') {
+    const file = 'scripts/authenticated-quote-save/portal-refresh-mounted-fixture.ts'
+    pins[file] = sha(readFileSync(file))
+  }
   Object.assign(acceptanceCallerMountedHarnessEvidence, {
     sourcePins: pins, bundleSha256: sha(bundle.outputFiles[0].text), bundleBytes: bundle.outputFiles[0].contents.length,
     replacements: Object.keys(aliases), bundlerGeneratedInputs, fixtureProvenance: provenance,
     responseFixturesSha256: sha(JSON.stringify(responseFixtures)),
-    scope: 'Actual PortalClient, RecordAcceptanceDialog and dormant Save editor with synthetic transports; response basis: ' + provenance.kind,
+    scope: selection === 'portal-refresh' ? 'Five focused actual PortalClient refresh regressions; synthetic acceptance and auxiliary I/O only.'
+      : 'Actual PortalClient, RecordAcceptanceDialog and dormant Save editor with synthetic transports; response basis: ' + provenance.kind,
     excluded: ['production routes', 'live Auth/PostgREST', 'browser-to-database transport', 'durable outer-COMMIT attribution', 'providers', 'visual app layout'],
     browser: {},
   })

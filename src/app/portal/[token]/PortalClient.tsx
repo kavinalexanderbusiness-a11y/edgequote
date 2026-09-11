@@ -56,12 +56,29 @@ function resolveTab(t: TabKey, multiProperty: boolean): TabKey {
   return t
 }
 
-export function PortalClient({ token, initialData, pilotAcceptance }: {
+type PortalClientProps = {
   token: string; initialData: unknown; pilotAcceptance?: PilotQuoteAcceptanceTransport
-}) {
+}
+
+export function PortalClient(props: PortalClientProps) {
   const pilotEnabled = useRef(false)
-  if (pilotAcceptance) pilotEnabled.current = true
-  const pilotController = usePilotQuoteAcceptance(pilotAcceptance, { mode: 'portal', token })
+  if (props.pilotAcceptance) pilotEnabled.current = true
+  // A different token gets its own data, effects and pending reads. Keep this
+  // latch outside that boundary: removing the pilot must not enable legacy writes.
+  return <PortalSession key={props.token} {...props} pilotEnabled={pilotEnabled.current} />
+}
+
+function PortalSession({ token, initialData, pilotAcceptance, pilotEnabled }: PortalClientProps & { pilotEnabled: boolean }) {
+  const reads = useRef({ mounted: false, generation: 0 })
+  useEffect(() => {
+    reads.current.mounted = true
+    return () => { reads.current.mounted = false; reads.current.generation++ }
+  }, [])
+  const pilotController = usePilotQuoteAcceptance(pilotAcceptance, { mode: 'portal', token }, () => {
+    // The direct receipt stays in the modal. Refresh the card from the canonical
+    // portal read; a failed auxiliary read cannot undo or replace that receipt.
+    void load()
+  })
   const supabase = useMemo(() => createClient(), [])
   // Seeded from the server fetch → real content on first paint (no spinner). load()
   // below only runs as a fallback / for post-payment revalidation.
@@ -69,7 +86,7 @@ export function PortalClient({ token, initialData, pilotAcceptance }: {
   // Mirrors `data` for the handlers that must read the CURRENT payload without
   // being re-created on every change (load()'s keep-what-we-have failure return,
   // and the visibility refetch's staleness check).
-  const dataRef = useRef<PortalData | null>(null)
+  const dataRef = useRef<PortalData | null>(data)
   // When the payload we're showing was last fetched — throttles the on-return
   // refetch below. Declared here (above load, which stamps it) rather than beside
   // its effect, so there is no doubt it exists before the first call.
@@ -139,18 +156,27 @@ export function PortalClient({ token, initialData, pilotAcceptance }: {
   // error != null means the network failed and the data we already have is still
   // the best truth we hold. Keep it, say so, and let the next attempt heal it.
   async function load(): Promise<PortalData | null> {
-    const { data: d, error } = await supabase.rpc('get_portal_data', { p_token: token })
-    setLoading(false)
-    if (error) {
-      setActionError('We couldn’t refresh your account just now — you’re seeing the last information we loaded. Check your connection and try again.')
+    if (!reads.current.mounted) return dataRef.current
+    const generation = ++reads.current.generation
+    const current = () => reads.current.mounted && reads.current.generation === generation
+    try {
+      const { data: d, error } = await supabase.rpc('get_portal_data', { p_token: token })
+      if (!current()) return dataRef.current
+      if (error) throw error
+      const pd = normalizePortal(d)
+      setLoading(false)
+      setData(pd)
+      dataRef.current = pd
+      lastLoadedAt.current = Date.now()
+      if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
+      return pd
+    } catch {
+      if (current()) {
+        setLoading(false)
+        setActionError('We couldn’t refresh your account just now — you’re seeing the last information we loaded. Check your connection and try again.')
+      }
       return dataRef.current
     }
-    const pd = normalizePortal(d)
-    setData(pd)
-    dataRef.current = pd
-    lastLoadedAt.current = Date.now()
-    if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
-    return pd
   }
 
   // Self-serve consent — updates the customer record immediately (token-scoped RPC).
@@ -333,7 +359,7 @@ export function PortalClient({ token, initialData, pilotAcceptance }: {
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
   async function accept(qid: string, optionId?: string, termsAck?: boolean) {
-    if (pilotEnabled.current) {
+    if (pilotEnabled) {
       // Card amounts, cached reads and the old checkbox are launch context only.
       // The new review obtains its complete document and fresh assent itself.
       // A removed capability disables this path; it never enables legacy writes.
@@ -737,7 +763,7 @@ export function PortalClient({ token, initialData, pilotAcceptance }: {
 
   // Keep the review at the same tree position across auxiliary loading/failure;
   // an unrelated portal refresh cannot remove the document being accepted.
-  const pilotAcceptanceModal = pilotEnabled.current ? <PilotQuoteAcceptanceModal
+  const pilotAcceptanceModal = pilotEnabled ? <PilotQuoteAcceptanceModal
     controller={pilotController}
     mode="portal"
     preliminaryOptions={data?.quotes.find(q => q.id === pilotController.state.quoteId)?.options?.map(({ id, name }) => ({ id, name }))}
@@ -763,7 +789,7 @@ export function PortalClient({ token, initialData, pilotAcceptance }: {
 
   const biz = data.business
   const actions: PortalActions = {
-    token, accept, accepting: pilotEnabled.current ? (pilotController.state.open ? pilotController.state.quoteId : null) : accepting,
+    token, accept, accepting: pilotEnabled ? (pilotController.state.open ? pilotController.state.quoteId : null) : accepting,
     pay, payingId, paymentsEnabled,
     payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',

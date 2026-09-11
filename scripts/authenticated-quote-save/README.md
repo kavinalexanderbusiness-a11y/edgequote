@@ -1,8 +1,9 @@
 # First authenticated quote Save slice
 
 This successor preserves the PR127 source checkpoint at
-`6b403a3601c8432124005633f89546f928d2dd1e`. It is test-only work; it does not
-activate the dormant editor or authorize a migration, deployment or main merge.
+`6b403a3601c8432124005633f89546f928d2dd1e`. Its proof slices and bounded source
+corrections do not activate the dormant editor or authorize a migration,
+deployment or main merge.
 
 The independent design review requires a temporary Next project outside the
 entire checkout, one alias to the actual source modules, canonical cookie and
@@ -148,3 +149,29 @@ and after cleanup, propagates incomplete drain/closure as failure, and observes
 external IO and unchanged native definitions again. Cancellation or gate release
 does not establish rollback; released pending work may commit. Only a completed,
 reviewed exact-run artifact can support a runtime PASS claim.
+
+## Actual customer acceptance UI
+
+The manual `quote-acceptance-ui` mode mounts the actual `PortalClient`, acceptance
+hook and modal, with native `get_portal_data` initial content and a thin fetch
+transport into the canonical acceptance adapters. It compiles actual CRM styles
+with source content roots adjusted for the temporary app. The production page
+still does not enable this dormant capability. This proof does not activate it.
+
+Two fresh fixtures cover required unchecked terms, native itemized preview and
+normal customer acceptance, then stale V1 review while the actual owner Save UI
+commits V2, visible stale refusal, explicit fresh review and renewed assent.
+Independent SQL and fresh owner Auth establish stored facts. No direct HTTP call
+is counted as a customer UI action and no displayed amount establishes request
+attribution. Known stale-refusal recovery is separate from UNKNOWN recovery.
+
+Portal success refreshes its card from the canonical read after the validated
+receipt. The receipt survives auxiliary refresh failure. Component lifetime and
+read generation guard late results; token changes remount portal state while
+preserving the outer no-legacy-fallback latch. Focused synthetic React checks of
+those auxiliary-read cases are reported separately from the real UI flows.
+
+Evidence goes to `outputs/quote-acceptance-ui-20260911`, including sanitized JSON
+and dialog screenshots. Existing portal routes contain a synthetic token; it
+must be scrubbed from logs and request evidence. Browser screenshots exclude URL
+chrome. Provider activation, payments, production records and DDL remain excluded.

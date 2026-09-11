@@ -24,7 +24,7 @@ async function prospectiveRealpath(path) {
 /** Generate only an isolated, disposable Next development mount. The caller
  * owns source/SHA verification, internal-network containment and cleanup.
  * This helper starts nothing, installs nothing and never writes in source. */
-export async function generateMount({ source, directory, marker, lostAcknowledgement, versionedAcceptance, lockOrderAcceptance }) {
+export async function generateMount({ source, directory, marker, lostAcknowledgement, versionedAcceptance, lockOrderAcceptance, customerAcceptanceUI }) {
   if (process.env.GITHUB_ACTIONS !== 'true' || marker !== MARKER) throw Error('Disposable cloud generation required')
   if (typeof source !== 'string' || typeof directory !== 'string' || !isAbsolute(source) || !isAbsolute(directory)) {
     throw Error('Absolute source and temporary directory required')
@@ -33,6 +33,9 @@ export async function generateMount({ source, directory, marker, lostAcknowledge
   if (!(await stat(sourceRoot)).isDirectory()) throw Error('Source checkout directory required')
   const target = await prospectiveRealpath(resolve(directory))
   if (inside(sourceRoot, target) || inside(target, sourceRoot)) throw Error('Temporary mount and source checkout must not overlap')
+  if (customerAcceptanceUI !== undefined && (customerAcceptanceUI !== true || lostAcknowledgement || versionedAcceptance || lockOrderAcceptance)) {
+    throw Error('Customer acceptance UI requires its own fault-free mode')
+  }
   if (lockOrderAcceptance && (lockOrderAcceptance !== true || lostAcknowledgement || versionedAcceptance)) throw Error('Lock-order mount cannot contain response/authority fault gates')
   if (lostAcknowledgement) {
     const fault = await realpath(lostAcknowledgement.directory)
@@ -56,6 +59,8 @@ export async function generateMount({ source, directory, marker, lostAcknowledge
     'src/components/ui/Toaster.tsx', 'src/components/ui/ConfirmHost.tsx', 'src/lib/supabase/client.ts',
     'src/lib/supabase/server.ts', 'src/lib/supabase/admin.ts', 'src/lib/quotes/pilotQuoteSaveAuth.ts',
     'src/lib/quotes/pilotQuoteSave.ts', 'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'node_modules/next/dist/bin/next']
+  if (customerAcceptanceUI) required.push('src/app/portal/[token]/PortalClient.tsx', 'src/app/api/payments/status/route.ts',
+    'src/lib/quotes/pilotQuoteAcceptanceServer.ts', 'src/app/globals.css', 'tailwind.config.ts', 'postcss.config.mjs')
   for (const path of required) if (!(await stat(join(sourceRoot, path))).isFile()) throw Error('Missing canonical mount dependency: ' + path)
   const packages = JSON.parse(await readFile(join(sourceRoot, 'package.json'), 'utf8'))
   const dependencies = Object.fromEntries(['next', 'react', 'react-dom', '@supabase/ssr', '@supabase/supabase-js'].map(name => {
@@ -321,8 +326,8 @@ export async function POST(request: Request) {
 }
 `
   }
-  if (versionedAcceptance || lockOrderAcceptance) {
-    files['proof-acceptance.ts'] = lockOrderAcceptance ? `import 'server-only'
+  if (versionedAcceptance || lockOrderAcceptance || customerAcceptanceUI) {
+    files['proof-acceptance.ts'] = (lockOrderAcceptance || customerAcceptanceUI) ? `import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createPilotQuoteSaveAuth } from '@/lib/quotes/pilotQuoteSaveAuth'
@@ -401,6 +406,78 @@ export async function POST(request: Request) {
 }
 `
     }
+  }
+  if (customerAcceptanceUI) {
+    // Actual stylesheet/PostCSS bytes; no minimal proof stylesheet or visual
+    // overrides. Theme/plugins come from the real Tailwind configuration. Only
+    // its content roots move to the separate temporary application's context.
+    delete files['app/proof.css']
+    files['app/globals.css'] = await readFile(join(sourceRoot, 'src/app/globals.css'))
+    files['postcss.config.mjs'] = await readFile(join(sourceRoot, 'postcss.config.mjs'))
+    files['tailwind.config.ts'] = `import type { Config } from 'tailwindcss'
+import { resolve, sep } from 'node:path'
+import canonical from ${literal(join(sourceRoot, 'tailwind.config'))}
+
+const source = ${literal(sourceRoot)}
+const content = canonical.content
+if (!Array.isArray(content) || !content.every(pattern => typeof pattern === 'string')) {
+  throw Error('Canonical Tailwind content shape changed; review required')
+}
+const absolute = (pattern: string) => resolve(source, pattern).split(sep).join('/')
+const config: Config = { ...canonical, content: [
+  ...content.map(pattern => absolute(pattern as string)),
+  ${literal(join(target, 'app/**/*.{js,ts,jsx,tsx,mdx}').split(sep).join('/'))},
+] }
+export default config
+`
+    files['app/layout.tsx'] = files['app/layout.tsx'].replace("import './proof.css'", "import './globals.css'")
+    files['app/portal/[token]/page.tsx'] = `import { createClient } from '@/lib/supabase/server'
+import { assertProofRuntime } from '../../../proof-server'
+import CustomerPortal from './CustomerPortal'
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export default async function Page({ params }: { params: Promise<{ token: string }> }) {
+  assertProofRuntime()
+  const { token } = await params
+  const client = await createClient()
+  // Same native server-first data source as the canonical portal page. An RPC
+  // failure is not replaced with a fabricated ready context or quote document.
+  const { data, error } = await client.rpc('get_portal_data', { p_token: token })
+  if (error) throw Error('Disposable portal initial read failed')
+  return <CustomerPortal token={token} initialData={data} />
+}
+`
+    files['app/portal/[token]/CustomerPortal.tsx'] = `'use client'
+import { PortalClient } from '@/app/portal/[token]/PortalClient'
+import type { PilotQuoteAcceptanceTransport } from '@/lib/quotes/pilotQuoteAcceptance'
+
+async function post(path: '/api/acceptance/preview' | '/api/acceptance/commit' | '/api/acceptance/reconcile',
+  body: unknown, signal: AbortSignal): Promise<unknown> {
+  const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal })
+  // Refusals retain their actual JSON, including non-2xx responses. There is no
+  // status conversion, retry, success injection or alternate consent engine.
+  return response.json()
+}
+const transport: PilotQuoteAcceptanceTransport = {
+  preview: (request, signal) => post('/api/acceptance/preview', request, signal),
+  commit: (request, signal) => post('/api/acceptance/commit', request, signal),
+  reconcile: (request, signal) => post('/api/acceptance/reconcile', request, signal),
+}
+export default function CustomerPortal({ token, initialData }: { token: string; initialData: unknown }) {
+  return <PortalClient token={token} initialData={initialData} pilotAcceptance={transport} />
+}
+`
+    files['app/api/payments/status/route.ts'] = `import type { NextRequest } from 'next/server'
+import { assertProofRuntime } from '../../../../proof-server'
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export async function GET(request: NextRequest) {
+  assertProofRuntime()
+  const { GET: actualGET } = await import('@/app/api/payments/status/route')
+  return actualGET(request)
+}
+`
   }
   await mkdir(target, { recursive: true })
   if (await realpath(target) !== target || inside(sourceRoot, target) || inside(target, sourceRoot)) throw Error('Temporary mount location changed')

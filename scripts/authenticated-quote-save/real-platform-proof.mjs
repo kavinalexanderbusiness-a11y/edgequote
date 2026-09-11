@@ -7,9 +7,10 @@ import { internalBootstrapRelays } from './internal-bootstrap-relays.mjs'
 
 const source = realpathSync(fileURLToPath(new URL('../../', import.meta.url)))
 const proofCase = process.env.PILOT_AUTH_SAVE_CASE || 'acknowledged'
-if (!['acknowledged', 'lost-acknowledgement', 'versioned-acceptance', 'acceptance-lock-order'].includes(proofCase)) throw Error('Unsupported real Save proof case')
+if (!['acknowledged', 'lost-acknowledgement', 'versioned-acceptance', 'acceptance-lock-order', 'customer-acceptance-ui'].includes(proofCase)) throw Error('Unsupported real Save proof case')
 const output = join(source, proofCase === 'acknowledged' ? 'outputs/authenticated-quote-save-real-20260911'
   : proofCase === 'lost-acknowledgement' ? 'outputs/authenticated-quote-save-lost-ack-20260911'
+  : proofCase === 'customer-acceptance-ui' ? 'outputs/quote-acceptance-ui-20260911'
   : proofCase === 'acceptance-lock-order' ? 'outputs/quote-acceptance-lock-order-20260911' : 'outputs/authenticated-quote-acceptance-real-20260911')
 const marker = 'EDGEHQ_DISPOSABLE_REAL_AUTH_SAVE_ONLY'
 const project = 'edgequote-auth-save-disposable'
@@ -45,7 +46,7 @@ async function main() {
   report.runId = process.env.GITHUB_RUN_ID
   if(report.candidate!==process.env.GITHUB_SHA) throw Error('Actual runner differs from candidate')
   if(execFileSync('git',['status','--porcelain','--untracked-files=no'],{cwd:source,encoding:'utf8'}).trim()) throw Error('Tracked checkout must be clean')
-  const files=execFileSync('git',['ls-files','-z'],{cwd:source}).toString().split('\0').filter(f=>/\.(tsx?|mjs|json|sql|ya?ml|toml)$/.test(f))
+  const files=execFileSync('git',['ls-files','-z'],{cwd:source}).toString().split('\0').filter(f=>/\.(tsx?|mjs|json|sql|ya?ml|toml)$/.test(f)||(proofCase==='customer-acceptance-ui'&&f.endsWith('.css')))
   for(const f of files)report.sourcePins[f]=digest(readFileSync(join(source,f)))
   taskRoot=mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP),'edgequote-auth-save-'))
   if(!relative(source,taskRoot).startsWith('..')) throw Error('Disposable root must be outside entire source checkout')

@@ -13,14 +13,16 @@ import {runVersionedAcceptanceBrowser,acceptanceFixtureTerms} from './versioned-
 import {runAcceptanceAuthorityBrowser} from './acceptance-authority-browser-cases.mjs'
 import {runLockOrderBrowser} from './lock-order-browser-cases.mjs'
 import {createLockOrderControl} from './lock-order-control.mjs'
+import {runCustomerAcceptanceUIBrowser} from './customer-acceptance-ui-browser-cases.mjs'
 
 const config=JSON.parse(readFileSync(process.argv[2],'utf8'))
 const {source,taskRoot,output,marker}=config
 const lostAck=config.proofCase==='lost-acknowledgement'
 const versionedAcceptance=config.proofCase==='versioned-acceptance'
 const lockOrder=config.proofCase==='acceptance-lock-order'
-const usesAcceptance=versionedAcceptance||lockOrder
-assert(['acknowledged','lost-acknowledgement','versioned-acceptance','acceptance-lock-order'].includes(config.proofCase),'Explicit proof case required')
+const customerUI=config.proofCase==='customer-acceptance-ui'
+const usesAcceptance=versionedAcceptance||lockOrder||customerUI
+assert(['acknowledged','lost-acknowledgement','versioned-acceptance','acceptance-lock-order','customer-acceptance-ui'].includes(config.proofCase),'Explicit proof case required')
 const report={startedAt:new Date().toISOString(),pass:false,proofCase:config.proofCase,candidate:config.candidate,tree:config.tree,runId:config.runId,
   platformSubstitutions:[],schemaApplications:[],sqlConnections:[],cleanup:{},scope:'Real local Auth and PostgREST with actual canonical cookie/browser clients, source adapters and normally committed native Save; synthetic business identities only.'}
 const hash=v=>createHash('sha256').update(v).digest('hex')
@@ -35,6 +37,7 @@ const scrub=value=>{
 }
 let browser,app,appOutput='',fixture,inspectExternalIO
 const lockFixtures=[],lockControls=[]
+const customerFixtures=[]
 const nativeDefinitionsSql="select p.oid::regprocedure::text as signature, pg_get_functiondef(p.oid) as definition "+
   "from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' "+
   "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname like 'pilot_quote_acceptance%' or p.proname like '_pilot_qva%' or p.proname in ('current_app_role','_pilot_quote_save_lock','quote_apply_choice','quote_record_acceptance')) order by p.oid::regprocedure::text"
@@ -142,6 +145,11 @@ async function main(){
     fixture=lockFixtures[0]
     report.lockOrderBeforeRows=Object.fromEntries(lockFixtures.map(f=>[f.id,f.before]))
     report.lockOrderFixtureOwners=lockFixtures.map(f=>({id:f.id,ownerA:f.ownerA,ownerB:f.ownerB,denied:f.denied,quoteA:f.quoteA}))
+  }else if(customerUI){
+    for(const id of ['U1','U2'])customerFixtures.push({id,...await seed(customerFixtures[0]?.unitId)})
+    fixture=customerFixtures[0]
+    report.customerUIBeforeRows=Object.fromEntries(customerFixtures.map(f=>[f.id,f.before]))
+    report.customerUIFixtureOwners=customerFixtures.map(f=>({id:f.id,ownerA:f.ownerA,ownerB:f.ownerB,denied:f.denied,quoteA:f.quoteA}))
   }else fixture=await seed()
   report.fixtureOwners={ownerA:fixture.ownerA,ownerB:fixture.ownerB,denied:fixture.denied}
   report.beforeRows=fixture.before
@@ -152,7 +160,7 @@ async function main(){
   const mounted=await generateMount({source,directory:join(taskRoot,'app'),marker,
     ...(lostAck?{lostAcknowledgement:{directory:faultDirectory,ownerId:fixture.ownerA,quoteId:fixture.quoteA}}:{}),
     ...(versionedAcceptance?{versionedAcceptance:{directory:authorityDirectory,ownerId:fixture.ownerB,quoteId:fixture.quoteB}}:{}),
-    ...(lockOrder?{lockOrderAcceptance:true}:{})})
+    ...(lockOrder?{lockOrderAcceptance:true}:{}),...(customerUI?{customerAcceptanceUI:true}:{})})
   report.mount=mounted
   const nextConfig=(await import(pathToFileURL(join(mounted.directory,'next.config.mjs')).href)).default
   for(const phase of ['phase-production-build','phase-production-server']){
@@ -268,11 +276,11 @@ async function main(){
   }
   const readFacts=async(f=fixture)=>{
     assert(usesAcceptance,'Native acceptance facts belong only to acceptance cases')
-    assert(f===fixture||lockFixtures.includes(f),'Unknown proof fixture')
+    assert(f===fixture||lockFixtures.includes(f)||customerFixtures.includes(f),'Unknown proof fixture')
     return (await sql("select public.quote_material_fingerprint('"+f.quoteA+"'::uuid) as \"documentFingerprint\", public.quote_terms_fingerprint('"+f.ownerA+"'::uuid) as \"termsFingerprint\", public.quote_acceptance_is_current('"+f.quoteA+"'::uuid) as \"acceptanceCurrent\""))[0]
   }
   const readFreshOwnerRows=async(f=fixture)=>{
-      assert(f===fixture||lockFixtures.includes(f),'Unknown proof fixture')
+      assert(f===fixture||lockFixtures.includes(f)||customerFixtures.includes(f),'Unknown proof fixture')
       // New client + new actual password session; never reuse browser tokens or service role.
       const fresh=createClient(config.apiUrl,config.anonKey,{auth:{persistSession:false,autoRefreshToken:false}})
       let signed=false
@@ -289,7 +297,10 @@ async function main(){
       }finally{if(signed){const out=await fresh.auth.signOut({scope:'local'});if(out.error)throw Error('Fresh session sign-out failed')}}
   }
   const runBrowser=versionedAcceptance?runVersionedAcceptanceBrowser:lostAck?runLostAcknowledgementBrowser:runAuthenticatedQuoteSaveBrowser
-  const browserResult=lockOrder?await runLockOrderBrowser({browser,baseURL:config.origin,fixtures:lockFixtures,
+  const browserResult=customerUI?await runCustomerAcceptanceUIBrowser({browser,baseURL:config.origin,fixtures:customerFixtures,outputDirectory:output,
+    readRows:async f=>{assert(customerFixtures.includes(f),'Unknown customer UI fixture');return readFixture(sql,f)},
+    readFacts,readFreshOwnerRows,
+  }):lockOrder?await runLockOrderBrowser({browser,baseURL:config.origin,fixtures:lockFixtures,
     createControl:async f=>{
       assert(lockFixtures.includes(f),'Unknown lock-order fixture')
       const control=await createLockOrderControl({config,fixture:f,readIndependentRows:()=>readFixture(sql,f)})
@@ -300,6 +311,10 @@ async function main(){
   }):await runBrowser({browser,baseURL:config.origin,fixture,fault,
     readIndependentRows:()=>readFixture(sql,fixture),readNativeAcceptanceFacts:()=>readFacts(),readFreshOwnerRows:()=>readFreshOwnerRows()})
   report.browser=browserResult
+  if(customerUI){
+    report.customerUIAfterRows={}
+    for(const f of customerFixtures)report.customerUIAfterRows[f.id]=await readFixture(sql,f)
+  }
   if(lockOrder){
     report.lockOrderAfterRows={}
     for(const f of lockFixtures)report.lockOrderAfterRows[f.id]=await readFixture(sql,f)
@@ -336,6 +351,17 @@ function finish(){
       if(inspectExternalIO){report.lockOrderFinalExternalIO=await inspectExternalIO();assert(Object.values(report.lockOrderFinalExternalIO).every(value=>value===0))}
       if(report.nativeDefinitions){assert.deepEqual(await sql(nativeDefinitionsSql),report.nativeDefinitions);report.lockOrderFinalNativeDefinitionsUnchanged=true}
     }catch(error){report.cleanup.lockOrderFinalObservationError=scrub(error.message);report.pass=false}
+  }
+  if(customerUI){
+    report.customerUIFinalObservedRows={}
+    for(const f of customerFixtures){
+      try{report.customerUIFinalObservedRows[f.id]=await readFixture(sql,f)}
+      catch(error){report.customerUIFinalObservedRows[f.id]={unavailable:scrub(error.message)};report.pass=false}
+    }
+    try{
+      if(inspectExternalIO){report.customerUIFinalExternalIO=await inspectExternalIO();assert(Object.values(report.customerUIFinalExternalIO).every(value=>value===0))}
+      if(report.nativeDefinitions){assert.deepEqual(await sql(nativeDefinitionsSql),report.nativeDefinitions);report.customerUIFinalNativeDefinitionsUnchanged=true}
+    }catch(error){report.cleanup.customerUIFinalObservationError=scrub(error.message);report.pass=false}
   }
   report.sqlConnections=connectionPids
   try{
