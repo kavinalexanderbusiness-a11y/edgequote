@@ -1,7 +1,8 @@
+import { PilotQuoteSaveHttpRefusal as Refusal, pilotQuoteSaveReply as reply, pilotQuoteSaveUnavailable as unavailable, boundedQuoteSaveRead as bounded, quoteSaveTimeout as duration, validateQuoteSaveRequest as validateRequest, readQuoteSaveBody } from './pilotQuoteSaveHttp'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   buildPilotQuoteSavePlan, parsePilotQuoteSaveIntent, PilotQuoteSavePlanError,
-  PILOT_QUOTE_SAVE_INTERNAL_BYTES, PILOT_QUOTE_SAVE_REQUEST_BYTES,
+  PILOT_QUOTE_SAVE_INTERNAL_BYTES,
   type PilotQuoteSaveIntent, type PilotQuoteSavePlan, type PilotQuoteSaveTargetRequest,
 } from './pilotQuoteSavePlan'
 import {
@@ -34,14 +35,6 @@ const same = (a: unknown, b: unknown): boolean => {
   if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => same(v, b[i]))
   return row(a) && row(b) && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(k => Object.hasOwn(b, k) && same(a[k], b[k]))
 }
-class Refusal extends Error {
-  constructor(readonly code: string, readonly status: number) { super(code) }
-}
-const reply = (body: Row | PilotQuoteSaveCommittedReceipt, status = 200) => new Response(JSON.stringify(body), {
-  status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
-})
-const unavailable = () => new Error('quote_save_unavailable')
-
 /** Exact Supabase signatures. Never forward SDK error details or create a
  * preparation write; aborting this transport does not establish DB rollback. */
 export function createPilotQuoteSaveStore(sb: SupabaseClient): PilotQuoteSaveStore {
@@ -64,73 +57,6 @@ export function createPilotQuoteSaveStore(sb: SupabaseClient): PilotQuoteSaveSto
       p_template_ids: s.template_ids, p_provenance_mode: s.provenance_mode }, signal),
     commit: (owner, quote, plan, signal) => rpc('pilot_quote_save', { p_owner: owner, p_quote: quote, p_plan: plan }, signal),
   }
-}
-
-// Bounded waits include injected transports that ignore cancellation. Their
-// late result is consumed and never becomes an acknowledgement or a retry.
-async function bounded<T>(task: (signal: AbortSignal) => Promise<T>, parent: AbortSignal, ms: number): Promise<T> {
-  if (parent.aborted) throw unavailable()
-  const controller = new AbortController()
-  let rejectAbort: (reason: Error) => void = () => {}
-  const cancelled = new Promise<never>((_, reject) => { rejectAbort = reject })
-  const abort = () => { controller.abort(); rejectAbort(unavailable()) }
-  parent.addEventListener('abort', abort, { once: true })
-  const timer = setTimeout(abort, ms)
-  try { return await Promise.race([Promise.resolve().then(() => {
-    if (controller.signal.aborted) throw unavailable()
-    return task(controller.signal)
-  }), cancelled]) }
-  finally { clearTimeout(timer); parent.removeEventListener('abort', abort) }
-}
-function duration(value: number | undefined, fallback: number): number {
-  if (value === undefined) return fallback
-  if (!Number.isInteger(value) || value < 1 || value > 60_000) throw unavailable()
-  return value
-}
-function validateRequest(request: Request, trustedOrigin: string): void {
-  let configured: URL
-  try { configured = new URL(trustedOrigin) } catch { throw unavailable() }
-  if (!['https:', 'http:'].includes(configured.protocol) || configured.origin !== trustedOrigin) throw unavailable()
-  if (request.method !== 'POST') throw new Refusal('method_not_allowed', 405)
-  if (new URL(request.url).origin !== trustedOrigin || request.headers.get('origin') !== trustedOrigin
-    || ![null, 'same-origin'].includes(request.headers.get('sec-fetch-site'))) throw new Refusal('forbidden_origin', 403)
-  if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json'
-    || ![null, 'identity'].includes(request.headers.get('content-encoding'))) throw new Refusal('invalid_request', 415)
-  const declared = request.headers.get('content-length')
-  if (declared !== null) {
-    if (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared))) throw new Refusal('invalid_request', 400)
-    if (Number(declared) > PILOT_QUOTE_SAVE_REQUEST_BYTES) throw new Refusal('request_too_large', 413)
-  }
-}
-async function readIntent(request: Request, ms: number): Promise<PilotQuoteSaveIntent> {
-  if (!request.body) throw new Refusal('invalid_request', 400)
-  return bounded(async signal => {
-    const reader = request.body!.getReader(), decoder = new TextDecoder('utf-8', { fatal: true })
-    const cancel = () => { void reader.cancel().catch(() => {}) }
-    signal.addEventListener('abort', cancel, { once: true })
-    let bytes = 0, body = '', complete = false
-    try {
-      while (true) {
-        if (signal.aborted) throw unavailable()
-        const chunk = await reader.read()
-        if (chunk.done) break
-        bytes += chunk.value.byteLength
-        if (bytes > PILOT_QUOTE_SAVE_REQUEST_BYTES) throw new Refusal('request_too_large', 413)
-        body += decoder.decode(chunk.value, { stream: true })
-      }
-      body += decoder.decode()
-      if (signal.aborted) throw unavailable()
-      const declared = request.headers.get('content-length')
-      if (declared !== null && Number(declared) !== bytes) throw new Refusal('invalid_request', 400)
-      const intent = parsePilotQuoteSaveIntent(body)
-      complete = true
-      return intent
-    } catch (error) {
-      if (error instanceof Refusal || error instanceof PilotQuoteSavePlanError) throw error
-      if (signal.aborted) throw unavailable()
-      throw new Refusal('invalid_request', 400)
-    } finally { signal.removeEventListener('abort', cancel); if (!complete) cancel(); reader.releaseLock() }
-  }, request.signal, ms)
 }
 
 // These are exact pre-DML return objects in the pinned transaction. An SDK
@@ -228,7 +154,7 @@ export async function savePilotQuoteSaveRequest(store: PilotQuoteSaveStore, auth
   try {
     validateRequest(request, options.trustedOrigin)
     const bodyMs = duration(options.bodyTimeoutMs, 10_000), operationMs = duration(options.operationTimeoutMs, 15_000)
-    const intent = await readIntent(request, bodyMs)
+    const intent = await readQuoteSaveBody(request, bodyMs, parsePilotQuoteSaveIntent)
     const session = await bounded(() => auth.getUser(), request.signal, operationMs)
     if (session.error || !session.data?.user || !uuid(session.data.user.id)) throw new Refusal('unauthenticated', 401)
     const owner = session.data.user.id

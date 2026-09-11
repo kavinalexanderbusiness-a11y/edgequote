@@ -23,14 +23,17 @@ export const copyPilotQuoteSaveJson = <T>(value: T, bytes: number): T | null => 
     while (queue.length) {
       const v = queue.pop()
       if (v === null || typeof v === 'boolean' || (typeof v === 'string' && !v.includes('\0')) || (typeof v === 'number' && Number.isFinite(v))) continue
-      if (!v || typeof v !== 'object' || (!Array.isArray(v) && ![Object.prototype, null].includes(Object.getPrototypeOf(v)))) return null
+      if (!v || typeof v !== 'object' || !(Array.isArray(v)
+        ? [Array.prototype, null].includes(Object.getPrototypeOf(v)) : [Object.prototype, null].includes(Object.getPrototypeOf(v)))) return null
       if (visited.has(v)) continue
       visited.add(v)
-      const keys = Object.keys(v)
-      if (Array.isArray(v) && (keys.length !== v.length || keys.some((k, i) => k !== String(i)))) return null
+      if (Object.getOwnPropertySymbols(v).length) return null
+      const keys = Object.getOwnPropertyNames(v)
+      if (Array.isArray(v) && (keys.length !== v.length + 1 || keys.some((k, i) => i === v.length ? k !== 'length' : k !== String(i)))) return null
       for (const k of keys) {
+        if (Array.isArray(v) && k === 'length') continue
         const d = Object.getOwnPropertyDescriptor(v, k)
-        if (['__proto__','constructor','prototype'].includes(k) || !d || !Object.hasOwn(d, 'value')) return null
+        if (['__proto__','constructor','prototype','toJSON'].includes(k) || !d || !d.enumerable || !Object.hasOwn(d, 'value')) return null
         queue.push(d.value)
       }
     }

@@ -5,6 +5,9 @@ import { join, resolve } from 'node:path'
 import { DisposableSession, type TestResult } from './database'
 import { runQuoteSaveServerCases, quoteSaveServerEvidence } from './quote-save-server-cases'
 import { runQuoteSaveServerNativeCases, quoteSaveServerNativeEvidence } from './quote-save-server-native-cases'
+import { runQuoteSaveValuesCases, quoteSaveValuesEvidence } from './quote-save-values-cases'
+import { runQuoteSaveBaselineCases, quoteSaveBaselineEvidence } from './quote-save-baseline-cases'
+import { runQuoteSaveBaselineNativeCases, quoteSaveBaselineNativeEvidence } from './quote-save-baseline-native-cases'
 
 const output = resolve('outputs/pilot-full-quote-save-20260910')
 const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -14,7 +17,7 @@ async function main() {
   let openAttempted = false, openCompleted = false
   const report: Record<string, unknown> = {
     startedAt: new Date().toISOString(), pass: false,
-    scope: 'Actual dormant HTTP adapter and planner with synthetic verified auth; service-role SQL transport on the same marked PostgreSQL17 fixture. No mounted app, live Auth or PostgREST transport E2E.',
+    scope: 'Actual dormant Save and read-only baseline HTTP adapters, shared browser values schema and planner with synthetic verified auth; service-role SQL transport on the same marked PostgreSQL17 fixture. No mounted app, live Auth or PostgREST transport E2E.',
     mountedRoute: false, productionCalls: 0, externalProviderCalls: 0,
   }
   try {
@@ -35,7 +38,12 @@ async function main() {
     }
     for (const file of ['scripts/pilot-email/quote-save-server-proof.ts',
       'scripts/pilot-email/quote-save-server-cases.ts', 'scripts/pilot-email/quote-save-server-native-cases.ts',
-      'src/lib/quotes/pilotQuoteSave.ts', 'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveReceipt.ts']) {
+      'scripts/pilot-email/quote-save-values-cases.ts', 'scripts/pilot-email/quote-save-baseline-cases.ts',
+      'scripts/pilot-email/quote-save-baseline-fixtures.ts', 'scripts/pilot-email/quote-save-baseline-native-cases.ts',
+      'src/lib/quotes/pilotQuoteSave.ts', 'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveReceipt.ts',
+      'src/lib/quotes/pilotQuoteSaveValues.ts', 'src/lib/quotes/pilotQuoteSaveBaseline.ts',
+      'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts',
+      'src/lib/quotes/pilotQuoteIdentity.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts']) {
       assert.ok(Object.hasOwn(native.sourcePins, file), 'Missing server source pin: ' + file)
     }
     report.sourcePins = native.sourcePins
@@ -45,6 +53,16 @@ async function main() {
     report.synthetic = synthetic
     report.syntheticEvidence = quoteSaveServerEvidence
     assert.ok(synthetic.length > 0 && synthetic.every(test => test.pass), 'Synthetic HTTP/transport boundary failed')
+    const values = await runQuoteSaveValuesCases()
+    report.values = values
+    report.valuesEvidence = quoteSaveValuesEvidence
+    assert.equal(values.length, 7, 'Missing shared values controls')
+    assert.ok(values.every(test => test.pass), 'Shared values boundary failed')
+    const baseline = await runQuoteSaveBaselineCases()
+    report.baseline = baseline
+    report.baselineEvidence = quoteSaveBaselineEvidence
+    assert.equal(baseline.length, 11, 'Missing baseline HTTP controls')
+    assert.ok(baseline.every(test => test.pass), 'Baseline HTTP boundary failed')
     openAttempted = true
     db = await DisposableSession.open('quote-save-server-proof')
     openCompleted = true
@@ -52,7 +70,11 @@ async function main() {
     const integration = await runQuoteSaveServerNativeCases(db)
     report.native = integration
     report.nativeEvidence = quoteSaveServerNativeEvidence
-    const all: TestResult[] = [...synthetic, ...integration]
+    const baselineNative = await runQuoteSaveBaselineNativeCases(db)
+    report.baselineNative = baselineNative
+    report.baselineNativeEvidence = quoteSaveBaselineNativeEvidence
+    assert.equal(baselineNative.length, 4, 'Missing native baseline controls')
+    const all: TestResult[] = [...synthetic, ...values, ...baseline, ...integration, ...baselineNative]
     report.passed = all.filter(test => test.pass).length
     report.failed = all.filter(test => !test.pass).length
     report.pass = integration.length > 0 && all.every(test => test.pass)

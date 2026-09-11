@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isActiveAutosaveOwner, useAutosaveOwner } from '@/hooks/useAutosaveOwner'
 import { isCurrentLease } from '@/lib/clientCache'
+import {
+  acceptAutosaveSubmissionAdoption, buildAutosaveSubmissionDraft, readAutosaveSubmissionDraft,
+  validateAutosaveSubmissionValue, validAutosaveDraftBinding,
+  type AutosaveBaseline, type AutosaveDraftBinding, type AutosaveSubmissionAdoption,
+} from '@/lib/autosaveSubmission'
 
 // ── Shared autosave engine ───────────────────────────────────────────────────
 // ONE hook every long-form editor (quotes, invoices, customers, jobs, notes,
@@ -18,13 +23,15 @@ export type AutosaveStatus = 'idle' | 'saving' | 'saved'
 
 interface StoredDraft<T> { value: T; savedAt: number }
 interface OwnedDraft<T> extends StoredDraft<T> { owner: string }
-interface SubmissionDraft<T> extends OwnedDraft<T> { generation: string; serialization: string }
 export interface AutosaveSubmission<T> {
   readonly owner: string; readonly ownerGeneration: number; readonly key: string; readonly generation: string
+  readonly recordId: string; readonly originalRevision: string
   readonly serialization: string; readonly storedBytes: string; readonly value: T; readonly editRevision: number
 }
 export interface AutosaveSubmissionOptions<T> {
   generation: string
+  baseline: AutosaveBaseline
+  adoption?: AutosaveSubmissionAdoption
   hasPending: () => boolean
   validateValue: (value: unknown) => T | null
 }
@@ -67,7 +74,9 @@ export interface UseAutosaveResult<T> {
   clear: () => void
   stageSubmission: (value: T) => AutosaveSubmission<T> | null
   clearSubmissionIfCurrent: (stage: AutosaveSubmission<T>, currentValue: T) => boolean
-  flushCurrent: (currentValue?: T) => boolean
+  flushCurrent: (currentValue?: T, options?: { force?: boolean }) => boolean
+  /** A bound editor must gate editing and Save until ready. Refused never means empty. */
+  submissionState: 'pending' | 'ready' | 'refused'
 }
 
 function toMs(v: string | number | null | undefined): number {
@@ -96,12 +105,63 @@ export function useAutosave<T>({
   const pendingDraft = useRef(false)
   const baselineMs = toMs(baselineUpdatedAt)
   const transactional = guarded && !!submission
+  const wasTransactional = useRef(transactional).current
+  const submissionIdentity = `${key}:${submission?.generation}:${submission?.baseline?.recordId}:${submission?.baseline?.originalRevision}`
+  const initialSubmissionIdentity = useRef(submissionIdentity).current
+  const stableSubmission = transactional === wasTransactional && (!wasTransactional || submissionIdentity === initialSubmissionIdentity)
+  const [submissionState, setSubmissionState] = useState<'pending' | 'ready' | 'refused'>(transactional ? 'pending' : 'ready')
+  const gate = useRef<'pending' | 'ready' | 'refused'>(transactional ? 'pending' : 'ready')
+  const adoptionConsumer = useRef({})
+  const observedBytes = useRef<string | null | undefined>(undefined)
+  const offeredAtSerialization = useRef<string | null>(null)
   const writeEpoch = useRef(0)
   const editRevision = useRef(0)
   const lastValue = useRef<string | null>(null)
   const staged = useRef<AutosaveSubmission<T> | null>(null)
   const draftIdentity = useRef<string | null>(null)
   const latest = useRef({ binding, key, target, value, serialized: '', submission, enabled, canReplaceDraft, isEmpty })
+
+  const draftBinding = (owner: string, options: AutosaveSubmissionOptions<T> | undefined): AutosaveDraftBinding => ({
+    owner, generation: options?.generation ?? '', recordId: options?.baseline?.recordId ?? '', originalRevision: options?.baseline?.originalRevision ?? '',
+  })
+  const refuse = () => { gate.current = 'refused'; setSubmissionState('refused') }
+  const ready = () => {
+    const state = latest.current
+    return wasTransactional && !!state.submission && gate.current === 'ready'
+      && `${state.key}:${state.submission.generation}:${state.submission.baseline?.recordId}:${state.submission.baseline?.originalRevision}` === initialSubmissionIdentity
+  }
+  // Every write/removal checks the bound envelope and the exact bytes last
+  // observed by THIS hook. Unknown, foreign, unbound or changed slots stay intact.
+  const canWriteBound = (unmount = false): boolean => {
+    const state = latest.current
+    if (!state.submission || !state.binding || !ready() || !(unmount
+      ? state.binding?.editorKey === state.key && isCurrentLease(state.binding.lease)
+      : isActiveAutosaveOwner(state.binding, state.key))) return false
+    try {
+      const found = readAutosaveSubmissionDraft(window.localStorage, state.target!, draftBinding(state.binding.lease.owner, state.submission), state.submission.validateValue)
+      if (found.state === 'unavailable') return false
+      if (found.state === 'protected' || found.storedBytes !== observedBytes.current) { refuse(); return false }
+      return true
+    } catch { return false }
+  }
+  const writeBound = (currentValue: T, unmount = false): { serialization: string; storedBytes: string; value: T } | null => {
+    const state = latest.current
+    if (!canWriteBound(unmount) || !state.binding || !state.submission) return null
+    const result = buildAutosaveSubmissionDraft(currentValue, draftBinding(state.binding.lease.owner, state.submission), state.submission.validateValue)
+    if (!result) return null
+    try {
+      if (!canWriteBound(unmount)) return null
+      window.localStorage.setItem(state.target!, result.storedBytes)
+      const actual = window.localStorage.getItem(state.target!)
+      if (actual !== result.storedBytes) {
+        if (actual !== observedBytes.current) refuse()
+        return null
+      }
+      if (!(unmount ? isCurrentLease(state.binding.lease) : isActiveAutosaveOwner(state.binding, state.key))) return null
+      observedBytes.current = result.storedBytes
+      return { serialization: result.draft.serialization, storedBytes: result.storedBytes, value: result.draft.value }
+    } catch { return null }
+  }
 
   const cancelTimers = () => {
     writeEpoch.current++
@@ -115,7 +175,32 @@ export function useAutosave<T>({
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (guarded && !isActiveAutosaveOwner(binding, key)) return
-    if (transactional) { pendingDraft.current = false; draftIdentity.current = null; setDraft(null); setSavedAt(null) }
+    if (wasTransactional && !stableSubmission) { refuse(); return }
+    if (transactional) {
+      if (gate.current === 'refused') return
+      try {
+      pendingDraft.current = false; draftIdentity.current = null; setDraft(null); setSavedAt(null)
+      const expected = draftBinding(binding!.lease.owner, submission)
+      if (!validAutosaveDraftBinding(expected)) { refuse(); return }
+      const found = readAutosaveSubmissionDraft(window.localStorage, target!, expected, submission!.validateValue)
+      if (found.state === 'protected' || found.state === 'unavailable') { pendingDraft.current = true; refuse(); return }
+      // Replaying an accepted setup cannot acquire different storage bytes.
+      // The same hook's own writes update observedBytes at their readback.
+      if (gate.current === 'ready' && found.storedBytes !== observedBytes.current) { pendingDraft.current = true; refuse(); return }
+      if (submission!.adoption && !acceptAutosaveSubmissionAdoption(submission!.adoption, adoptionConsumer.current,
+        window.localStorage, target!, expected, latest.current.serialized, submission!.validateValue)) { pendingDraft.current = true; refuse(); return }
+      observedBytes.current = found.storedBytes
+      gate.current = 'ready'; setSubmissionState('ready')
+      if (found.state === 'valid' && !submission!.adoption) {
+        pendingDraft.current = true; draftIdentity.current = submissionIdentity
+        offeredAtSerialization.current = latest.current.serialized
+        setDraft(found.draft.value); setSavedAt(found.draft.savedAt)
+      }
+      // Original revision, not timestamp order, governs bound pilot recovery.
+      // No stale/legacy/corrupt draft is ever automatically deleted here.
+      } catch { pendingDraft.current = true; refuse() }
+      return
+    }
     try {
       const raw = window.localStorage.getItem(target!)
       if (raw) {
@@ -125,16 +210,6 @@ export function useAutosave<T>({
           // also not permission to replace it; only a deliberate new edit is.
           pendingDraft.current = true
           return
-        }
-        if (transactional) {
-          const owned = parsed as SubmissionDraft<T>
-          const checked = submission!.validateValue(owned.value)
-          if (!checked || owned.generation !== submission!.generation || typeof owned.serialization !== 'string'
-            || JSON.stringify(checked) !== owned.serialization || !Number.isFinite(owned.savedAt)
-            || !Object.keys(owned).every(k => ['owner','value','savedAt','generation','serialization'].includes(k))) {
-            pendingDraft.current = true
-            return
-          }
         }
         if (parsed && typeof parsed.savedAt === 'number') {
           let protect = false
@@ -151,7 +226,7 @@ export function useAutosave<T>({
       }
     } catch { /* corrupt/unavailable storage — ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, guarded, binding, transactional])
+  }, [key, guarded, binding, transactional, submissionIdentity, stableSubmission])
 
   const serialized = (() => { try { return JSON.stringify(value) } catch { return '' } })()
   if (transactional && serialized !== lastValue.current) { lastValue.current = serialized; editRevision.current++ }
@@ -162,6 +237,7 @@ export function useAutosave<T>({
   useEffect(() => {
     if (typeof window === 'undefined' || !enabled) return
     if (guarded && !isActiveAutosaveOwner(binding, key)) return
+    if (wasTransactional && (!transactional || !ready())) return
     if (mountSerialized.current === null) { mountSerialized.current = serialized; return }
     if (serialized === mountSerialized.current && (!transactional || !staged.current)) return
     // Automatic fills are not permission to discard an owner's recoverable work.
@@ -180,14 +256,14 @@ export function useAutosave<T>({
       if (transactional && epoch !== writeEpoch.current) return
       try {
         const now = Date.now()
-        const checked = transactional ? submission!.validateValue(value) : value
-        if (transactional && !checked) { setStatus('idle'); return }
-        const stored: StoredDraft<T> | OwnedDraft<T> | SubmissionDraft<T> = transactional
-          ? { owner: binding!.lease.owner, value: checked!, savedAt: now, generation: submission!.generation, serialization: serialized }
-          : guarded
+        if (transactional) {
+          if (!writeBound(value)) { setStatus('idle'); return }
+        } else {
+          const stored: StoredDraft<T> | OwnedDraft<T> = guarded
           ? { owner: binding!.lease.owner, value, savedAt: now }
           : { value, savedAt: now }
-        window.localStorage.setItem(target!, JSON.stringify(stored))
+          window.localStorage.setItem(target!, JSON.stringify(stored))
+        }
         setSavedAt(now)
         setStatus('saved')
         if (statusTimer.current) clearTimeout(statusTimer.current)
@@ -198,27 +274,26 @@ export function useAutosave<T>({
     }, debounceMs)
     return () => { if (timer.current) clearTimeout(timer.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialized, enabled, canReplaceDraft, guarded, binding, accessible, transactional])
+  }, [serialized, enabled, canReplaceDraft, guarded, binding, accessible, transactional, submissionState, stableSubmission])
 
-  const flushCurrent = useCallback((currentValue?: T): boolean => {
+  const flushCurrent = useCallback((currentValue?: T, options?: { force?: boolean }): boolean => {
     const state = latest.current
-    if (!state.submission || !guarded || !state.enabled || !isActiveAutosaveOwner(state.binding, state.key)) return false
+    if (!state.submission || !guarded || !state.enabled || !isActiveAutosaveOwner(state.binding, state.key) || !ready()) return false
     cancelTimers()
     try {
-      const checked = state.submission.validateValue(currentValue ?? state.value)
+      const checked = validateAutosaveSubmissionValue(currentValue ?? state.value, state.submission.validateValue)
       if (!checked) return false
-      const bytes = JSON.stringify(checked)
+      const bytes = checked.serialization
       // A newer edit may return to the pre-Save baseline while the submitted
       // version is committing. Explicit completion/exit flushes must persist it.
-      if (bytes === mountSerialized.current && !staged.current) return true
+      if (!canWriteBound()) return false
+      if (bytes === mountSerialized.current && !staged.current && !options?.force) return true
       if (pendingDraft.current && !state.canReplaceDraft) return false
-      const stored = JSON.stringify({ owner: state.binding.lease.owner, value: checked, savedAt: Date.now(), generation: state.submission.generation, serialization: bytes })
-      window.localStorage.setItem(state.target!, stored)
-      return window.localStorage.getItem(state.target!) === stored
+      return writeBound(checked.value) !== null
     } catch { return false }
     // Refs intentionally supply the latest value and lease at an exit boundary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guarded])
+  }, [guarded, stableSubmission])
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current)
@@ -230,11 +305,10 @@ export function useAutosave<T>({
       // Ordinary stale callbacks continue to require the active binding.
       writeEpoch.current++
       try {
-        const checked = state.submission.validateValue(state.value)
-        const bytes = checked && JSON.stringify(checked)
+        const checked = validateAutosaveSubmissionValue(state.value, state.submission.validateValue)
+        const bytes = checked?.serialization
         if (checked && (bytes !== mountSerialized.current || staged.current) && (!pendingDraft.current || state.canReplaceDraft)) {
-          window.localStorage.setItem(state.target!, JSON.stringify({ owner: state.binding.lease.owner, value: checked,
-            savedAt: Date.now(), generation: state.submission.generation, serialization: bytes }))
+          writeBound(checked.value, true)
         }
       } catch { /* no durability claim if storage becomes unavailable */ }
     }
@@ -244,19 +318,20 @@ export function useAutosave<T>({
 
   const stageSubmission = useCallback((submitted: T): AutosaveSubmission<T> | null => {
     const state = latest.current
-    if (!state.submission || !guarded || !state.enabled || !isActiveAutosaveOwner(state.binding, state.key)) return null
+    if (!state.submission || !guarded || !state.enabled || !isActiveAutosaveOwner(state.binding, state.key) || !ready()) return null
     cancelTimers()
     try {
-      const checked = state.submission.validateValue(submitted)
+      const checked = validateAutosaveSubmissionValue(submitted, state.submission.validateValue)
       if (!checked) return null
-      const bytes = JSON.stringify(checked)
+      const bytes = checked.serialization
       if (bytes !== state.serialized) return null
-      const stored = JSON.stringify({ owner: state.binding.lease.owner, value: checked, savedAt: Date.now(), generation: state.submission.generation, serialization: bytes })
-      window.localStorage.setItem(state.target!, stored)
-      if (window.localStorage.getItem(state.target!) !== stored || !isActiveAutosaveOwner(state.binding, state.key)) return null
+      if (pendingDraft.current && !state.canReplaceDraft) return null
+      const written = writeBound(checked.value)
+      if (!written) return null
       const token: AutosaveSubmission<T> = { owner: state.binding.lease.owner, ownerGeneration: state.binding.lease.gen,
-        key: state.key, generation: state.submission.generation, serialization: bytes, storedBytes: stored,
-        value: checked, editRevision: editRevision.current }
+        key: state.key, generation: state.submission.generation, serialization: bytes, storedBytes: written.storedBytes,
+        recordId: state.submission.baseline.recordId, originalRevision: state.submission.baseline.originalRevision,
+        value: checked.value, editRevision: editRevision.current }
       staged.current = token
       pendingDraft.current = false
       return token
@@ -268,14 +343,16 @@ export function useAutosave<T>({
     const state = latest.current
     if (!state.submission || !guarded || staged.current !== token || !isActiveAutosaveOwner(state.binding, state.key)
       || state.binding.lease.owner !== token.owner || state.binding.lease.gen !== token.ownerGeneration
-      || state.key !== token.key || state.submission.generation !== token.generation || editRevision.current !== token.editRevision) return false
+      || state.key !== token.key || state.submission.generation !== token.generation || editRevision.current !== token.editRevision
+      || state.submission.baseline.recordId !== token.recordId || state.submission.baseline.originalRevision !== token.originalRevision || !ready()) return false
     try {
-      const checked = state.submission.validateValue(currentValue)
-      if (!checked || JSON.stringify(checked) !== token.serialization || state.serialized !== token.serialization
-        || window.localStorage.getItem(state.target!) !== token.storedBytes) return false
+      const checked = validateAutosaveSubmissionValue(currentValue, state.submission.validateValue)
+      if (!checked || checked.serialization !== token.serialization || state.serialized !== token.serialization
+        || window.localStorage.getItem(state.target!) !== token.storedBytes || !canWriteBound()) return false
       cancelTimers()
       window.localStorage.removeItem(state.target!)
       if (window.localStorage.getItem(state.target!) !== null) return false
+      observedBytes.current = null
       // A completion rerender/unmount cannot schedule the just-cleared value.
       mountSerialized.current = token.serialization
       staged.current = null; pendingDraft.current = false
@@ -287,29 +364,43 @@ export function useAutosave<T>({
 
   const clear = useCallback(() => {
     if (guarded && !isActiveAutosaveOwner(binding, key)) return
+    if (wasTransactional && (!transactional || !canWriteBound())) return
     if (guarded) {
       if (timer.current) clearTimeout(timer.current)
       if (statusTimer.current) clearTimeout(statusTimer.current)
     }
     if (transactional) { writeEpoch.current++; staged.current = null; mountSerialized.current = latest.current.serialized }
     pendingDraft.current = false
-    if (typeof window !== 'undefined') { try { window.localStorage.removeItem(target!) } catch { /* ignore */ } }
+    if (typeof window !== 'undefined') { try {
+      window.localStorage.removeItem(target!)
+      if (transactional) {
+        if (window.localStorage.getItem(target!) !== null) { refuse(); return }
+        observedBytes.current = null
+      }
+    } catch { if (transactional) { refuse(); return } } }
     setDraft(null); setSavedAt(null); setStatus('idle')
+    // Bound checks use latest refs; the originating mode is immutable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, guarded, binding, target, transactional])
 
   const restore = useCallback((): T | null => {
     if (guarded && !isActiveAutosaveOwner(binding, key)) return null
-    if (transactional && draftIdentity.current !== `${key}:${submission!.generation}`) return null
+    if (wasTransactional && (!transactional || !ready() || draftIdentity.current !== submissionIdentity
+      || offeredAtSerialization.current !== latest.current.serialized || !canWriteBound())) return null
     const v = draft
+    if (transactional) cancelTimers()
     pendingDraft.current = false
     setDraft(null)
     // Keep the stored copy until the next save cycle — the form now holds it anyway.
     return v
-  }, [draft, guarded, binding, key, transactional, submission])
+    // Bound checks use latest refs; no captured form value grants restore authority.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, guarded, binding, key, transactional, submissionIdentity])
 
   const discard = useCallback(() => { clear() }, [clear])
 
-  const visibleDraft = accessible && (!transactional || draftIdentity.current === `${key}:${submission!.generation}`)
+  const visibleDraft = accessible && (!wasTransactional || (stableSubmission && ready() && draftIdentity.current === submissionIdentity))
   return { status: accessible ? status : 'idle', savedAt: visibleDraft ? savedAt : null,
-    draft: visibleDraft ? draft : null, restore, discard, clear, stageSubmission, clearSubmissionIfCurrent, flushCurrent }
+    draft: visibleDraft ? draft : null, restore, discard, clear, stageSubmission, clearSubmissionIfCurrent, flushCurrent,
+    submissionState: !wasTransactional && !transactional ? 'ready' : !stableSubmission ? 'refused' : !accessible ? 'pending' : submissionState }
 }

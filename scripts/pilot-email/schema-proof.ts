@@ -61,6 +61,8 @@ async function main() {
     for (const file of [
       'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts',
       'src/lib/quotes/pilotQuoteSaveReceipt.ts', 'src/lib/quotes/pilotQuoteSave.ts',
+      'src/lib/quotes/pilotQuoteSaveValues.ts', 'src/lib/quotes/pilotQuoteSaveBaseline.ts',
+      'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts',
       'src/types/index.ts', 'src/lib/quoteServices.ts', 'src/lib/quoteOptions.ts',
       'src/lib/payments/depositGate.ts', 'src/lib/pricingConfig.ts', 'src/lib/servicePricing.ts',
       'src/lib/utils.ts', 'src/lib/measure/data.ts', 'src/lib/measurePricing.ts',

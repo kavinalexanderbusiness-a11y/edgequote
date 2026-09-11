@@ -1,25 +1,21 @@
+import { parsePilotQuoteSaveIntent, PilotQuoteSavePlanError, quoteSaveJsonCopy, isPilotQuoteSaveMeasurementSnapshot, type PilotQuoteSaveIntent } from './pilotQuoteSaveValues'
+export { parsePilotQuoteSaveIntent, PilotQuoteSavePlanError, PILOT_QUOTE_SAVE_REQUEST_BYTES, type PilotQuoteSaveIntent } from './pilotQuoteSaveValues'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PricingDisplayType, QuoteFormValues, QuoteServiceInput } from '@/types'
-import type { MeasurementSnapshotV2 } from '../measurePricing'
 import { applyOvergrowth } from '../utils'
 import { sumServiceLines } from '../quoteServices'
-import { headlineOptionPrice, optionRowsFor, optionSetProblem, optionsConflictWithLines } from '../quoteOptions'
+import { headlineOptionPrice, optionRowsFor } from '../quoteOptions'
 import { depositRuleFromForm } from '../payments/depositGate'
 import { servicePricingKind } from '../servicePricing'
 import { saveManual } from '../measure/data'
-import { buildPilotQuoteIdentityPlan, type PilotQuoteIdentityPlan, type PilotQuoteSnapshot } from './pilotQuoteIdentity'
+import { buildPilotQuoteIdentityPlan, validatePilotQuoteIdentitySnapshot, type PilotQuoteIdentityPlan, type PilotQuoteSnapshot } from './pilotQuoteIdentity'
 
 // Dormant server planning only. This module has no live Supabase client, write
 // transport, route or pricing-config ensure RPC. Its private output is input to
 // a separately reviewed atomic transaction, never a browser-supplied write plan.
 type Row = Record<string, unknown>
-export const PILOT_QUOTE_SAVE_REQUEST_BYTES = 200_000
 export const PILOT_QUOTE_SAVE_INTERNAL_BYTES = 16 * 1024 * 1024
 export type PilotQuoteSaveVersionedRow = { row: Row; xmin: string }
-export type PilotQuoteSaveIntent = {
-  version: 1; quoteId: string; expectedEditorRevision: string
-  clientOperationId: string; editorGeneration: string; values: QuoteFormValues
-}
 export type PilotQuoteSaveEditorSnapshot = {
   code: 'snapshot'; complete: true; editor_revision: string
   identity: PilotQuoteSnapshot
@@ -57,11 +53,6 @@ export type PilotQuoteSavePlan = {
   client_operation_id: string; editor_generation: string
 }
 
-export class PilotQuoteSavePlanError extends Error {
-  constructor(readonly code: 'invalid_intent' | 'request_too_large' | 'invalid_snapshot' | 'internal_too_large' | 'stale_editor' | 'invalid_targets' | 'stale_targets' | 'invalid_options' | 'invalid_deposit' | 'pricing_settings_unavailable') {
-    super(code)
-  }
-}
 function requireThat(condition: unknown, code: PilotQuoteSavePlanError['code']): asserts condition {
   if (!condition) throw new PilotQuoteSavePlanError(code)
 }
@@ -82,106 +73,11 @@ const same = (a: unknown, b: unknown): boolean => {
   return object(a) && object(b) && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(k => Object.hasOwn(b, k) && same(a[k], b[k]))
 }
 
-// Reject non-JSON host objects/getters/functions rather than allowing toJSON to
-// turn an injected object into an apparently valid intent. No payload is logged.
-function jsonCopy(value: unknown, limit: number, invalid: PilotQuoteSavePlanError['code'], oversize: PilotQuoteSavePlanError['code']): unknown {
-  const pending: unknown[] = [value], seen = new Set<object>()
-  while (pending.length) {
-    const item = pending.pop()
-    if (item === null || typeof item === 'boolean' || text(item) || finite(item)) continue
-    requireThat(Array.isArray(item) || (object(item) && [Object.prototype, null].includes(Object.getPrototypeOf(item))), invalid)
-    // Repeated references are legal JSON trees after serialization. A cycle is
-    // rejected by stringify below; skip a revisit here so inspection terminates.
-    if (seen.has(item)) continue
-    seen.add(item)
-    const keys = Object.keys(item)
-    if (Array.isArray(item)) requireThat(keys.length === item.length && keys.every((k, i) => k === String(i)), invalid)
-    for (const key of keys) {
-      requireThat(!['__proto__', 'constructor', 'prototype'].includes(key), invalid)
-      const descriptor = Object.getOwnPropertyDescriptor(item, key)
-      requireThat(descriptor && Object.hasOwn(descriptor, 'value'), invalid)
-      pending.push(descriptor.value)
-    }
-  }
-  let serialized: string
-  try { serialized = JSON.stringify(value) } catch { throw new PilotQuoteSavePlanError(invalid) }
-  requireThat(Buffer.byteLength(serialized, 'utf8') <= limit, oversize)
-  return JSON.parse(serialized) as unknown
-}
-
-const valueKeys = ['customer_id','customer_name','address','service_type','service_template_id','overgrowth_multiplier',
-  'distance_km','hours','crew_size','rate','travel_fee','notes','internal_notes','initial_price','weekly_price','biweekly_price',
-  'monthly_price','custom_travel_required','show_travel_separately','status','measured_sqft','measurement_snapshot','suggested_price',
-  'value_grade','nearby_count','services','has_options','options','deposit_type','deposit_value'] as const
-const numericKeys = ['overgrowth_multiplier','distance_km','hours','crew_size','rate','travel_fee','initial_price',
-  'weekly_price','biweekly_price','monthly_price','measured_sqft','suggested_price','deposit_value'] as const
-const serviceKeys = ['service_type','service_template_id','quantity','unit','unit_price','est_minutes','discount_type','discount_value','notes','kind'] as const
 const statuses = ['draft','sent','accepted','scheduled','completed','paid','declined']
 const grades = ['A+','A','B','C','D','F']
 const displays = ['starting_from','hourly','per_sqft','per_linear_ft','starting_from_materials','hourly_materials']
 const pricingKeys = ['user_id','pricing_base_charge','pricing_mow_rate','pricing_recommended_mult','pricing_premium_mult',
   'pricing_travel_rate','crew_cost_per_hour','fee_recovery_percent','payment_fee_strategy'] as const
-
-function measurementSnapshot(value: unknown): value is MeasurementSnapshotV2 | null {
-  if (value === null) return true
-  if (!object(value) || !exact(value, ['v','type','unit','value','parts','measuredAt','serviceTemplateId','serviceName','term','basis','rate','price'])) return false
-  if (value.v !== 2 || !['area','length','count','none'].includes(String(value.type)) || !['sqft','linear_ft','count'].includes(String(value.unit))
-    || !finite(value.value) || value.value < 0 || !stamp(value.measuredAt) || !nullableId(value.serviceTemplateId)
-    || !nullableText(value.serviceName) || !(value.term === null || ['one_time','weekly','biweekly','monthly','seasonal'].includes(String(value.term)))
-    || !(value.basis === null || ['per_unit','flat'].includes(String(value.basis))) || !nullableNumber(value.rate) || !nullableNumber(value.price) || !Array.isArray(value.parts)) return false
-  return value.parts.every(part => object(part) && exact(part, ['label','value'], ['ring']) && nullableText(part.label)
-    && finite(part.value) && part.value >= 0 && (!Object.hasOwn(part, 'ring') || (Array.isArray(part.ring) && part.ring.every(point =>
-      object(point) && exact(point, ['lat','lng']) && finite(point.lat) && finite(point.lng)
-      && point.lat >= -90 && point.lat <= 90 && point.lng >= -180 && point.lng <= 180))))
-}
-function formNumber(value: unknown): number {
-  // RHF/browser empty-number values can cross JSON as '' or null. Preserve
-  // their actual Number(...) == 0 mapping; reject arbitrary numeric strings,
-  // booleans/arrays and nonfinite numbers instead of expanding that surface.
-  requireThat(finite(value) || value === '' || value === null, 'invalid_intent')
-  return Number(value)
-}
-export function parsePilotQuoteSaveIntent(input: unknown): PilotQuoteSaveIntent {
-  let value = input
-  if (typeof input === 'string') {
-    requireThat(Buffer.byteLength(input, 'utf8') <= PILOT_QUOTE_SAVE_REQUEST_BYTES, 'request_too_large')
-    try { value = JSON.parse(input) } catch { throw new PilotQuoteSavePlanError('invalid_intent') }
-  }
-  value = jsonCopy(value, PILOT_QUOTE_SAVE_REQUEST_BYTES, 'invalid_intent', 'request_too_large')
-  requireThat(object(value) && exact(value, ['version','quoteId','expectedEditorRevision','clientOperationId','editorGeneration','values'])
-    && value.version === 1 && id(value.quoteId) && revision(value.expectedEditorRevision) && id(value.clientOperationId)
-    && text(value.editorGeneration) && /^[A-Za-z0-9_-]{1,128}$/.test(value.editorGeneration), 'invalid_intent')
-  const v = value.values
-  requireThat(object(v) && exact(v, valueKeys, ['customer_phone','customer_email','acquisition_source']), 'invalid_intent')
-  requireThat((v.customer_id === '' || v.customer_id === '__manual' || id(v.customer_id))
-    && text(v.customer_name) && v.customer_name.trim().length > 0 && text(v.service_type) && v.service_type.trim().length > 0
-    && (v.service_template_id === '' || id(v.service_template_id))
-    && ['address','notes','internal_notes'].every(k => text(v[k]))
-    && ['customer_phone','customer_email','acquisition_source'].every(k => !Object.hasOwn(v, k) || text(v[k]))
-    && ['custom_travel_required','show_travel_separately','has_options'].every(k => typeof v[k] === 'boolean')
-    && statuses.includes(String(v.status)) && (v.value_grade === null || grades.includes(String(v.value_grade)))
-    && (v.nearby_count === null || (finite(v.nearby_count) && Number.isInteger(v.nearby_count) && v.nearby_count >= 0))
-    && ['','percent','fixed'].includes(String(v.deposit_type)) && measurementSnapshot(v.measurement_snapshot), 'invalid_intent')
-  for (const key of numericKeys) v[key] = formNumber(v[key])
-  requireThat(Array.isArray(v.services) && Array.isArray(v.options), 'invalid_intent')
-  for (const s of v.services) {
-    requireThat(object(s) && exact(s, serviceKeys) && ['service_type','unit','notes'].every(k => text(s[k]))
-      && (s.service_template_id === '' || id(s.service_template_id)) && ['','amount','percent'].includes(String(s.discount_type))
-      && ['service','material'].includes(String(s.kind)), 'invalid_intent')
-    for (const key of ['quantity','unit_price','est_minutes','discount_value']) s[key] = formNumber(s[key])
-  }
-  for (const o of v.options) {
-    requireThat(object(o) && exact(o, ['name','description','price','is_recommended'], ['id'])
-      && text(o.name) && text(o.description) && typeof o.is_recommended === 'boolean'
-      && (!Object.hasOwn(o, 'id') || o.id === '' || id(o.id)), 'invalid_intent')
-    o.price = formNumber(o.price)
-  }
-  // These are the actual builder gates, including its unfiltered line count.
-  if (v.has_options) requireThat(!optionsConflictWithLines(true, v.services.length)
-    && optionSetProblem(v.options as unknown as QuoteFormValues['options']) === null, 'invalid_options')
-  return value as unknown as PilotQuoteSaveIntent
-}
-
 function versioned(value: unknown, owner: string, quote?: string): value is PilotQuoteSaveVersionedRow {
   return object(value) && exact(value, ['row','xmin']) && text(value.xmin) && /^\d{1,10}$/.test(value.xmin)
     && object(value.row) && value.row.user_id === owner && (quote === undefined || value.row.quote_id === quote)
@@ -196,12 +92,12 @@ function pricing(value: unknown, owner: string): value is PilotQuoteSaveVersione
   return value === null || (versioned(value, owner) && exact(value.row, pricingKeys)
     && pricingKeys.slice(1, -1).every(k => nullableNumber(value.row[k])) && nullableText(value.row.payment_fee_strategy))
 }
-function editorSnapshot(value: unknown, intent: PilotQuoteSaveIntent): PilotQuoteSaveEditorSnapshot {
-  const s = jsonCopy(value, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_snapshot', 'internal_too_large')
+function editorSnapshot(value: unknown, intent: { quoteId: string; expectedEditorRevision?: string }): PilotQuoteSaveEditorSnapshot {
+  const s = quoteSaveJsonCopy(value, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_snapshot', 'internal_too_large')
   requireThat(object(s) && exact(s, ['code','complete','editor_revision','identity','quote','services','options','addons','acceptance','pricing_inputs','templates'])
     && s.code === 'snapshot' && s.complete === true && revision(s.editor_revision) && object(s.identity)
     && object(s.identity.quote) && id(s.identity.quote.user_id), 'invalid_snapshot')
-  requireThat(s.editor_revision === intent.expectedEditorRevision, 'stale_editor')
+  requireThat(intent.expectedEditorRevision === undefined || s.editor_revision === intent.expectedEditorRevision, 'stale_editor')
   const owner = s.identity.quote.user_id
   requireThat(versioned(s.quote, owner) && s.quote.row.id === intent.quoteId, 'invalid_snapshot')
   const q = s.quote.row
@@ -209,7 +105,7 @@ function editorSnapshot(value: unknown, intent: PilotQuoteSaveIntent): PilotQuot
   requireThat(Object.keys(identityQuote).every(k => same(q[k], identityQuote[k]))
     && ['initial_price','weekly_price','biweekly_price','monthly_price','nearby_count'].every(k => nullableNumber(q[k]))
     && (q.value_grade === null || grades.includes(String(q.value_grade))) && nullableId(q.selected_option_id)
-    && statuses.includes(String(q.status)) && measurementSnapshot(q.measurement_snapshot), 'invalid_snapshot')
+    && statuses.includes(String(q.status)) && isPilotQuoteSaveMeasurementSnapshot(q.measurement_snapshot), 'invalid_snapshot')
   requireThat(orderedRows(s.services, owner, intent.quoteId) && orderedRows(s.options, owner, intent.quoteId)
     && orderedRows(s.addons, owner, intent.quoteId) && orderedRows(s.templates, owner)
     && s.templates.every(t => displays.includes(String(t.row.pricing_display_type)))
@@ -223,8 +119,20 @@ function editorSnapshot(value: unknown, intent: PilotQuoteSaveIntent): PilotQuot
   return s as unknown as PilotQuoteSaveEditorSnapshot
 }
 
+/** Read-only complete private observation, bound to independently verified
+ * auth. No intent/resolver/target plan is fabricated merely to validate a load.
+ * Initializer-consumed row fields require additional source validation. */
+export function parsePilotQuoteSaveEditorSnapshot(value: unknown, binding: { ownerId: string; quoteId: string }): PilotQuoteSaveEditorSnapshot {
+  requireThat(id(binding.ownerId) && id(binding.quoteId), 'invalid_snapshot')
+  const snapshot = editorSnapshot(value, { quoteId: binding.quoteId })
+  requireThat(snapshot.quote.row.user_id === binding.ownerId && snapshot.identity.quote.user_id === binding.ownerId, 'invalid_snapshot')
+  try { validatePilotQuoteIdentitySnapshot(snapshot.identity) }
+  catch { throw new PilotQuoteSavePlanError('invalid_snapshot') }
+  return snapshot
+}
+
 function validateTargets(value: unknown, s: PilotQuoteSaveEditorSnapshot, identity: PilotQuoteIdentityPlan, templateIds: string[], mode: 'preserve' | 'ensure_current'): PilotQuoteSaveTargetSnapshot {
-  const t = jsonCopy(value, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_targets', 'internal_too_large')
+  const t = quoteSaveJsonCopy(value, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_targets', 'internal_too_large')
   requireThat(object(t) && exact(t, ['code','complete','editor_revision','target_revision','customer','property','lawn','templates','pricing_inputs'])
     && t.code === 'targets' && t.complete === true && revision(t.target_revision), 'invalid_targets')
   requireThat(t.editor_revision === s.editor_revision, 'stale_editor')
@@ -329,7 +237,7 @@ export async function buildPilotQuoteSavePlan(snapshot: unknown, incoming: unkno
   }))] : []
   // Values that overflow only during canonical arithmetic are still refused;
   // JSON must not silently change Infinity into null in an apparent valid plan.
-  jsonCopy({ parent, serviceRows, options }, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_intent', 'internal_too_large')
+  quoteSaveJsonCopy({ parent, serviceRows, options }, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_intent', 'internal_too_large')
   const selection: PilotQuoteSaveTargetRequest = { owner, quote_id: intent.quoteId, expected_editor_revision: s.editor_revision,
     identity: structuredClone(identity), template_ids: templateIds, provenance_mode: provenance.mode }
   const targets = validateTargets(await readTargets(structuredClone(selection)), s, identity, templateIds, provenance.mode)
@@ -348,5 +256,5 @@ export async function buildPilotQuoteSavePlan(snapshot: unknown, incoming: unkno
     expected: { editor: s, targets }, identity, parent_patch: parent,
     options: { mode: settled ? 'preserve' : 'replace', rows: options }, services: serviceRows, provenance, measurement,
     client_operation_id: intent.clientOperationId, editor_generation: intent.editorGeneration }
-  return jsonCopy(plan, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_snapshot', 'internal_too_large') as PilotQuoteSavePlan
+  return quoteSaveJsonCopy(plan, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_snapshot', 'internal_too_large') as PilotQuoteSavePlan
 }

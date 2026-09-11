@@ -76,6 +76,8 @@ function validateSnapshot(value: unknown): PilotQuoteSnapshot {
   // those bindings; only active customers participate in automatic matching.
   return value as PilotQuoteSnapshot
 }
+export { validateSnapshot as validatePilotQuoteIdentitySnapshot }
+
 function validateInput(value: unknown): asserts value is EnsureInput {
   const fields = ['customerId', 'name', 'address', 'phone', 'email', 'city', 'province', 'postal_code', 'source']
   insist(row(value) && Object.keys(value).every(k => fields.includes(k)) && text(value.name) && value.name.trim().length > 0)

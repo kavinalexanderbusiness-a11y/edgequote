@@ -195,13 +195,23 @@ export async function runQuoteSaveCallerCases(chrome = 'C:/Program Files/Google/
   const bundle = await build({ stdin: { contents: browserSource(), sourcefile: 'quote-save-caller-fixture.tsx', resolveDir: process.cwd(), loader: 'tsx' },
     write: false, bundle: true, platform: 'browser', format: 'esm', target: 'chrome120', jsx: 'automatic', tsconfig: resolve('tsconfig.json'),
     define: { 'process.env.NODE_ENV': '"development"' }, logLevel: 'silent' })
+  return runIsolatedQuoteBrowser(bundle.outputFiles[0].text, quoteSaveBrowserHarnessEvidence, chrome)
+}
+
+/** Shared TEST ONLY process boundary. The fixture must finish by assigning its
+ * TestResult[] to window.__pilotResults. No production source is transformed by
+ * this runner; full-component and extracted-seam evidence remain separate. */
+export async function runIsolatedQuoteBrowser(
+  source: string,
+  evidence: Record<string, unknown>,
+  chrome = 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+): Promise<TestResult[]> {
   const server = createServer((req,res) => {
     res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'none'; style-src 'unsafe-inline'")
     res.setHeader('Content-Type', req.url === '/fixture.js' ? 'text/javascript' : 'text/html')
-    res.end(req.url === '/fixture.js' ? bundle.outputFiles[0].text : '<!doctype html><title>Isolated quote Save proof</title><script type="module" src="/fixture.js"></script>')
+    res.end(req.url === '/fixture.js' ? source : '<!doctype html><title>Isolated quote Save proof</title><script type="module" src="/fixture.js"></script>')
   })
-  for (const key of Object.keys(quoteSaveBrowserHarnessEvidence)) delete quoteSaveBrowserHarnessEvidence[key]
-  const evidence = quoteSaveBrowserHarnessEvidence
+  for (const key of Object.keys(evidence)) delete evidence[key]
   evidence.launches = 0
   const profileRoot = resolve(tmpdir()), wait = (ms:number)=>new Promise(r=>setTimeout(r,ms))
   let profile: string | null = null, child: ChildProcess | null = null
@@ -295,7 +305,12 @@ export async function runQuoteSaveCallerCases(chrome = 'C:/Program Files/Google/
       ensureAlive()
       if(errors.length)throw new Error(errors.join('\n').slice(0,3000))
       const evaluated=await send('Runtime.evaluate',{expression:'window.__pilotResults ?? null',returnByValue:true})
-      if(Array.isArray(evaluated.result?.value)){result=evaluated.result.value as TestResult[];break}
+      if(Array.isArray(evaluated.result?.value)){
+        result=evaluated.result.value as TestResult[]
+        const observed=await send('Runtime.evaluate',{expression:'window.__pilotEvidence ?? null',returnByValue:true})
+        if(observed.result?.value!==null)evidence.fixture=observed.result?.value
+        break
+      }
       await wait(100)
     }
     if(!result)throw diagnostic('Isolated browser proof timed out')

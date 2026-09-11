@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -12,6 +12,7 @@ import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import { ServicePicker } from '@/components/ui/ServicePicker'
 import { useAutosave } from '@/hooks/useAutosave'
 import type { PilotQuoteSaveCaller } from '@/lib/quotes/pilotQuoteSaveCaller'
+import { isPilotQuoteSaveNumericPath, normalizePilotQuoteSaveNumericInput, validatePilotQuoteSaveDraftValues } from '@/lib/quotes/pilotQuoteSaveValues'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
 import { Select } from '@/components/ui/Select'
@@ -57,6 +58,12 @@ import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
 import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet, Home, Star } from 'lucide-react'
 
+export type PilotQuoteEditorCheckpoint = { values: QuoteFormValues; serialization: string }
+export type PilotQuoteEditorHandle = {
+  capture(): PilotQuoteEditorCheckpoint | null
+  protect(serialization: string): boolean
+}
+
 interface QuoteBuilderProps {
   customers: Customer[]
   templates: ServiceTemplate[]
@@ -95,6 +102,9 @@ interface QuoteBuilderProps {
   /** Dormant, explicitly injected full-Save transport/recovery. No mounted route
    * uses this yet. Its structured acknowledgement bypasses legacy boolean clear. */
   pilotSave?: PilotQuoteSaveCaller
+  /** Explicit read/flush boundary for the dormant owner-bound wrapper. */
+  pilotEditorRef?: Ref<PilotQuoteEditorHandle>
+  onPilotEditorState?: (state: 'pending' | 'ready' | 'refused') => void
 }
 
 // Where the price in the field came from. NEVER inferred by comparing the field to
@@ -131,7 +141,7 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel, pilotSave,
+  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel, pilotSave, pilotEditorRef, onPilotEditorState,
 }: QuoteBuilderProps) {
   const router = useRouter()
   const pilotSaveCurrent = useRef(pilotSave)
@@ -145,6 +155,13 @@ export function QuoteBuilder({
   const workdayMin = workdayMinutes(settings?.daily_capacity_hours)
   const [hasUserEdited, setHasUserEdited] = useState(false)
   const markEdited = useCallback(() => setHasUserEdited(true), [])
+  const pilotFillIntent = useRef({ customer: false, template: false, distance: false })
+  const markFieldEdited = useCallback((name: string) => {
+    markEdited()
+    if (name === 'customer_id') pilotFillIntent.current.customer = true
+    if (name === 'service_template_id') pilotFillIntent.current.template = true
+    if (name === 'distance_km') pilotFillIntent.current.distance = true
+  }, [markEdited])
   const { register: registerField, handleSubmit, watch, setValue: setFormValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
@@ -219,13 +236,18 @@ export function QuoteBuilder({
   // use setFormValue directly; registered inputs and owner commands use these
   // wrappers. Opening a disclosure, focusing or searching a picker is not an edit.
   const register: typeof registerField = (name, options) => {
-    const field = registerField(name, options)
-    return { ...field, onChange: event => { markEdited(); return field.onChange(event) } }
+    const field = registerField(name, pilotSave && isPilotQuoteSaveNumericPath(name) ? {
+      ...options,
+      setValueAs: (value: unknown) => {
+        try { return normalizePilotQuoteSaveNumericInput(value) } catch { return value }
+      },
+    } as typeof options : options)
+    return { ...field, onChange: event => { markFieldEdited(name); return field.onChange(event) } }
   }
   const setValue = useCallback<typeof setFormValue>((name, value, options) => {
-    markEdited()
+    markFieldEdited(name)
     setFormValue(name, value, options)
-  }, [markEdited, setFormValue])
+  }, [markFieldEdited, setFormValue])
 
   // Additional lines beyond the primary one. ONE field array holds both services
   // and materials — they are the same species of line (qty × unit_price through
@@ -273,6 +295,22 @@ export function QuoteBuilder({
       && !(Number(v.initial_price) > 0)
       && !(v.services || []).some(s => s?.service_type?.trim() || Number(s?.unit_price) > 0),
   })
+  useImperativeHandle(pilotEditorRef, () => ({
+    capture() {
+      if (!pilotSave?.active() || !pilotSaveMounted.current || autosave.submissionState !== 'ready') return null
+      const values = validatePilotQuoteSaveDraftValues(getValues())
+      return values ? { values, serialization: JSON.stringify(values) } : null
+    },
+    protect(serialization) {
+      if (!pilotSave?.active() || !pilotSaveMounted.current || autosave.submissionState !== 'ready') return false
+      const values = validatePilotQuoteSaveDraftValues(getValues())
+      return !!values && JSON.stringify(values) === serialization && autosave.flushCurrent(values, { force: true })
+        && JSON.stringify(getValues()) === serialization
+    },
+  }), [pilotSave, autosave, getValues])
+  useEffect(() => {
+    if (pilotSave) onPilotEditorState?.(autosave.submissionState)
+  }, [pilotSave, autosave.submissionState, onPilotEditorState])
   // Which disclosure sections are open. Held here (not inside each Collapsible)
   // because a BLOCKED submit has to be able to open the one hiding the problem.
   // Labour / Plan pricing / Travel were three Collapsibles NESTED inside an
@@ -369,6 +407,10 @@ export function QuoteBuilder({
             ? 'We could not confirm this Save. Your submitted copy and current edits are kept. Review recovery before saving again.'
             : outcome.reason === 'pending_recovery'
               ? 'An earlier Save needs review. Your current edits are still here.'
+              : outcome.reason === 'invalid_values'
+                ? 'Some quote details are incomplete or invalid. Your draft is kept; review the fields before saving.'
+              : outcome.reason === 'inactive'
+                ? 'This working copy cannot save again. Review your copies and explicitly open the saved version.'
               : 'We could not save a recovery copy. Keep this editor open and try again when browser storage is available.')
         }
         return
@@ -901,6 +943,8 @@ export function QuoteBuilder({
   }
 
   useEffect(() => {
+    if (pilotSave && isEdit && !pilotFillIntent.current.customer) return
+    pilotFillIntent.current.customer = false
     if (!customerId || customerId === '__manual') return
     const customer = customers.find(c => c.id === customerId)
     if (customer) {
@@ -914,7 +958,7 @@ export function QuoteBuilder({
         }
       }
     }
-  }, [customerId, customers, setFormValue, getValues, isEdit])
+  }, [customerId, customers, setFormValue, getValues, isEdit, pilotSave])
 
   // Pull the latest measurement recommendation for the relevant property — the
   // SPECIFIC property when one was requested (per-property Quote button), else the
@@ -987,6 +1031,8 @@ export function QuoteBuilder({
   const autoFilledNotes = useRef<string | null>(null)
 
   useEffect(() => {
+    if (pilotSave && isEdit && !pilotFillIntent.current.template) return
+    pilotFillIntent.current.template = false
     if (!templateId) return
     const t = templates.find(s => s.id === templateId)
     if (t) {
@@ -1004,7 +1050,7 @@ export function QuoteBuilder({
         }
       }
     }
-  }, [templateId, templates, setFormValue, getValues, isEdit])
+  }, [templateId, templates, setFormValue, getValues, isEdit, pilotSave])
 
   // The recommendation stays live in the price field until the owner owns the
   // number. What changed: it can now be ABSENT. This effect used to run on mount
@@ -1046,12 +1092,14 @@ export function QuoteBuilder({
   )
 
   useEffect(() => {
+    if (pilotSave && isEdit && !pilotFillIntent.current.distance) return
+    pilotFillIntent.current.distance = false
     if (travelSuggestion?.isCustom) {
       setFormValue('custom_travel_required', true)
     } else if (distanceKm > 0) {
       setFormValue('custom_travel_required', false)
     }
-  }, [travelSuggestion, distanceKm, setFormValue])
+  }, [travelSuggestion, distanceKm, setFormValue, pilotSave, isEdit])
 
   function applySuggestedTravel() {
     if (travelSuggestion && !travelSuggestion.isCustom && travelSuggestion.fee !== null) {
@@ -1392,6 +1440,14 @@ export function QuoteBuilder({
     leave()
   }
 
+  if (pilotSave && (!pilotSave.active() || autosave.submissionState !== 'ready')) {
+    return <div role="status" className="rounded-xl border border-border p-4 text-sm">
+      {autosave.submissionState === 'refused'
+        ? 'We could not verify this working copy. Your saved quote and local copies are preserved. Return to recovery review before editing.'
+        : 'Checking your working copy…'}
+    </div>
+  }
+
   return (
     <form onSubmit={submit} className="pb-24 lg:pb-0">
       {pilotSave && pilotSave.active() && (pilotSaveMessage || pilotSave.hasPending()) && (
@@ -1472,7 +1528,7 @@ export function QuoteBuilder({
               {showCustomerPicker && (
                 <Controller name="customer_id" control={control}
                   render={({ field }) => (
-                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={value => { markEdited(); field.onChange(value) }}
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={value => { markFieldEdited('customer_id'); field.onChange(value) }}
                       // The typed search IS the new customer's name — carry it into
                       // the manual Name field instead of making the owner type it
                       // twice. Fill-when-empty only (the file's own overwrite rule):
