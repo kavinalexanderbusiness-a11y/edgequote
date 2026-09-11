@@ -196,7 +196,8 @@
     "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts",
     "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts",
     "verify:theme": "tsx scripts/verify-theme.ts",
-    "verify:stripe-receipt-recovery": "tsx scripts/verify-stripe-receipt-recovery.ts"
+    "verify:stripe-receipt-recovery": "tsx scripts/verify-stripe-receipt-recovery.ts",
+    "verify:pilot-quote-auxiliary-loader": "tsx scripts/verify-pilot-quote-auxiliary-loader.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

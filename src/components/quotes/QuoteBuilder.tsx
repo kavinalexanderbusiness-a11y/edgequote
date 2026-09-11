@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -8,9 +8,12 @@ import { Input } from '@/components/ui/Input'
 import DurationField from '@/components/jobs/DurationField'
 import { workdayMinutes } from '@/lib/workDuration'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
-import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import { CustomerPicker, type CustomerPickerCustomer } from '@/components/ui/CustomerPicker'
 import { ServicePicker } from '@/components/ui/ServicePicker'
 import { useAutosave } from '@/hooks/useAutosave'
+import type { PilotQuoteSaveCaller } from '@/lib/quotes/pilotQuoteSaveCaller'
+import type { PilotQuoteAuxiliaryReady, PilotQuoteAuxiliaryTemplate, PilotQuoteAuxiliaryTier, PilotQuoteAuxiliarySettings } from '@/lib/quotes/pilotQuoteAuxiliaryLoader'
+import { isPilotQuoteSaveNumericPath, normalizePilotQuoteSaveNumericInput, validatePilotQuoteSaveDraftValues } from '@/lib/quotes/pilotQuoteSaveValues'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
 import { Select } from '@/components/ui/Select'
@@ -24,7 +27,7 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { Modal } from '@/components/ui/Modal'
 import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
-import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings, ServiceBundleWithItems, ACQUISITION_SOURCES } from '@/types'
+import { QuoteFormValues, ServiceBundleWithItems, ACQUISITION_SOURCES } from '@/types'
 import { AUDIENCE_COPY } from '@/lib/noteScope'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
 import { BundlePicker } from '@/components/quotes/BundlePicker'
@@ -56,16 +59,22 @@ import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
 import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet, Home, Star } from 'lucide-react'
 
+export type PilotQuoteEditorCheckpoint = { values: QuoteFormValues; serialization: string }
+export type PilotQuoteEditorHandle = {
+  capture(): PilotQuoteEditorCheckpoint | null
+  protect(serialization: string): boolean
+}
+
 interface QuoteBuilderProps {
-  customers: Customer[]
-  templates: ServiceTemplate[]
+  customers: CustomerPickerCustomer[]
+  templates: PilotQuoteAuxiliaryTemplate[]
   /** Template ids from the owner's most recent quotes, newest first — the "Recent"
       block at the top of the service picker. Read back out of rows they already
       saved (quotes.service_template_id); nothing new is recorded to produce it, and
       an omitted prop simply means the picker opens straight into the catalogue. */
   recentTemplateIds?: string[]
-  tiers: TravelFeeTier[]
-  settings?: BusinessSettings | null
+  tiers: PilotQuoteAuxiliaryTier[]
+  settings?: PilotQuoteAuxiliarySettings | null
   defaultCustomerId?: string
   // When opened from a SPECIFIC property (per-property Quote button), load that
   // property's address + saved lawn size instead of the customer's primary.
@@ -91,6 +100,14 @@ interface QuoteBuilderProps {
       section, on a deep link), leaving "did it save?" uncertainty plus a stale
       draft banner on the next Edit. New-quote callers omit it and keep back(). */
   onCancel?: () => void
+  /** Dormant, explicitly injected full-Save transport/recovery. No mounted route
+   * uses this yet. Its structured acknowledgement bypasses legacy boolean clear. */
+  pilotSave?: PilotQuoteSaveCaller
+  /** Complete owner-bound inputs for the dormant verified loader path. */
+  pilotAuxiliary?: PilotQuoteAuxiliaryReady
+  /** Explicit read/flush boundary for the dormant owner-bound wrapper. */
+  pilotEditorRef?: Ref<PilotQuoteEditorHandle>
+  onPilotEditorState?: (state: 'pending' | 'ready' | 'refused') => void
 }
 
 // Where the price in the field came from. NEVER inferred by comparing the field to
@@ -127,15 +144,38 @@ type PitchCadence = 'one_time' | 'weekly' | 'biweekly'
 
 export function QuoteBuilder({
   customers, templates, recentTemplateIds, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
-  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel,
+  autosaveKey, autosaveBaselineUpdatedAt, optionsLockedName, onCancel, pilotSave, pilotAuxiliary, pilotEditorRef, onPilotEditorState,
 }: QuoteBuilderProps) {
   const router = useRouter()
+  // Once this instance uses verified inputs, losing the capability must never
+  // reactivate optional reads/providers. Keep its last display inputs while the
+  // wrapper disables editing and obtains a fresh owner-bound result.
+  const verifiedAuxiliarySeen = useRef(pilotAuxiliary !== undefined)
+  const lastAuxiliary = useRef(pilotAuxiliary)
+  if (pilotAuxiliary !== undefined) {
+    verifiedAuxiliarySeen.current = true
+    lastAuxiliary.current = pilotAuxiliary
+  }
+  const verifiedAuxiliaryMode = verifiedAuxiliarySeen.current
+  const auxiliaryDisplay = pilotAuxiliary ?? lastAuxiliary.current
+  const pilotSaveCurrent = useRef(pilotSave)
+  pilotSaveCurrent.current = pilotSave
+  const pilotSaveMounted = useRef(true)
+  const [pilotSaveMessage, setPilotSaveMessage] = useState<string | null>(null)
+  useEffect(() => { pilotSaveMounted.current = true; return () => { pilotSaveMounted.current = false } }, [])
   // One workday, in minutes, for THIS business — the same figure the calendar's
   // capacity bar and every scheduling engine read. Falls back to the shared 8h
   // default when settings haven't resolved, exactly as workdayMinutes defines.
   const workdayMin = workdayMinutes(settings?.daily_capacity_hours)
   const [hasUserEdited, setHasUserEdited] = useState(false)
   const markEdited = useCallback(() => setHasUserEdited(true), [])
+  const pilotFillIntent = useRef({ customer: false, template: false, distance: false })
+  const markFieldEdited = useCallback((name: string) => {
+    markEdited()
+    if (name === 'customer_id') pilotFillIntent.current.customer = true
+    if (name === 'service_template_id') pilotFillIntent.current.template = true
+    if (name === 'distance_km') pilotFillIntent.current.distance = true
+  }, [markEdited])
   const { register: registerField, handleSubmit, watch, setValue: setFormValue, getValues, reset, control, setFocus, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
@@ -210,13 +250,18 @@ export function QuoteBuilder({
   // use setFormValue directly; registered inputs and owner commands use these
   // wrappers. Opening a disclosure, focusing or searching a picker is not an edit.
   const register: typeof registerField = (name, options) => {
-    const field = registerField(name, options)
-    return { ...field, onChange: event => { markEdited(); return field.onChange(event) } }
+    const field = registerField(name, pilotSave && isPilotQuoteSaveNumericPath(name) ? {
+      ...options,
+      setValueAs: (value: unknown) => {
+        try { return normalizePilotQuoteSaveNumericInput(value) } catch { return value }
+      },
+    } as typeof options : options)
+    return { ...field, onChange: event => { markFieldEdited(name); return field.onChange(event) } }
   }
   const setValue = useCallback<typeof setFormValue>((name, value, options) => {
-    markEdited()
+    markFieldEdited(name)
     setFormValue(name, value, options)
-  }, [markEdited, setFormValue])
+  }, [markFieldEdited, setFormValue])
 
   // Additional lines beyond the primary one. ONE field array holds both services
   // and materials — they are the same species of line (qty × unit_price through
@@ -250,8 +295,9 @@ export function QuoteBuilder({
   // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
   const formValues = watch()
   const autosave = useAutosave<QuoteFormValues>({
-    key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
-    ownership: isEdit ? undefined : 'verified-owner',
+    key: pilotSave?.autosaveKey ?? (autosaveKey || (isEdit ? 'quote:edit' : 'quote:new')),
+    ownership: pilotSave ? 'verified-owner' : isEdit ? undefined : 'verified-owner',
+    submission: pilotSave?.submission,
     value: formValues,
     canReplaceDraft: hasUserEdited,
     baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
@@ -263,6 +309,22 @@ export function QuoteBuilder({
       && !(Number(v.initial_price) > 0)
       && !(v.services || []).some(s => s?.service_type?.trim() || Number(s?.unit_price) > 0),
   })
+  useImperativeHandle(pilotEditorRef, () => ({
+    capture() {
+      if (!pilotSave?.active() || !pilotSaveMounted.current || autosave.submissionState !== 'ready') return null
+      const values = validatePilotQuoteSaveDraftValues(getValues())
+      return values ? { values, serialization: JSON.stringify(values) } : null
+    },
+    protect(serialization) {
+      if (!pilotSave?.active() || !pilotSaveMounted.current || autosave.submissionState !== 'ready') return false
+      const values = validatePilotQuoteSaveDraftValues(getValues())
+      return !!values && JSON.stringify(values) === serialization && autosave.flushCurrent(values, { force: true })
+        && JSON.stringify(getValues()) === serialization
+    },
+  }), [pilotSave, autosave, getValues])
+  useEffect(() => {
+    if (pilotSave) onPilotEditorState?.(autosave.submissionState)
+  }, [pilotSave, autosave.submissionState, onPilotEditorState])
   // Which disclosure sections are open. Held here (not inside each Collapsible)
   // because a BLOCKED submit has to be able to open the one hiding the problem.
   // Labour / Plan pricing / Travel were three Collapsibles NESTED inside an
@@ -343,6 +405,30 @@ export function QuoteBuilder({
       // bug DNA). Second tap saves unchanged. Arming resets the moment a price
       // exists, so a fixed quote is back to one-tap Save.
       if (effectiveTotal <= 0 && !zeroTotalArmed) { setZeroTotalArmed(true); return }
+      if (pilotSave) {
+        const submittedBy = pilotSave
+        const outcome = await submittedBy.dispatch(v, autosave)
+        // The form can type, navigate, remount or change accounts during await.
+        // Read RHF now; the captured watch() value is not this boundary's truth.
+        if (!pilotSaveMounted.current || pilotSaveCurrent.current !== submittedBy || !submittedBy.active()) return
+        if (outcome.code === 'committed') {
+          const cleared = submittedBy.complete(outcome, autosave, getValues())
+          setPilotSaveMessage(cleared ? null : submittedBy.hasPending()
+            ? 'The submitted version was saved, but we could not finish protecting your current edits. Keep this editor open and review recovery.'
+            : 'Saved the submitted version. Your newer edits are still here for review.')
+        } else {
+          setPilotSaveMessage(outcome.code === 'unknown'
+            ? 'We could not confirm this Save. Your submitted copy and current edits are kept. Review recovery before saving again.'
+            : outcome.reason === 'pending_recovery'
+              ? 'An earlier Save needs review. Your current edits are still here.'
+              : outcome.reason === 'invalid_values'
+                ? 'Some quote details are incomplete or invalid. Your draft is kept; review the fields before saving.'
+              : outcome.reason === 'inactive'
+                ? 'This working copy cannot save again. Review your copies and explicitly open the saved version.'
+              : 'We could not save a recovery copy. Keep this editor open and try again when browser storage is available.')
+        }
+        return
+      }
       if (await onSubmit(v) !== false) autosave.clear()
     },
     // Save used to fail SILENTLY. `crew_size` is required and lives inside a
@@ -466,7 +552,7 @@ export function QuoteBuilder({
   const depositValue = watch('deposit_value')
   const internalNotes = watch('internal_notes')
   // AI scope writer for the Notes field — words only; pricing never comes from it.
-  const aiScope = useAiAssist()
+  const aiScope = useAiAssist({ disabled: verifiedAuxiliaryMode })
   // What the field held before the assistant replaced it — powers Undo, and
   // doubles as "this text came from the assistant" for the explanation note.
   const [aiScopePrior, setAiScopePrior] = useState<string | null>(null)
@@ -853,9 +939,8 @@ export function QuoteBuilder({
   useEffect(() => { setPickedPropertyId(null) }, [customerId])
   const customerProperties = useMemo(() => {
     if (!customerId || customerId === '__manual') return []
-    const c = customers.find(x => x.id === customerId) as
-      (Customer & { properties?: { id?: string; address: string; city?: string | null; province?: string | null; is_primary?: boolean }[] }) | undefined
-    const rows = (c?.properties ?? []).filter(p => (p.address || '').trim())
+    const c = customers.find(x => x.id === customerId)
+    const rows = (c?.properties ?? []).filter((p): p is typeof p & { address: string } => !!p.address?.trim())
     // Primary first, then stable by address — the order every property picker shows.
     return [...rows].sort((a, b) => Number(!!b.is_primary) - Number(!!a.is_primary) || a.address.localeCompare(b.address))
   }, [customerId, customers])
@@ -871,6 +956,8 @@ export function QuoteBuilder({
   }
 
   useEffect(() => {
+    if (pilotSave && isEdit && !pilotFillIntent.current.customer) return
+    pilotFillIntent.current.customer = false
     if (!customerId || customerId === '__manual') return
     const customer = customers.find(c => c.id === customerId)
     if (customer) {
@@ -884,12 +971,13 @@ export function QuoteBuilder({
         }
       }
     }
-  }, [customerId, customers, setFormValue, getValues, isEdit])
+  }, [customerId, customers, setFormValue, getValues, isEdit, pilotSave])
 
   // Pull the latest measurement recommendation for the relevant property — the
   // SPECIFIC property when one was requested (per-property Quote button), else the
   // customer's primary. Measured prices become the suggestion, no re-measuring.
   useEffect(() => {
+    if (verifiedAuxiliaryMode) return
     if (!customerId || customerId === '__manual') { setSavedRec(null); return }
     // defaultPropertyId is a STATIC prop from the URL, but this effect re-runs on
     // every customerId change — so after the owner switched away from the customer
@@ -911,7 +999,7 @@ export function QuoteBuilder({
       const res = targetPropertyId
         ? await supabase.from('properties').select(cols).eq('id', targetPropertyId).limit(1).maybeSingle()
         : await supabase.from('properties').select(cols).eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1).maybeSingle()
-      if (!active) return
+      if (!active || verifiedAuxiliarySeen.current) return
       const row = res.data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[]; address: string | null; city: string | null; province: string | null } | null
       setSavedRec(latestSavedRecommendation(row?.measurement_history))
       // Default the Lawn Size from the property's saved size when it's still empty
@@ -946,7 +1034,7 @@ export function QuoteBuilder({
     }
     load()
     return () => { active = false }
-  }, [customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setFormValue])
+  }, [customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setFormValue, verifiedAuxiliaryMode])
 
   // Same rule for the notes a template pre-fills. Changing service used to
   // REPLACE whatever was in the Notes field — including a scope the owner had
@@ -957,6 +1045,8 @@ export function QuoteBuilder({
   const autoFilledNotes = useRef<string | null>(null)
 
   useEffect(() => {
+    if (pilotSave && isEdit && !pilotFillIntent.current.template) return
+    pilotFillIntent.current.template = false
     if (!templateId) return
     const t = templates.find(s => s.id === templateId)
     if (t) {
@@ -974,7 +1064,7 @@ export function QuoteBuilder({
         }
       }
     }
-  }, [templateId, templates, setFormValue, getValues, isEdit])
+  }, [templateId, templates, setFormValue, getValues, isEdit, pilotSave])
 
   // The recommendation stays live in the price field until the owner owns the
   // number. What changed: it can now be ABSENT. This effect used to run on mount
@@ -1016,12 +1106,14 @@ export function QuoteBuilder({
   )
 
   useEffect(() => {
+    if (pilotSave && isEdit && !pilotFillIntent.current.distance) return
+    pilotFillIntent.current.distance = false
     if (travelSuggestion?.isCustom) {
       setFormValue('custom_travel_required', true)
     } else if (distanceKm > 0) {
       setFormValue('custom_travel_required', false)
     }
-  }, [travelSuggestion, distanceKm, setFormValue])
+  }, [travelSuggestion, distanceKm, setFormValue, pilotSave, isEdit])
 
   function applySuggestedTravel() {
     if (travelSuggestion && !travelSuggestion.isCustom && travelSuggestion.fee !== null) {
@@ -1030,6 +1122,7 @@ export function QuoteBuilder({
   }
 
   async function calculateDistance(addr?: string) {
+    if (verifiedAuxiliarySeen.current) return
     setCalcMsg(null)
     const base = settings?.base_address
     const dest = addr || address
@@ -1043,6 +1136,7 @@ export function QuoteBuilder({
         body: JSON.stringify({ origin: base, destination: dest }),
       })
       const data = await res.json()
+      if (verifiedAuxiliarySeen.current) return
       if (res.ok && typeof data.km === 'number') {
         setValue('distance_km', data.km)
         // Same rule as travelSuggestion above: with zero tiers, suggestTravelFee
@@ -1060,7 +1154,7 @@ export function QuoteBuilder({
         setCalcMsg({ text: data.error || 'Could not calculate distance.', error: true })
       }
     } catch {
-      setCalcMsg({ text: 'Distance lookup failed.', error: true })
+      if (!verifiedAuxiliarySeen.current) setCalcMsg({ text: 'Distance lookup failed.', error: true })
     } finally {
       setCalcLoading(false)
     }
@@ -1091,12 +1185,16 @@ export function QuoteBuilder({
   // a failed read — loadServiceUnits() falls back to the same nine, so the only
   // thing a failure costs is this owner's custom units. It used to fall back to a
   // four-value constant, which silently dropped fixture/room/zone/equipment/flat.
-  const [units, setUnits] = useState<ServiceUnit[]>(SYSTEM_UNITS)
+  const [loadedUnits, setUnits] = useState<ServiceUnit[]>(SYSTEM_UNITS)
+  const units = useMemo(() => verifiedAuxiliaryMode
+    ? auxiliaryDisplay?.units ?? [] : loadedUnits,
+  [verifiedAuxiliaryMode, auxiliaryDisplay, loadedUnits])
   useEffect(() => {
+    if (verifiedAuxiliaryMode) return
     let alive = true
-    loadServiceUnits(createClient()).then(u => { if (alive) setUnits(u) })
+    loadServiceUnits(createClient()).then(u => { if (alive && !verifiedAuxiliarySeen.current) setUnits(u) })
     return () => { alive = false }
-  }, [])
+  }, [verifiedAuxiliaryMode])
   const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
 
   // ── The ways each service is sold (Measure & Price V2) ─────────────────────
@@ -1107,20 +1205,24 @@ export function QuoteBuilder({
   // renders as "pricing not configured" with a Configure link — the honest
   // outcome. The failure mode this must never have is inventing a price, and it
   // structurally cannot: prices only ever come from rows that actually arrived.
-  const [pricingPlans, setPricingPlans] = useState<Map<string, ServicePricingPlanRow[]>>(new Map())
+  const [loadedPricingPlans, setPricingPlans] = useState<Map<string, ServicePricingPlanRow[]>>(new Map())
+  const pricingPlans = useMemo(() => verifiedAuxiliaryMode
+    ? plansByTemplate(auxiliaryDisplay?.plans ?? []) : loadedPricingPlans,
+  [verifiedAuxiliaryMode, auxiliaryDisplay, loadedPricingPlans])
   useEffect(() => {
+    if (verifiedAuxiliaryMode) return
     let alive = true
     ;(async () => {
       const sb = createClient()
       const { data: { user } } = await sb.auth.getUser()
-      if (!user || !alive) return
+      if (!user || !alive || verifiedAuxiliarySeen.current) return
       try {
         const rows = await loadPricingPlans(sb, user.id)
-        if (alive) setPricingPlans(plansByTemplate(rows))
+        if (alive && !verifiedAuxiliarySeen.current) setPricingPlans(plansByTemplate(rows))
       } catch { /* see above — empty is an answer, never a fabricated price */ }
     })()
     return () => { alive = false }
-  }, [])
+  }, [verifiedAuxiliaryMode])
 
   // What an EXTRA line may pick from: active services only, plus whichever
   // template this line already points at, so editing an older quote never blanks
@@ -1353,9 +1455,34 @@ export function QuoteBuilder({
     </p>
   ) : null
   const saveLabel = zeroTotalArmed && effectiveTotal <= 0 ? 'Save anyway' : isEdit ? 'Update quote' : 'Save quote'
+  const cancelPilotSave = () => {
+    if (!autosave.flushCurrent(getValues())) {
+      setPilotSaveMessage('We could not protect your current edits. Keep this editor open until browser storage is available.')
+      return
+    }
+    const leave = onCancel ?? (() => router.back())
+    leave()
+  }
+
+  if (pilotSave && (!pilotSave.active() || autosave.submissionState !== 'ready')) {
+    return <div role="status" className="rounded-xl border border-border p-4 text-sm">
+      {autosave.submissionState === 'refused'
+        ? 'We could not verify this working copy. Your saved quote and local copies are preserved. Return to recovery review before editing.'
+        : 'Checking your working copy…'}
+    </div>
+  }
 
   return (
     <form onSubmit={submit} className="pb-24 lg:pb-0">
+      {verifiedAuxiliaryMode && <p role="status" className="mb-4 rounded-xl border border-border p-3 text-sm text-ink-muted">
+        Maps, AI and history-based suggestions are unavailable in this editor. Enter the details manually.
+      </p>}
+      {pilotSave && pilotSave.active() && (pilotSaveMessage || pilotSave.hasPending()) && (
+        <div role="status" className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+          <p>{pilotSaveMessage || 'An earlier Save has a recovery copy available. Review it alongside the saved quote.'}</p>
+          {pilotSave.hasPending() && <button type="button" className="mt-2 font-medium underline" onClick={() => pilotSave.requestRecovery()}>Review recovery</button>}
+        </div>
+      )}
       {autosave.draft && (
         <div className="mb-4">
           <DraftRestoreBanner
@@ -1428,7 +1555,7 @@ export function QuoteBuilder({
               {showCustomerPicker && (
                 <Controller name="customer_id" control={control}
                   render={({ field }) => (
-                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={value => { markEdited(); field.onChange(value) }}
+                    <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={value => { markFieldEdited('customer_id'); field.onChange(value) }}
                       // The typed search IS the new customer's name — carry it into
                       // the manual Name field instead of making the owner type it
                       // twice. Fill-when-empty only (the file's own overwrite rule):
@@ -1517,7 +1644,12 @@ export function QuoteBuilder({
               {/* Property */}
               <Controller name="address" control={control}
                 rules={{ required: 'Address is required' }}
-                render={({ field }) => (
+                render={({ field }) => verifiedAuxiliaryMode ? (
+                  <Input label="Service Address *" placeholder="123 Main Street"
+                    name={field.name} ref={field.ref} onBlur={field.onBlur} value={field.value || ''}
+                    onChange={e => { markEdited(); field.onChange(e.target.value); if (pickedPropertyId && e.target.value !== autoFilledAddress.current) setPickedPropertyId(null) }}
+                    error={errors.address?.message} />
+                ) : (
                   <AddressAutocomplete
                     label="Service Address *"
                     placeholder="123 Main Street, Calgary, AB"
@@ -1558,7 +1690,7 @@ export function QuoteBuilder({
                   quote: replacing the scope of a quote that may already be sent
                   is a different and much sharper action than seeding a blank
                   one, and it is not what V1 is for. */}
-              {!isEdit && (
+              {!verifiedAuxiliaryMode && !isEdit && (
                 <div className="flex justify-end -mt-1">
                   <BundlePicker
                     templates={templates}
@@ -1608,7 +1740,7 @@ export function QuoteBuilder({
               {/* §2.4 — the fast path leads with the fast input: the satellite
                   Measure button sits ABOVE the manual area field, not after it. */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <Button type="button" variant="secondary" size="sm"
+                {!verifiedAuxiliaryMode && <Button type="button" variant="secondary" size="sm"
                   onClick={() => {
                     // Immediate feedback where the tap happened — a message inside
                     // the collapsed Travel section is a silent failure.
@@ -1618,7 +1750,7 @@ export function QuoteBuilder({
                   {/* Only the lawn cadence engine prices FROM the satellite trace, so
                       only it may promise a price on the button that opens the map. */}
                   <Ruler className="w-3.5 h-3.5" /> {pricingKind === 'lawn_recurring' ? 'Measure & price from satellite' : 'Measure from satellite'}
-                </Button>
+                </Button>}
                 {measuredSqft > 0 && (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
                     <CheckCircle2 className="w-3.5 h-3.5" /> {Math.round(measuredSqft).toLocaleString()} sq ft measured
@@ -1637,7 +1769,7 @@ export function QuoteBuilder({
                   numeric input whose caption explains its own irrelevance collapses
                   to an opt-in link. The field stays registered either way. */}
               {(areaPricesService || measuredSqft > 0 || showAreaField) ? (
-                <Input label="Measured Area (ft²)" type="number" step="1" min="0"
+                <Input label="Measured Area (ft²)" type="number" step={verifiedAuxiliaryMode ? 'any' : '1'} min="0"
                   placeholder="e.g. 5,000"
                   hint={pricingKind === 'lawn_recurring'
                     ? 'Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct.'
@@ -1660,7 +1792,7 @@ export function QuoteBuilder({
                     tiles below are the supporting structure it fills.
                   • Everything else (mulch, cleanups, hedges…) → one card from
                     the service-appropriate engine (area rate or labour). */}
-              {pricingKind === 'lawn_recurring' && measuredSqft > 0 && (
+              {!verifiedAuxiliaryMode && pricingKind === 'lawn_recurring' && measuredSqft > 0 && (
                 <PriceIntelligence
                   sqft={measuredSqft}
                   serviceType={watch('service_type')}
@@ -2021,7 +2153,7 @@ export function QuoteBuilder({
                 otherwise. That refusal to guess is why it can be trusted with the
                 price: it fills the HOURS, the hours drive the suggestion, and the
                 suggestion still needs an Accept. */}
-            <SmartLaborField
+            {!verifiedAuxiliaryMode && <SmartLaborField
               affectsPrice
               sqft={measuredSqft}
               serviceType={watch('service_type')}
@@ -2031,7 +2163,7 @@ export function QuoteBuilder({
               price={initialPrice || weeklyPrice || biweeklyPrice || monthlyPrice || 0}
               value={hours > 0 ? Math.round(Number(hours) * 60) : null}
               onApply={(minutes) => setValue('hours', Math.round((minutes / 60) * 100) / 100)}
-            />
+            />}
             {/* "Adjustment Multiplier" is the variable's name, not the owner's
                 question. The question is how hard this job is. Field name, stored
                 column and maths are untouched — `overgrowth_multiplier` is read in
@@ -2393,11 +2525,11 @@ export function QuoteBuilder({
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
               <Car className="w-3.5 h-3.5" /> Travel
             </p>
-            <div className="flex justify-end">
+            {!verifiedAuxiliaryMode && <div className="flex justify-end">
               <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
                 <MapPin className="w-3.5 h-3.5" /> Calculate distance
               </Button>
-            </div>
+            </div>}
             {calcMsg && (
               <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent-text')}>
                 {calcMsg.text}
@@ -2527,7 +2659,7 @@ export function QuoteBuilder({
               every other collapsed section (all the rest reveal their state). */}
             </div>
 
-            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+            {!verifiedAuxiliaryMode && <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5" /> Best days to schedule
             </p>
@@ -2557,7 +2689,7 @@ export function QuoteBuilder({
                 />
               )}
             </div>
-            </div>
+            </div>}
           </Collapsible>
         </div>
 
@@ -2576,7 +2708,7 @@ export function QuoteBuilder({
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
                   {saveLabel}
                 </Button>
-                <Button type="button" variant="ghost" className="w-full" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={pilotSave ? cancelPilotSave : onCancel ?? (() => router.back())}>Cancel</Button>
               </div>
             </CardBody>
           </Card>
@@ -2600,7 +2732,7 @@ export function QuoteBuilder({
             <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{effectiveTotal > 0 ? formatCurrency(effectiveTotal) : '—'}</p>
           </button>
           <div className="flex items-center gap-2 shrink-0">
-            <Button type="button" variant="ghost" size="sm" onClick={onCancel ?? (() => router.back())}>Cancel</Button>
+            <Button type="button" variant="ghost" size="sm" onClick={pilotSave ? cancelPilotSave : onCancel ?? (() => router.back())}>Cancel</Button>
             <Button type="submit" size="lg" loading={isSubmitting}>{saveLabel}</Button>
           </div>
         </div>
@@ -2612,7 +2744,7 @@ export function QuoteBuilder({
         <div className="space-y-3">{previewBreakdown}</div>
       </Modal>
 
-      {showMeasure && (
+      {!verifiedAuxiliaryMode && showMeasure && (
         <QuoteMeasure
           address={address}
           travelFee={Number(travelFee) || 0}

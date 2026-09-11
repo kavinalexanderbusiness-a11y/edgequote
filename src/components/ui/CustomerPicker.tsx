@@ -16,9 +16,13 @@ import { User, Plus, ChevronDown, X, Check } from 'lucide-react'
 // AddressAutocomplete so the two controls feel identical.
 const MANUAL = '__manual'
 
+export type CustomerPickerCustomer = Pick<Customer, 'id' | 'name' | 'phone' | 'email' | 'address' | 'city' | 'province'> & {
+  properties?: { id?: string; address: string | null; city: string | null; province?: string | null; is_primary: boolean | null }[]
+}
+
 interface CustomerPickerProps {
   label?: string
-  customers: Customer[]
+  customers: CustomerPickerCustomer[]
   value: string                 // selected customer id, '' (none), or '__manual'
   onChange: (value: string) => void
   allowManual?: boolean         // show the "+ Enter manually" row (default true)
@@ -85,7 +89,7 @@ export function CustomerPicker({
   }, [customers, query])
 
   // Menu rows = matched customers, then the manual escape hatch.
-  const rows: ({ type: 'customer'; c: Customer } | { type: 'manual' })[] = [
+  const rows: ({ type: 'customer'; c: CustomerPickerCustomer } | { type: 'manual' })[] = [
     ...matches.map(c => ({ type: 'customer' as const, c })),
     ...(allowManual ? [{ type: 'manual' as const }] : []),
   ]

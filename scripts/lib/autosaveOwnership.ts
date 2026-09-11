@@ -9,10 +9,13 @@ import ts from 'typescript'
 
 type Check = (name: string, passed: boolean, detail?: string) => void
 type Draft = { customer: string; service: string; notes: string }
-type Options = { key: string; value: Draft; ownership?: 'verified-owner'; canReplaceDraft?: boolean }
-type Result = { draft: Draft | null; status: string; savedAt: number | null; restore(): Draft | null; discard(): void; clear(): void }
+type Options = { key: string; value: Draft; ownership?: 'verified-owner'; canReplaceDraft?: boolean;
+  submission?: { generation: string; baseline: { recordId: string; originalRevision: string };
+    hasPending(): boolean; validateValue(value: unknown): Draft | null } }
+type Result = { draft: Draft | null; status: string; savedAt: number | null; restore(): Draft | null; discard(): void; clear(): void;
+  submissionState: 'pending' | 'ready' | 'refused'; flushCurrent(value?: Draft, options?: { force?: boolean }): boolean }
 type Effect = { deps?: readonly unknown[]; fn(): void | (() => void); cleanup?: () => void }
-type Sources = { autosave: string; owner: string; cache: string }
+type Sources = { autosave: string; owner: string; cache: string; submission: string }
 type Cache = {
   adoptCacheOwner(id: string): void; setCacheOwner(id: string | null): void; clearOwnedCaches(): void
   getCacheOwner(): string | null; getCacheGeneration(): number
@@ -95,9 +98,13 @@ function host(sources: Sources, initial: Record<string, string> = {}) {
         if (id === 'react') return hooks
         if (id === '@/hooks/useAutosaveOwner') return load('owner')
         if (id === '@/lib/clientCache') return load('cache')
+        if (id === '@/lib/autosaveSubmission') return load('submission')
         throw new Error(`Unexpected owned-autosave dependency: ${id}`)
       },
       window: { localStorage, sessionStorage }, localStorage, sessionStorage,
+      // Browser modules and their form values share one JSON/Object realm.
+      // Match that here so plain-object validation tests the actual lifecycle.
+      TextEncoder, Object, Array, JSON,
       Date: class extends Date { static now() { return now } },
       queueMicrotask: (fn: () => void) => microtasks.push(fn),
       setTimeout(fn: () => void, ms: number) { const id = ++timerId; timers.set(id, { at: now + ms, fn }); return id },
@@ -145,6 +152,8 @@ function host(sources: Sources, initial: Record<string, string> = {}) {
   }
   return {
     cache, storage, io, pendingTimers: () => timers.size,
+    validateSubmission: load('submission').validateAutosaveSubmissionValue as
+      (value: unknown, validate: (v: unknown) => unknown) => { value: unknown; serialization: string } | null,
     form(options = own(), publishState = true) { const f = new Form(options); forms.push(f); f.render(options, publishState); return f },
     adopt(id: string) { act('cache', () => cache.adoptCacheOwner(id)) },
     signOut() { act('cache', () => cache.clearOwnedCaches()); act('cache', () => cache.setCacheOwner(null)) },
@@ -280,8 +289,79 @@ function exercise(sources: Sources): [string, boolean][] {
   return out
 }
 
+function exerciseBoundReplay(sources: Sources): [string, boolean][] {
+  const out: [string, boolean][] = []
+  const owner = 'owner-A', key = ownedKey(owner)
+  const options: Options = { ...own(), canReplaceDraft: true,
+    submission: { generation: 'editor-A', baseline: { recordId: 'quote-A', originalRevision: 'revision-A' },
+      hasPending: () => false, validateValue: v => {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+        const r = v as Record<string, unknown>
+        return Object.keys(r).length === 3 && ['customer', 'service', 'notes'].every(k => typeof r[k] === 'string') ? v as Draft : null
+      } } }
+  const bytes = (value = blank) => JSON.stringify({ version: 2, owner, generation: 'editor-A', recordId: 'quote-A', originalRevision: 'revision-A',
+    value, serialization: JSON.stringify(value), savedAt: 1000 })
+  for (const change of ['unchanged', 'changed', 'removed', 'appeared'] as const) {
+    const h = host(sources); h.adopt(owner)
+    const f = h.form(options)
+    const beganReady = f.result.submissionState === 'ready'
+    const checkpoint = change === 'appeared' || f.result.flushCurrent(blank, { force: true })
+    const selectedBytes = h.storage.get(key)
+    let replacement: string | undefined
+    f.replay(undefined, () => {
+      if (change === 'changed' || change === 'appeared') h.storage.set(key, bytes(authored))
+      if (change === 'removed') h.storage.delete(key)
+      replacement = h.storage.get(key)
+    })
+    const flushed = f.result.flushCurrent(blank, { force: true })
+    h.flush(); h.advance()
+    out.push([`bound StrictMode replay ${change === 'unchanged' ? 'retains unchanged storage authority' : `refuses ${change} storage bytes`}`,
+      beganReady && checkpoint && (change === 'unchanged'
+        ? f.result.submissionState === 'ready' && flushed && h.storage.get(key) === selectedBytes
+        : f.result.submissionState === 'refused' && !flushed && h.storage.get(key) === replacement)])
+    h.close()
+  }
+  return out
+}
+
+function exerciseBoundJson(sources: Sources): [string, boolean][] {
+  const h = host(sources), identity = (v: unknown) => v
+  const normal = [1, 'value'], noPrototype = Object.setPrototypeOf([1, 'value'], null)
+  let invoked = 0
+  const inherited = Object.setPrototypeOf([1], { toJSON() { invoked++; return ['rewritten'] } })
+  const refused = h.validateSubmission(inherited, identity)
+  const shared = { note: 'same object' }, repeated = { first: shared, second: shared }
+  const cycle: { next?: unknown } = {}; cycle.next = cycle
+  const out: [string, boolean][] = [
+    ['bound JSON accepts normal and null-prototype arrays without changing bytes',
+      h.validateSubmission(normal, identity)?.serialization === JSON.stringify(normal)
+      && h.validateSubmission(noPrototype, identity)?.serialization === JSON.stringify(noPrototype)],
+    ['bound JSON refuses inherited array toJSON without invoking it', refused === null && invoked === 0],
+    ['bound JSON preserves repeated references and refuses actual cycles',
+      h.validateSubmission(repeated, identity)?.serialization === JSON.stringify(repeated) && h.validateSubmission(cycle, identity) === null],
+  ]
+  h.close()
+  return out
+}
+
+/** Dormant bound-mode regressions, reported separately from default consumers. */
+export function verifyBoundAutosaveSafety(check: Check): void {
+  const sources: Sources = { autosave: read('src/hooks/useAutosave.ts'), owner: read('src/hooks/useAutosaveOwner.ts'), cache: read('src/lib/clientCache.ts'), submission: read('src/lib/autosaveSubmission.ts') }
+  for (const [name, passed] of exerciseBoundReplay(sources)) check(name, passed)
+  const replayFence = "if (gate.current === 'ready' && found.storedBytes !== observedBytes.current) { pendingDraft.current = true; refuse(); return }"
+  const replayMutant = sources.autosave.replace(replayFence, '')
+  const replayFailures = replayMutant === sources.autosave ? [] : exerciseBoundReplay({ ...sources, autosave: replayMutant }).filter(([, passed]) => !passed)
+  check('bound StrictMode mutation caught: replay cannot adopt changed storage bytes', replayMutant !== sources.autosave && replayFailures.length === 3,
+    replayFailures.map(([name]) => name).join('; '))
+  for (const [name, passed] of exerciseBoundJson(sources)) check(name, passed)
+  const arrayFence = 'Array.isArray(v) ? prototype !== Array.prototype && prototype !== null'
+  const arrayMutant = sources.submission.replace(arrayFence, 'Array.isArray(v) ? false')
+  check('bound JSON mutation caught: inherited array hooks stay inert', arrayMutant !== sources.submission
+    && exerciseBoundJson({ ...sources, submission: arrayMutant }).some(([, passed]) => !passed))
+}
+
 export function verifyAutosaveOwnership(check: Check): void {
-  const sources: Sources = { autosave: read('src/hooks/useAutosave.ts'), owner: read('src/hooks/useAutosaveOwner.ts'), cache: read('src/lib/clientCache.ts') }
+  const sources: Sources = { autosave: read('src/hooks/useAutosave.ts'), owner: read('src/hooks/useAutosaveOwner.ts'), cache: read('src/lib/clientCache.ts'), submission: read('src/lib/autosaveSubmission.ts') }
   for (const [name, passed] of exercise(sources)) check(name, passed)
   const mutations: [string, keyof Sources, string, string][] = [
     ['owner stamp validation', 'autosave', "if (guarded && parsed?.owner !== binding!.lease.owner)", 'if (false)'],
@@ -319,9 +399,9 @@ export function verifyAutosaveOwnership(check: Check): void {
     ts.forEachChild(node, visit)
   }
   visit(qb)
-  check('actual QuoteBuilder expression opts in only new quotes', !!expression &&
-    runInNewContext(expression.getText(qb), { isEdit: false }) === 'verified-owner' &&
-    runInNewContext(expression.getText(qb), { isEdit: true }) === undefined)
+  check('default QuoteBuilder expression opts in only new quotes', !!expression &&
+    runInNewContext(expression.getText(qb), { isEdit: false, pilotSave: undefined }) === 'verified-owner' &&
+    runInNewContext(expression.getText(qb), { isEdit: true, pilotSave: undefined }) === undefined)
   const customer = read('src/components/customers/CustomerForm.tsx')
   check('CustomerForm creation opts in while edits retain the default contract',
     customerOptions(customer, { isEdit: false }, {}).ownership === 'verified-owner' &&
@@ -376,7 +456,7 @@ function customerCallerProps(source: string, context: Record<string, unknown>): 
 }
 
 export function verifyCustomerAutosaveIntegration(check: Check): void {
-  const sources: Sources = { autosave: read('src/hooks/useAutosave.ts'), owner: read('src/hooks/useAutosaveOwner.ts'), cache: read('src/lib/clientCache.ts') }
+  const sources: Sources = { autosave: read('src/hooks/useAutosave.ts'), owner: read('src/hooks/useAutosaveOwner.ts'), cache: read('src/lib/clientCache.ts'), submission: read('src/lib/autosaveSubmission.ts') }
   const source = read('src/components/customers/CustomerForm.tsx')
   const page = read('src/app/dashboard/customers/page.tsx')
   const detail = read('src/app/dashboard/customers/[id]/page.tsx')

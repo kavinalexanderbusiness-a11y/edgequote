@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { Modal } from '@/components/ui/Modal'
@@ -8,6 +8,9 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency } from '@/lib/utils'
 import { ON_BEHALF_REASONS, type OnBehalfReason } from '@/lib/quoteAcceptance'
 import { UserCheck, Loader2 } from 'lucide-react'
+import { usePilotQuoteAcceptance } from '@/hooks/usePilotQuoteAcceptance'
+import { PilotQuoteAcceptanceModal } from './PilotQuoteAcceptanceModal'
+import type { PilotQuoteAcceptanceTransport } from '@/lib/quotes/pilotQuoteAcceptance'
 
 // ── "Record customer acceptance" ─────────────────────────────────────────────
 //
@@ -58,9 +61,89 @@ interface Props {
    *  database includes them, so this dialog and the record cannot disagree. */
   selectedAddonsTotal: number
   onRecorded: () => void
+  /** Dormant capability: supplied only by the separately verified pilot host. */
+  pilotAcceptance?: { ownerId: string; transport: PilotQuoteAcceptanceTransport }
 }
 
-export function RecordAcceptanceDialog({
+export function RecordAcceptanceDialog(props: Props) {
+  const pilotOwner = useRef<string | null>(null)
+  if (props.pilotAcceptance) pilotOwner.current = props.pilotAcceptance.ownerId
+  // Once opted in, losing the capability cannot reopen the legacy write door.
+  // Keep only the last scope hint; never retain a removed transport.
+  return pilotOwner.current !== null
+    ? <PilotRecordAcceptanceDialog {...props} pilotAcceptance={{
+        ownerId: props.pilotAcceptance?.ownerId ?? pilotOwner.current,
+        transport: props.pilotAcceptance?.transport,
+      }} />
+    : <LegacyRecordAcceptanceDialog {...props} />
+}
+
+function PilotRecordAcceptanceDialog(props: Omit<Props, 'pilotAcceptance'> & {
+  pilotAcceptance: { ownerId: string; transport: PilotQuoteAcceptanceTransport | undefined }
+}) {
+  const { open, quoteId, pilotAcceptance } = props
+  const latest = useRef(props)
+  latest.current = props
+  const opening = useRef<{ epoch: number; onRecorded: () => void } | null>(null)
+  const openingIntent = useRef({ open: false, explicit: false, quoteId, ownerId: pilotAcceptance.ownerId })
+  if (openingIntent.current.open !== open) {
+    openingIntent.current = { open, explicit: open, quoteId, ownerId: pilotAcceptance.ownerId }
+  } else if (openingIntent.current.quoteId !== quoteId || openingIntent.current.ownerId !== pilotAcceptance.ownerId) {
+    openingIntent.current = { open, explicit: false, quoteId, ownerId: pilotAcceptance.ownerId }
+  }
+  const boundary = useRef({ open, quoteId, ownerId: pilotAcceptance.ownerId, available: false, lifetime: -1, epoch: 0 })
+  const callbackFence = { epoch: -1 }
+  const controller = usePilotQuoteAcceptance(pilotAcceptance.transport, {
+    mode: 'owner', ownerId: pilotAcceptance.ownerId, quoteId,
+  }, () => {
+    const captured = opening.current
+    if (captured && latest.current.open && captured.epoch === callbackFence.epoch
+      && captured.epoch === boundary.current.epoch) captured.onRecorded()
+  })
+
+  // Invalidate callbacks during render, including the interval before the close
+  // effect runs. Ordinary document-prop refreshes do not replace this opening.
+  const previous = boundary.current
+  if (previous.open !== open || previous.quoteId !== quoteId || previous.ownerId !== pilotAcceptance.ownerId
+    || previous.available !== controller.available || previous.lifetime !== controller.lifetime) {
+    boundary.current = { open, quoteId, ownerId: pilotAcceptance.ownerId,
+      available: controller.available, lifetime: controller.lifetime, epoch: previous.epoch + 1 }
+  }
+  // This callback instance keeps its originating render's epoch even if another
+  // opening later installs a new parent callback in the mutable opening slot.
+  callbackFence.epoch = boundary.current.epoch
+  const { open: openReview, close: closeReview, available, lifetime } = controller
+  useEffect(() => {
+    const current = latest.current
+    if (!open || !available) {
+      opening.current = null
+      closeReview()
+      return
+    }
+    opening.current = { epoch: boundary.current.epoch, onRecorded: current.onRecorded }
+    const intent = openingIntent.current.explicit ? 'explicit' : 'resume'
+    openingIntent.current.explicit = false
+    // The preset is a launch hint, never a recommendation or a later rebase.
+    // Only a new parent opening requests a new version after a known receipt.
+    // Access/lease recovery while still open restores the confirmed copy.
+    openReview(quoteId, current.presetOptionId ?? null, intent)
+  }, [open, quoteId, pilotAcceptance.ownerId, available, lifetime, openReview, closeReview])
+
+  if (!open) return null
+  return <PilotQuoteAcceptanceModal
+    controller={controller}
+    mode="owner"
+    preliminaryOptions={props.options.map(({ id, name }) => ({ id, name }))}
+    onClose={() => {
+      // The shared modal has already closed its controller. This callback is
+      // dismissal only; unresolved writes remain protected by its registry.
+      opening.current = null
+      if (latest.current.open) latest.current.onClose()
+    }}
+  />
+}
+
+function LegacyRecordAcceptanceDialog({
   open, onClose, quoteId, quoteNumber, customerName,
   travelFee, total, options, presetOptionId, termsText, selectedAddonsTotal, onRecorded,
 }: Props) {

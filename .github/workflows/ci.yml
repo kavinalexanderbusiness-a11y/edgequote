@@ -86,6 +86,15 @@ jobs:
       - name: Verify suite (all guards + parity)
         run: npm run verify
 
+      - name: Preserve owner auxiliary-loader browser proof
+        if: ${{ always() && hashFiles('outputs/pilot-full-quote-save-20260910/quote-auxiliary-loader-proof.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quote-auxiliary-loader-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/quote-auxiliary-loader-proof.json
+          if-no-files-found: error
+          retention-days: 14
+
       # ── Lint and Build — the two stages this job has been NAMED for since it
       # was created, and never actually ran. The file ended at `verify`, so
       # "typecheck · lint · build" promised two gates that did not exist: a lint

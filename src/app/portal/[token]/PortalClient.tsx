@@ -29,6 +29,9 @@ import { VisitsTab } from './components/VisitsTab'
 import { BillingTab } from './components/BillingTab'
 import { MessagesTab } from './components/MessagesTab'
 import { RequestsTab } from './components/RequestsTab'
+import { usePilotQuoteAcceptance } from '@/hooks/usePilotQuoteAcceptance'
+import { PilotQuoteAcceptanceModal } from '@/components/quotes/PilotQuoteAcceptanceModal'
+import type { PilotQuoteAcceptanceTransport } from '@/lib/quotes/pilotQuoteAcceptance'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────
 // Public, no-login, scoped to the token's customer via get_portal_data — still
@@ -53,7 +56,12 @@ function resolveTab(t: TabKey, multiProperty: boolean): TabKey {
   return t
 }
 
-export function PortalClient({ token, initialData }: { token: string; initialData: unknown }) {
+export function PortalClient({ token, initialData, pilotAcceptance }: {
+  token: string; initialData: unknown; pilotAcceptance?: PilotQuoteAcceptanceTransport
+}) {
+  const pilotEnabled = useRef(false)
+  if (pilotAcceptance) pilotEnabled.current = true
+  const pilotController = usePilotQuoteAcceptance(pilotAcceptance, { mode: 'portal', token })
   const supabase = useMemo(() => createClient(), [])
   // Seeded from the server fetch → real content on first paint (no spinner). load()
   // below only runs as a fallback / for post-payment revalidation.
@@ -325,6 +333,13 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
   async function accept(qid: string, optionId?: string, termsAck?: boolean) {
+    if (pilotEnabled.current) {
+      // Card amounts, cached reads and the old checkbox are launch context only.
+      // The new review obtains its complete document and fresh assent itself.
+      // A removed capability disables this path; it never enables legacy writes.
+      pilotController.open(qid, optionId ?? null)
+      return
+    }
     if (accepting) return // double-click guard
     // Approving commits the customer to a quote value — never ask someone to
     // approve an amount without showing it, and always say that approving isn't
@@ -720,8 +735,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 
+  // Keep the review at the same tree position across auxiliary loading/failure;
+  // an unrelated portal refresh cannot remove the document being accepted.
+  const pilotAcceptanceModal = pilotEnabled.current ? <PilotQuoteAcceptanceModal
+    controller={pilotController}
+    mode="portal"
+    preliminaryOptions={data?.quotes.find(q => q.id === pilotController.state.quoteId)?.options?.map(({ id, name }) => ({ id, name }))}
+  /> : null
+
   if (loading) return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-center px-8">
+      {pilotAcceptanceModal}
       <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent-text" /></div>
       <p className="text-sm text-ink-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading your account…</p>
     </div>
@@ -729,6 +753,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   if (!data || !view) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center">
+        {pilotAcceptanceModal}
         <Leaf className="w-10 h-10 text-ink-faint mb-3" />
         <p className="text-lg font-semibold text-ink">This link isn’t valid</p>
         <p className="text-sm text-ink-muted mt-1">It may have expired. Please contact your service provider for a new link.</p>
@@ -738,7 +763,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   const biz = data.business
   const actions: PortalActions = {
-    token, accept, accepting, pay, payingId, paymentsEnabled,
+    token, accept, accepting: pilotEnabled.current ? (pilotController.state.open ? pilotController.state.quoteId : null) : accepting,
+    pay, payingId, paymentsEnabled,
     payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),
@@ -797,6 +823,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   return (
     <div className="min-h-screen bg-bg">
+      {pilotAcceptanceModal}
       <div className="max-w-lg mx-auto px-4 py-5 pb-28">
         {/* Brand header */}
         <div className="flex items-center gap-3 mb-4">
