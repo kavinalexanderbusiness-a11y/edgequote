@@ -1,0 +1,50 @@
+project_id = "edgequote-auth-save-disposable"
+[api]
+enabled = true
+port = 8000
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+[db.migrations]
+enabled = false
+schema_paths = []
+[db.seed]
+enabled = false
+sql_paths = []
+[db.pooler]
+enabled = false
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = []
+enable_signup = false
+enable_anonymous_sign_ins = false
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+[auth.email.smtp]
+enabled = false
+[local_smtp]
+enabled = false
+[storage]
+enabled = true
+[storage.image_transformation]
+enabled = false
+[storage.s3_protocol]
+enabled = false
+[storage.analytics]
+enabled = false
+[storage.vector]
+enabled = false
+[realtime]
+enabled = false
+[studio]
+enabled = false
+[analytics]
+enabled = false
+[edge_runtime]
+enabled = false

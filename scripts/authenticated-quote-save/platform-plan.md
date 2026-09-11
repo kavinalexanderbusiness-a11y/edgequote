@@ -5,8 +5,10 @@ Fresh main: `b507fbfd41a8dbef5b6bd88d8a951df5750e0547`.
 Independent design review: auth_save_design_review, 2026-09-11.
 
 The proposed environment is suitable for real Auth/PostgREST/PostgreSQL evidence.
-No stack, generated Next app or cloud workflow has been started. The canonical
-authority defect in `authority-blocker.md` is the current stop gate.
+No real platform stack has run at this preparation checkpoint. The canonical
+authority defect in `authority-blocker.md` was corrected at c543cae22bc84618ec78fc655213a9d46258fab7
+and verified in the separate synthetic/native run34636256963. The new real
+Auth/browser runner must still pass its own preflight and exact-source proof.
 
 ## Pinned platform
 

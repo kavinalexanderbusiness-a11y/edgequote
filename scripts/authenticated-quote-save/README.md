@@ -11,8 +11,10 @@ unchanged baseline/Save server adapters. There must be no injected owner-ready
 context, replacement SDK or fabricated successful transport.
 
 The platform design has independent review approval; runtime preflight remains
-unexecuted. See `platform-plan.md`. A separate canonical authorization defect now
-blocks the first mount; see `authority-blocker.md`. The older native harness's
+unexecuted. See `platform-plan.md`. The canonical authorization prerequisite in
+`authority-blocker.md` was corrected at c543cae22bc84618ec78fc655213a9d46258fab7
+and independently verified in run34636256963 (72 synthetic/native checks).
+That prerequisite is not real Auth/browser proof. The older native harness's
 platform-prelude.sql and substitutePlatformStatements are explicitly prohibited
 for this proof: they install simplified Auth/platform behavior.
 
@@ -37,10 +39,18 @@ opened solely to trigger duplicate predecessor proofs. Source and failing
 evidence are preserved; final claims require actual runner/source pins and
 observed cleanup.
 
-`fixtures.mjs` is a prepared, unexecuted helper. `seedFixtures({sql,createUser})`
+The explicit `quote-save-authenticated` manual CI mode now prepares a real
+disposable platform with `real-platform-proof.mjs`, followed by the separately
+generated app, `real-workload.mjs`, and `browser-cases.mjs`. Ordinary CI and the
+completed synthetic prerequisite are not repeated by this mode. Source review
+and a completed exact-runner receipt are required before any runtime PASS claim.
+Output is restricted to sanitized platform/browser JSON evidence; local keys,
+cookie values, Auth request bodies and private workload files are never uploaded.
+
+`fixtures.mjs` supplies the fixture helper. `seedFixtures({sql,createUser})`
 requires caller-owned real local Auth and a marked disposable SQL connection;
 `readFixture(sql,fixture)` observes full synthetic tenant rows independently.
 It creates owner A, owner B, and a denied account with its own quote but no
 settings, so a denied-role test cannot accidentally pass solely on tenant
-mismatch. The helper has passed JavaScript syntax checking only. It is not wired
-to CI, a package script, a production route or any runnable database target.
+mismatch. Runtime evidence must come from the marked disposable CI platform;
+the helper is never wired to a production route or hosted database target.

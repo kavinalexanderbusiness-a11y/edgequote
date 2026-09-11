@@ -1999,7 +1999,7 @@ export function QuoteBuilder({
               ) : (
               <>
               <div>
-                <Input label="Price ($, first visit)" type="number" step="1" min="0"
+                <Input label="Price ($, first visit)" type="number" step={verifiedAuxiliaryMode ? 'any' : '1'} min="0"
                   className="text-lg font-semibold tabular-nums"
                   hint={
                     priceOrigin === 'manual'
@@ -2136,7 +2136,7 @@ export function QuoteBuilder({
                   it is the honest state of a job nobody has estimated yet, and
                   `required` here would have forced the fabricated 2 back in through
                   validation the moment the default was removed. */}
-              <Input label="Estimated Hours" type="number" step="0.25" min="0"
+              <Input label="Estimated Hours" type="number" step={verifiedAuxiliaryMode ? 'any' : '0.25'} min="0"
                 hint="Blank until you or the estimate below fill it — no price is suggested from labour without it."
                 error={errors.hours?.message}
                 {...register('hours', { min: { value: 0, message: 'Cannot be negative' } })} />
@@ -2172,7 +2172,7 @@ export function QuoteBuilder({
             <Input label="How hard is this job?" type="number" step="0.05" min="0"
               hint="Multiplies your rate for this quote. 0.75 easy · 1.0 standard · 1.25 overgrown."
               {...register('overgrowth_multiplier', { min: 0 })} />
-            <Input label="Your rate ($ per person, per hour)" type="number" step="5" min="0"
+            <Input label="Your rate ($ per person, per hour)" type="number" step={verifiedAuxiliaryMode ? 'any' : '5'} min="0"
               hint={Number(settings?.default_rate) > 0
                 ? `Your Default Labour Rate from Settings (${formatCurrency(Number(settings?.default_rate))}/hr). Change it here for this quote only.`
                 : 'Set a Default Labour Rate in Settings so quotes can suggest a labour price.'}
