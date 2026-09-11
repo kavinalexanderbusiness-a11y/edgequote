@@ -37,6 +37,40 @@ function inserted(before, after, table) {
   }
   assert.equal(prior.size, 0); assert.equal(added.length, 1, 'One new ' + table + ' row'); return added[0]
 }
+function savedPriceSideEffects(before, after, fixture) {
+  unchangedOutside(before, after, ['quotes', 'quote_services', 'audit_events', 'pricing_config_versions'])
+  const oldQuote = before.ownerA.quotes[0], quote = after.ownerA.quotes[0], settings = before.ownerA.business_settings[0]
+  const audit = inserted(before, after, 'audit_events')
+  // Canonical audit_quotes records generated totals when initial price changes.
+  // The authenticated adapter invokes native Save through its service client;
+  // this audit row honestly carries system/service, not invented owner evidence.
+  for (const [key, value] of Object.entries({ user_id: fixture.ownerA, action: 'quote_price_changed', entity_type: 'quote',
+    entity_id: fixture.quoteA, entity_label: oldQuote.quote_number, customer_id: oldQuote.customer_id,
+    before: { total: oldQuote.total }, after: { total: quote.total }, meta: null,
+    actor_type: 'system', actor_id: null, actor_label: null, source: 'service' })) assert.deepEqual(audit[key], value, 'Save audit ' + key)
+  assert.match(audit.id, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/)
+  assert.ok(Number.isSafeInteger(audit.seq) && audit.seq > 0 && Number.isSafeInteger(audit.txid) && audit.txid > 0)
+  assert.ok(Number.isFinite(Date.parse(audit.occurred_at)))
+  assert.equal(before.ownerA.pricing_config_versions.length, 0, 'Fresh fixture has no recorded pricing version')
+  const version = inserted(before, after, 'pricing_config_versions')
+  const positive = (value, fallback) => Number(value ?? 0) > 0 ? value : fallback
+  // Exact canonical ensure_pricing_config_version settings snapshot, not an
+  // unrestricted allowance for provenance changes during the real owner Save.
+  for (const [key, value] of Object.entries({ user_id: fixture.ownerA, source: 'recorded', engine_version: 'v1',
+    note: 'Recorded by ensure_pricing_config_version on a detected settings change.',
+    base_charge: positive(settings.pricing_base_charge, 28), mow_rate_per_1000: positive(settings.pricing_mow_rate, 15),
+    budget_mult: 0.8, market_mult: 0.92, recommended_mult: positive(settings.pricing_recommended_mult, 1),
+    premium_mult: positive(settings.pricing_premium_mult, 1.2), travel_rate_per_km: positive(settings.pricing_travel_rate, 1.5),
+    crew_cost_per_hour: settings.crew_cost_per_hour ?? 40, fee_recovery_percent: settings.fee_recovery_percent ?? 3,
+    payment_fee_strategy: settings.payment_fee_strategy ?? 'global_price_increase' })) assert.deepEqual(version[key], value, 'Save pricing version ' + key)
+  assert.ok(Number.isFinite(Date.parse(version.created_at)))
+  assert.match(version.id, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/)
+  assert.equal(Date.parse(version.valid_from), Date.parse(version.created_at))
+  assert.equal(quote.pricing_config_version_id, version.id); assert.equal(quote.price_source, 'engine')
+  return { kind: 'native-save-price-side-effects', auditId: audit.id, auditSha256: sha(audit),
+    pricingVersionId: version.id, pricingVersionSha256: sha(version), beforeTotal: oldQuote.total, afterTotal: quote.total,
+    priorAuditRowsPreserved: true, exactPricingSettingsSnapshot: true }
+}
 function documentMatches(p, rows, fixture) {
   const q = rows.ownerA.quotes[0]
   assert.equal(p.quote_id, fixture.quoteA); assert.equal(p.status, 'sent'); assert.equal(p.terms_text, fixture.termsA)
@@ -325,7 +359,7 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
             assert.equal(intent.values.notes, noteV2); assert.equal(intent.values.initial_price, priceV2)
             await owner.page.getByText('Submitted version saved', { exact: true }).waitFor({ state: 'visible' })
             for (const name of ['closed-count', 'reconciliation-count']) assert.equal((await owner.page.getByTestId(name).textContent())?.trim(), '0')
-            preAcceptanceRows = await rows(); unchangedOutside(fixture.before, preAcceptanceRows, ['quotes', 'quote_services'])
+            preAcceptanceRows = await rows(); entry.evidence.push(savedPriceSideEffects(fixture.before, preAcceptanceRows, fixture))
             for (const [key, value] of Object.entries(receipt.quote)) assert.deepEqual(comparable(preAcceptanceRows.ownerA.quotes[0][key]), comparable(value), 'Save receipt/native quote ' + key)
             assert.deepEqual(comparable(preAcceptanceRows.ownerA.quote_services), comparable(receipt.services)); assert.deepEqual(preAcceptanceRows.ownerA.quote_services.map(row => row.sort_order), [0, 1, 2])
             assert.equal(receipt.acceptance_current, false)
