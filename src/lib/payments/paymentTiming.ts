@@ -139,7 +139,7 @@ export function quoteTimingLine(t: PaymentTiming): string {
  */
 export function approvalTimingLine(t: PaymentTiming): string {
   if (!t.requiresDepositBeforeScheduling) {
-    return 'Accepting doesn’t charge you — we’ll confirm a date with you first, and you’ll only get an invoice after the work is done.'
+    return 'Accepting confirms this quote and does not make a payment.'
   }
   const ask = t.depositAmount != null && t.depositAmount > 0
     ? `A ${formatCurrency(t.depositAmount)} deposit`
