@@ -219,7 +219,7 @@ const CAT: ServiceTemplate[] = [
   svc('t9', 'Gravel Installation', 'Landscaping'), svc('t10', 'Hedge Trimming', 'Tree & Shrub Care'),
 ]
 const names = (m: ReturnType<typeof buildServiceMenu>) =>
-  m.rows.filter(r => r.type === 'template').map(r => (r as { t: ServiceTemplate }).t.name)
+  m.rows.flatMap(r => r.type === 'template' ? [r.t.name] : [])
 const headers = (m: ReturnType<typeof buildServiceMenu>) =>
   m.rows.filter(r => r.type === 'header').map(r => (r as { label: string }).label)
 
