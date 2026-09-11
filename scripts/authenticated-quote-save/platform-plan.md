@@ -5,10 +5,20 @@ Fresh main: `b507fbfd41a8dbef5b6bd88d8a951df5750e0547`.
 Independent design review: auth_save_design_review, 2026-09-11.
 
 The proposed environment is suitable for real Auth/PostgREST/PostgreSQL evidence.
-No real platform stack has run at this preparation checkpoint. The canonical
+Real run34642405638 successfully started the platform and applied all six exact
+application SQL files without substitutions. It also passed generated typecheck
+and real browser Auth login/auxiliary reads, then failed at the editor boundary.
+The canonical
 authority defect in `authority-blocker.md` was corrected at c543cae22bc84618ec78fc655213a9d46258fab7
 and verified in the separate synthetic/native run34636256963. The new real
-Auth/browser runner must still pass its own preflight and exact-source proof.
+Auth/browser runner must still pass its complete exact-source Save proof.
+
+The current app origin is http://localhost:3000, with the listener still bound to
+127.0.0.1:3000. Next15.5.25 normalizes loopback IPs to localhost in NextRequest.url;
+run34642405638 reproduced forbidden_origin when the original test browser used
+127.0.0.1. The browser, configured trusted origin, app env and Auth site URL now
+agree exactly on localhost. No Request rewrite, broader origin acceptance or
+trusted-header setting is used. Supabase remains http://127.0.0.1:8000.
 
 ## Pinned platform
 
@@ -60,7 +70,7 @@ sql_paths = []
 enabled = false
 [auth]
 enabled = true
-site_url = "http://127.0.0.1:3000"
+site_url = "http://localhost:3000"
 additional_redirect_urls = []
 enable_signup = false
 enable_anonymous_sign_ins = false
@@ -118,7 +128,7 @@ with `email_confirm:true`. Do not invite, send email, or insert Auth users in SQ
 4. Enter the verified gateway container's network namespace for app, browser,
    fixture and SQL processes while retaining the runner filesystem. Their fixed
    Supabase URL is `http://127.0.0.1:8000`; the temporary Next app and trusted
-   origin are `http://127.0.0.1:3000`. SQL uses only the inspected DB container
+   origin are `http://localhost:3000`. SQL uses only the inspected DB container
    address on port5432. Restrict all targets before opening connections.
 5. Verify no external route using a bounded failed public-IP probe. Require no
    scheduled jobs/provider connections; use an explicit process environment

@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, realpath, stat, symlink, writeFile } from 'no
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const MARKER = 'EDGEHQ_DISPOSABLE_REAL_AUTH_SAVE_ONLY'
-const ORIGIN = 'http://127.0.0.1:3000'
+const ORIGIN = 'http://localhost:3000'
 const SUPABASE_URL = 'http://127.0.0.1:8000'
 const inside = (parent, child) => {
   const path = relative(parent, child)

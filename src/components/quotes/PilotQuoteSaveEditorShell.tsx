@@ -141,7 +141,10 @@ function VersionValues({ values }: { values: QuoteFormValues }) {
  * rebase, automatic recovery reset, or main-branch activation is created here. */
 export function PilotQuoteSaveEditorShell(props: PilotQuoteSaveEditorShellProps) {
   const generation = useSyncExternalStore(subscribeCacheOwner, getCacheGeneration, () => 0)
-  const lease = cacheLease()
+  // Match the server snapshot during hydration, then require the exact observed
+  // generation. A newly adopted or revoked lease cannot race this render.
+  const candidateLease = cacheLease()
+  const lease = generation > 0 && candidateLease?.gen === generation ? candidateLease : null
   const [instance, setInstance] = useState<Instance | null>(null)
   const context = useMemo(() => {
     const ready = readyContext(props.context, lease?.owner, lease?.gen, props.quoteId)

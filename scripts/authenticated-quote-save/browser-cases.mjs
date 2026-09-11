@@ -123,7 +123,7 @@ export async function runAuthenticatedQuoteSaveBrowser({ browser, baseURL, fixtu
     }
   }
   try {
-    assert.equal(baseURL, 'http://127.0.0.1:3000', 'Only the reviewed isolated application origin is permitted')
+    assert.equal(baseURL, 'http://localhost:3000', 'Only the reviewed isolated application origin is permitted')
     const origin = new URL(baseURL)
     assert.equal(origin.origin, baseURL); assert.equal(origin.protocol, 'http:'); assert.ok(isLoopback(origin.hostname))
     assert.equal(browser.browserType().name(), 'chromium'); assert.equal(browser.isConnected(), true)

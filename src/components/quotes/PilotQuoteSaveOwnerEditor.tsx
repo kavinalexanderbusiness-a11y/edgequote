@@ -18,7 +18,10 @@ type Load = {
  * before React renders the unavailable state or a queued Save can run. */
 export function usePilotQuoteAuxiliary(client: SupabaseClient, quoteId: string, attempt = 0) {
   const generation = useSyncExternalStore(subscribeCacheOwner, getCacheGeneration, () => 0)
-  const lease = cacheLease()
+  // The server and first hydration pass observe generation zero. CacheOwner
+  // may already have adopted in browser render; use only the observed snapshot.
+  const candidateLease = cacheLease()
+  const lease = generation > 0 && candidateLease?.gen === generation ? candidateLease : null
   const [authRevision, setAuthRevision] = useState(0)
   const [refresh, setRefresh] = useState(0)
   const [, render] = useState(0)

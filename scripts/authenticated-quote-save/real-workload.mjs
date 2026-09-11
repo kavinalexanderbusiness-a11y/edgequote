@@ -64,7 +64,7 @@ process.on('SIGTERM',()=>{
 async function main(){
   assert.equal(process.platform,'linux');assert.equal(process.env.GITHUB_ACTIONS,'true')
   assert.equal(marker,'EDGEHQ_DISPOSABLE_REAL_AUTH_SAVE_ONLY');assert.equal(process.env.PILOT_AUTH_SAVE_MARKER,marker)
-  assert.equal(config.apiUrl,'http://127.0.0.1:8000');assert.equal(config.origin,'http://127.0.0.1:3000')
+  assert.equal(config.apiUrl,'http://127.0.0.1:8000');assert.equal(config.origin,'http://localhost:3000')
   assert.equal(process.env.GITHUB_SHA,config.candidate)
   assert(relative(realpathSync(source),realpathSync(taskRoot)).startsWith('..'))
   assert(/^172\.|^10\.|^192\.168\./.test(config.dbHost))

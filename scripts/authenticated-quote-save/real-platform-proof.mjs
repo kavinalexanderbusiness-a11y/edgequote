@@ -128,7 +128,7 @@ async function main() {
   const db=inspect.find(c=>c.Name==='/supabase_db_'+project)
   const dbHost=db.NetworkSettings.Networks[network].IPAddress
   if(!/^172\.|^10\.|^192\.168\./.test(dbHost))throw Error('Unexpected internal DB address')
-  const input={source,taskRoot,output,marker,apiUrl:'http://127.0.0.1:8000',origin:'http://127.0.0.1:3000',
+  const input={source,taskRoot,output,marker,apiUrl:'http://127.0.0.1:8000',origin:'http://localhost:3000',
     anonKey:status.ANON_KEY,serviceKey:status.SERVICE_ROLE_KEY,dbHost,dbPassword:decodeURIComponent(dbURL.password),
     gatewayPid:gateway.State.Pid,candidate:report.candidate,tree:report.tree,runId:report.runId,
     chrome:command('which',['google-chrome']).trim()}

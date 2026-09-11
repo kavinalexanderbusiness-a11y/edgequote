@@ -153,6 +153,16 @@ jobs:
         run: npm ci --prefix scripts/authenticated-quote-save/tools --ignore-scripts --no-audit --no-fund
       - name: Real isolated Auth, native commit and browser Save
         run: node scripts/authenticated-quote-save/real-platform-proof.mjs
+      - name: Focused regression for the changed owner-render lifecycle
+        run: node node_modules/tsx/dist/cli.mjs scripts/verify-pilot-quote-auxiliary-loader.ts
+      - name: Preserve affected owner-lifecycle regression evidence
+        if: ${{ always() && hashFiles('outputs/pilot-full-quote-save-20260910/quote-auxiliary-loader-proof.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quote-save-owner-lifecycle-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/quote-auxiliary-loader-proof.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve bounded real-platform evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4
