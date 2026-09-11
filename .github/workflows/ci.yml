@@ -15,16 +15,28 @@ on:
   pull_request:
   # So a red main can be re-checked after a fix without an empty commit.
   workflow_dispatch:
+    inputs:
+      proof:
+        description: 'Explicit isolated prerequisite; ordinary CI remains the default'
+        type: choice
+        default: normal
+        options: [normal, quote-save-authority]
+      authority_expectation:
+        description: 'Only for the isolated source-bound authority proof'
+        type: choice
+        default: corrected
+        options: [vulnerable, corrected]
 
 # A newer push to the same branch makes the older run pointless — cancel it
 # rather than queue behind it. Never cancel main: its runs are the record of
 # whether the deployed commit was green.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ inputs.proof || 'normal' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.proof != 'quote-save-authority' }}
     name: typecheck · lint · build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -115,3 +127,53 @@ jobs:
       # actually rendered — the class tsc cannot see.
       - name: Build
         run: npm run build
+
+  quote-save-authority:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.proof == 'quote-save-authority' }}
+    name: Isolated dormant quote Save authority prerequisite
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: pilot_test
+          POSTGRES_PASSWORD: pilot_disposable_password_not_a_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PILOT_EMAIL_DISPOSABLE: EDGEHQ_LOCAL_PG17_PILOT_TEST_ONLY
+      PILOT_AUTHORITY_EXPECT: ${{ inputs.authority_expectation }}
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Mark only the fixed disposable database
+        env:
+          PGPASSWORD: pilot_disposable_password_not_a_secret
+        run: psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
+      - name: Native and synthetic-server owner authority proof
+        run: node node_modules/tsx/dist/cli.mjs scripts/authenticated-quote-save/authority-proof.ts
+      - name: Preserve bounded authority receipt even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quote-save-authority-${{ inputs.authority_expectation }}-${{ github.sha }}
+          path: outputs/authenticated-quote-authority-20260911/authority-proof.json
+          if-no-files-found: error
+          retention-days: 14
