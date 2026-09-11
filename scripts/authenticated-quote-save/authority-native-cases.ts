@@ -212,11 +212,18 @@ export async function runAuthorityCases(observer: Database, expected: 'vulnerabl
       const owner=await boundRoleRpc(observer,f.owner,f.owner)
       assert.deepEqual(owner,{owner_id:f.owner,role:'owner'})
       const mismatch=await boundRoleRpc(observer,f.owner,other.owner);assert.deepEqual(mismatch,{code:'forbidden'})
-      await observer.query('delete from public.business_settings where user_id=$1::uuid',[f.owner])
-      const none=await boundRoleRpc(observer,f.owner,f.owner);assert.deepEqual(none,{owner_id:f.owner,role:'none'})
+      const unowned=await seedAuthorityFixture(observer)
+      await observer.query('delete from public.business_settings where user_id=$1::uuid',[unowned.owner])
+      const none=await boundRoleRpc(observer,unowned.owner,unowned.owner);assert.deepEqual(none,{owner_id:unowned.owner,role:'none'})
+      // Synthetic postgres setup links the technician AFTER the owner's settings
+      // exist. Canonical current_app_role gives that settings row precedence;
+      // the correction must not invent a stronger crew exclusion while it exists.
       await observer.query("insert into public.technicians(user_id,auth_user_id,name,is_active,archived_at) values($1::uuid,$2::uuid,'Synthetic role transition',true,null)",[other.owner,f.owner])
+      const ownerWithCrewLink=await boundRoleRpc(observer,f.owner,f.owner)
+      assert.deepEqual(ownerWithCrewLink,{owner_id:f.owner,role:'owner'})
+      await observer.query('delete from public.business_settings where user_id=$1::uuid',[f.owner])
       const crew=await boundRoleRpc(observer,f.owner,f.owner);assert.deepEqual(crew,{owner_id:f.owner,role:'crew'})
-      record({kind:'corrected-bound-role-rpc',permissions,owner,mismatch,none,crew,
+      record({kind:'corrected-bound-role-rpc',permissions,owner,mismatch,none,ownerWithCrewLink,crew,
         auth:'actual native RPC with explicit platform-prelude SET LOCAL subject; not real JWT authentication',transaction:'outer fixture rolled back'})
     },rollbackObserver)
 

@@ -1,5 +1,6 @@
 import type { Quote, QuoteOption, QuoteService } from '@/types'
 import type { PilotQuoteSaveAuth, PilotQuoteSaveRequestOptions, PilotQuoteSaveStore } from './pilotQuoteSave'
+import { requirePilotQuoteSaveOwner } from './pilotQuoteSaveAuth'
 import { parsePilotQuoteSaveEditorSnapshot, PILOT_QUOTE_SAVE_INTERNAL_BYTES, type PilotQuoteSaveEditorSnapshot } from './pilotQuoteSavePlan'
 import { pilotQuoteSaveEditorDefaults } from './pilotQuoteSaveEditor'
 import { parsePilotQuoteSaveBaseline, type PilotQuoteSaveBaseline } from './pilotQuoteSaveBaseline'
@@ -82,12 +83,12 @@ export async function loadPilotQuoteSaveBaselineRequest(store: Pick<PilotQuoteSa
     const bodyMs = duration(options.bodyTimeoutMs, 10_000), operationMs = duration(options.operationTimeoutMs, 15_000)
     const input = await readQuoteSaveBody(request, bodyMs, text => JSON.parse(text) as unknown)
     if (!row(input) || Object.keys(input).length !== 2 || input.version !== 1 || !uuid(input.quoteId)) throw new Refusal('invalid_request', 400)
-    const session = await bounded(() => auth.getUser(), request.signal, operationMs)
-    if (session.error || !session.data?.user || !uuid(session.data.user.id)) throw new Refusal('unauthenticated', 401)
-    const binding = { ownerId: session.data.user.id, quoteId: input.quoteId }
+    const ownerId = await requirePilotQuoteSaveOwner(auth, request.signal, operationMs)
+    const binding = { ownerId, quoteId: input.quoteId }
     const snapshot = await bounded(signal => store.snapshot(binding.ownerId, binding.quoteId, signal), request.signal, operationMs)
     const safe = quoteSaveJsonCopy(snapshot, PILOT_QUOTE_SAVE_INTERNAL_BYTES, 'invalid_snapshot', 'internal_too_large')
     if (row(safe) && Object.keys(safe).length === 1) {
+      if (safe.code === 'forbidden') throw new Refusal('forbidden', 403)
       if (safe.code === 'not_found') throw new Refusal('not_found', 404)
       if (safe.code === 'snapshot_too_large') throw new Refusal('baseline_too_large', 503)
       if (safe.code === 'unsupported_isolation') throw new Refusal('unavailable', 503)

@@ -63,7 +63,8 @@ export async function runQuoteSaveBaselineNativeCases(db:Database):Promise<TestR
     assert.deepEqual(snapshot.options.map(r=>r.row.id),orderedOptions.map(r=>r.id))
     const store:PilotQuoteSaveStore={async snapshot(owner,quote){calls.push('snapshot');assert.equal(owner,f.owner);assert.equal(quote,f.quote);return quoteSaveSnapshot(db,f)},
       async targets(){calls.push('FORBIDDEN_TARGETS');throw Error('Unexpected target read')},async commit(){calls.push('FORBIDDEN_WRITE');throw Error('Unexpected write')}}
-    const response=await loadPilotQuoteSaveBaselineRequest(store,{getUser:async()=>({data:{user:{id:f.owner}},error:null})},
+    const response=await loadPilotQuoteSaveBaselineRequest(store,{getUser:async()=>({data:{user:{id:f.owner}},error:null}),
+      readOwnerRole:async(expectedOwner)=>{assert.equal(expectedOwner,f.owner);return {data:{owner_id:f.owner,role:'owner'},error:null}}},
       new Request(origin+'/dormant',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({version:1,quoteId:f.quote})}),{trustedOrigin:origin})
     assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store')
     const raw=await response.json(),baseline=parsePilotQuoteSaveBaseline(raw,{ownerId:f.owner,quoteId:f.quote})
@@ -94,7 +95,8 @@ export async function runQuoteSaveBaselineNativeCases(db:Database):Promise<TestR
     const f=await seedQuoteIdentity(db,8204),other=await seedQuoteIdentity(db,8205),before=await rows(db,f.owner)
     let reads=0
     const response=await loadPilotQuoteSaveBaselineRequest({snapshot:async(owner,quote)=>{reads++;return quoteSaveSnapshot(db,{owner,quote})}},
-      {getUser:async()=>({data:{user:{id:other.owner}},error:null})},new Request(origin+'/dormant',{method:'POST',headers:{origin,'content-type':'application/json'},
+      {getUser:async()=>({data:{user:{id:other.owner}},error:null}),
+        readOwnerRole:async(expectedOwner)=>{assert.equal(expectedOwner,other.owner);return {data:{owner_id:other.owner,role:'owner'},error:null}}},new Request(origin+'/dormant',{method:'POST',headers:{origin,'content-type':'application/json'},
         body:JSON.stringify({version:1,quoteId:f.quote})}),{trustedOrigin:origin})
     assert.equal(response.status,404);assert.deepEqual(await response.json(),{code:'not_found'});assert.equal(reads,1)
     assert.deepEqual(await rows(db,f.owner),before)

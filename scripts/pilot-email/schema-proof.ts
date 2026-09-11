@@ -62,7 +62,7 @@ async function main() {
       'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts',
       'src/lib/quotes/pilotQuoteSaveReceipt.ts', 'src/lib/quotes/pilotQuoteSave.ts',
       'src/lib/quotes/pilotQuoteSaveValues.ts', 'src/lib/quotes/pilotQuoteSaveBaseline.ts',
-      'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts',
+      'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts', 'src/lib/quotes/pilotQuoteSaveAuth.ts',
       'src/lib/quotes/pilotQuoteAcceptance.ts', 'src/lib/quotes/pilotQuoteAcceptanceServer.ts',
       'src/hooks/usePilotQuoteAcceptance.ts', 'src/components/quotes/PilotQuoteAcceptanceModal.tsx',
       'supabase/proposals/pilot-quote-acceptance-callers-contract.md',

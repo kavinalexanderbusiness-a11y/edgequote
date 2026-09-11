@@ -167,6 +167,8 @@ jobs:
         env:
           PGPASSWORD: pilot_disposable_password_not_a_secret
         run: psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
+      - name: Focused authority and adapter typecheck
+        run: node node_modules/typescript/bin/tsc --project scripts/authenticated-quote-save/tsconfig.authority.json
       - name: Native and synthetic-server owner authority proof
         run: node node_modules/tsx/dist/cli.mjs scripts/authenticated-quote-save/authority-proof.ts
       - name: Preserve bounded authority receipt even on failure

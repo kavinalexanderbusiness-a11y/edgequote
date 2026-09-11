@@ -47,7 +47,7 @@ async function main() {
       'src/lib/quotes/pilotQuoteAcceptance.ts', 'src/lib/quotes/pilotQuoteAcceptanceServer.ts',
       'src/lib/quotes/pilotQuoteSave.ts', 'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveReceipt.ts',
       'src/lib/quotes/pilotQuoteSaveValues.ts', 'src/lib/quotes/pilotQuoteSaveBaseline.ts',
-      'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts',
+      'src/lib/quotes/pilotQuoteSaveBaselineServer.ts', 'src/lib/quotes/pilotQuoteSaveHttp.ts', 'src/lib/quotes/pilotQuoteSaveAuth.ts',
       'src/lib/quotes/pilotQuoteIdentity.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts']) {
       assert.ok(Object.hasOwn(native.sourcePins, file), 'Missing server source pin: ' + file)
     }

@@ -3,6 +3,22 @@
 -- This is one Save transaction. Legacy acceptance still needs its own companion.
 begin;
 
+-- Bind the canonical role to the expected Auth identity in one authenticated
+-- request. Invoker security, no private business data and no service-role door.
+create function public.pilot_quote_save_owner_role(p_expected_owner uuid) returns jsonb
+language sql stable security invoker set search_path='' as $$
+  select case when p_expected_owner is not null and auth.uid()=p_expected_owner
+    then jsonb_build_object('owner_id',auth.uid(),'role',public.current_app_role())
+    else jsonb_build_object('code','forbidden') end;
+$$;
+
+-- Equivalent to current_app_role's owner branch. Privileged RPCs have no user
+-- JWT, so they must check their server-verified p_owner, not the service identity.
+create function public._pilot_qs_is_owner(p_owner uuid) returns boolean
+language sql stable set search_path='' as $$
+  select exists(select 1 from public.business_settings b where b.user_id=p_owner);
+$$;
+
 create function public._pilot_qs_pick(v jsonb, keys text[]) returns jsonb
 language sql immutable set search_path='' as $$
   select coalesce(jsonb_object_agg(k,v->k),'{}'::jsonb) from unnest(keys) k;
@@ -93,6 +109,7 @@ begin
   if p_owner is null or p_quote is null or (auth.uid() is not null and auth.uid() is distinct from p_owner)
     then return jsonb_build_object('code','not_found'); end if;
   if current_setting('transaction_isolation')<>'read committed' then return jsonb_build_object('code','unsupported_isolation'); end if;
+  if not public._pilot_qs_is_owner(p_owner) then return jsonb_build_object('code','forbidden'); end if;
   return public._pilot_qs_snapshot(p_owner,p_quote);
 end $$;
 
@@ -118,6 +135,7 @@ begin
   if p_owner is null or p_quote is null or (auth.uid() is not null and auth.uid() is distinct from p_owner)
     then return jsonb_build_object('code','not_found'); end if;
   if current_setting('transaction_isolation')<>'read committed' then return jsonb_build_object('code','unsupported_isolation'); end if;
+  if not public._pilot_qs_is_owner(p_owner) then return jsonb_build_object('code','forbidden'); end if;
   if p_identity is null or octet_length(p_identity::text)>16777216 or coalesce(p_expected_revision,'') !~ '^[a-f0-9]{32}$'
     or p_template_ids is null or array_position(p_template_ids,null) is not null
     or cardinality(p_template_ids)<>(select count(distinct x) from unnest(p_template_ids) x)
@@ -273,6 +291,10 @@ begin
   end if;
 
   perform public._pilot_quote_save_lock(p_owner,p_quote,array[target_customer],array[target_property]);
+  -- A pre-lock role read cannot fence revocation. This fresh statement observes
+  -- deletion that won the lock; an existing settings row remains locked until
+  -- this Save commits. Preserve the established lock order and no-write refusal.
+  if not public._pilot_qs_is_owner(p_owner) then return jsonb_build_object('code','forbidden'); end if;
   select * into q from public.quotes where id=p_quote and user_id=p_owner;
   if not found then return jsonb_build_object('code','not_found'); end if;
   s:=public._pilot_qs_snapshot(p_owner,p_quote);
@@ -405,6 +427,9 @@ begin
   return receipt;
 end $$;
 
+revoke all on function public.pilot_quote_save_owner_role(uuid) from public,anon,authenticated,service_role;
+grant execute on function public.pilot_quote_save_owner_role(uuid) to authenticated;
+revoke all on function public._pilot_qs_is_owner(uuid) from public,anon,authenticated,service_role;
 revoke all on function public._pilot_qs_pick(jsonb,text[]) from public,anon,authenticated,service_role;
 revoke all on function public._pilot_quote_save_lock(uuid,uuid,uuid[],uuid[]) from public,anon,authenticated,service_role;
 revoke all on function public._pilot_qs_pricing(uuid) from public,anon,authenticated,service_role;

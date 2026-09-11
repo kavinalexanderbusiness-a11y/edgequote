@@ -13,7 +13,8 @@ const request=(body:unknown={version:1,quoteId:binding.quoteId},init:RequestInit
   method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(body),...init})
 function harness() {
   const snapshot=quoteSaveBaselineFixture(),calls:string[]=[]
-  const auth:PilotQuoteSaveAuth={async getUser(){calls.push('auth');return {data:{user:{id:binding.ownerId}},error:null}}}
+  const auth:PilotQuoteSaveAuth={async getUser(){calls.push('auth');return {data:{user:{id:binding.ownerId}},error:null}},
+    async readOwnerRole(expectedOwner){calls.push('role');assert.equal(expectedOwner,binding.ownerId);return {data:{owner_id:binding.ownerId,role:'owner'},error:null}}}
   const store:PilotQuoteSaveStore={async snapshot(owner,quote,signal){calls.push('snapshot');assert.equal(owner,binding.ownerId);assert.equal(quote,binding.quoteId);assert.equal(signal.aborted,false);return structuredClone(snapshot)},
     async targets(){calls.push('FORBIDDEN_TARGETS');throw Error('Unexpected target read')},async commit(){calls.push('FORBIDDEN_WRITE');throw Error('Unexpected write')}}
   const run=(r=request(),ms=1000)=>loadPilotQuoteSaveBaselineRequest(store,auth,r,{trustedOrigin:origin,bodyTimeoutMs:ms,operationTimeoutMs:ms})
@@ -32,7 +33,7 @@ export async function runQuoteSaveBaselineCases():Promise<TestResult[]> {
     catch(error){results.push({name:'Save baseline: '+name,pass:false,error:error instanceof Error?error.message.slice(0,1500):'Baseline assertion failed'})}}
   await test('one verified-owner snapshot produces only complete whitelisted defaults and measurement',async()=>{
     const h=harness(),result=await responseIs(await h.run(),'baseline',200),parsed=parsePilotQuoteSaveBaseline(result,binding)
-    assert.ok(parsed);assert.deepEqual(h.calls,['auth','snapshot']);assert.equal(parsed.editorRevision,h.snapshot.editor_revision)
+    assert.ok(parsed);assert.deepEqual(h.calls,['auth','role','snapshot']);assert.equal(parsed.editorRevision,h.snapshot.editor_revision)
     assert.equal(parsed.values.initial_price,100);assert.equal(parsed.values.overgrowth_multiplier,1)
     assert.equal(parsed.values.customer_phone,'');assert.equal(parsed.values.value_grade,null);assert.equal(parsed.values.nearby_count,null)
     assert.equal(parsed.values.internal_notes,'Owner scope');assert.deepEqual(parsed.values.measurement_snapshot,h.snapshot.quote.row.measurement_snapshot)
@@ -58,7 +59,7 @@ export async function runQuoteSaveBaselineCases():Promise<TestResult[]> {
     const quoteFields=['quote_number','customer_name','address','service_type','service_template_id','initial_price','weekly_price','biweekly_price','monthly_price',
       'measured_sqft','measurement_snapshot','suggested_price','hours','crew_size','rate','travel_fee','custom_travel_required','show_travel_separately',
       'notes','internal_notes','status','selected_option_id','deposit_type','deposit_value']
-    for(const field of quoteFields){const h=harness();delete h.snapshot.quote.row[field];await responseIs(await h.run(),'invalid_baseline',503);assert.deepEqual(h.calls,['auth','snapshot'])}
+    for(const field of quoteFields){const h=harness();delete h.snapshot.quote.row[field];await responseIs(await h.run(),'invalid_baseline',503);assert.deepEqual(h.calls,['auth','role','snapshot'])}
     for(const field of ['name','description','price','is_recommended','created_at','updated_at']){
       const h=harness();h.snapshot.options=[baselineOption(0)];delete (h.snapshot.options[0].row as Row)[field];await responseIs(await h.run(),'invalid_baseline',503)}
     for(const field of ['service_type','service_template_id','quantity','unit','unit_price','est_minutes','kind','discount_type','discount_value','notes','created_at']){
@@ -81,7 +82,7 @@ export async function runQuoteSaveBaselineCases():Promise<TestResult[]> {
       h=>{h.snapshot.services=undefined as never},h=>{h.snapshot.options=[baselineOption(0)];h.snapshot.options[0].row.user_id=baselineId(99)},
       h=>{h.snapshot.complete=false as true},h=>{h.snapshot.addons[0].row.is_selected='false'},h=>{h.snapshot.services=[baselineService(0)];h.snapshot.options=[baselineOption(0)]},
       h=>{h.snapshot.quote.row.service_template_id=baselineId(99)},h=>{h.snapshot.services=[baselineService(0)];h.snapshot.services[0].row.service_template_id=baselineId(99)}]
-    for(const mutate of mutations){const h=harness();mutate(h);await responseIs(await h.run(),'invalid_baseline',503);assert.deepEqual(h.calls,['auth','snapshot'])}
+    for(const mutate of mutations){const h=harness();mutate(h);await responseIs(await h.run(),'invalid_baseline',503);assert.deepEqual(h.calls,['auth','role','snapshot'])}
   })
   await test('auth, strict origin/body and not-found do not turn into editable defaults',async()=>{
     const h=harness()
@@ -90,6 +91,7 @@ export async function runQuoteSaveBaselineCases():Promise<TestResult[]> {
     await responseIs(await h.run(request(undefined,{body:'broken json'})),'invalid_request',400);assert.deepEqual(h.calls,[])
     h.auth.getUser=async()=>({data:{user:null}});await responseIs(await h.run(),'unauthenticated',401);assert.deepEqual(h.calls,[])
     const missing=harness();missing.store.snapshot=async()=>({code:'not_found'});await responseIs(await missing.run(),'not_found',404)
+    const revoked=harness();revoked.store.snapshot=async()=>({code:'forbidden'});await responseIs(await revoked.run(),'forbidden',403)
     const unavailable=harness();unavailable.store.snapshot=async()=>{throw Error(baselinePrivateSentinel)};await responseIs(await unavailable.run(),'unavailable',503)
   })
   await test('response and complete maximum-generation intent caps are enforced without truncation',async()=>{
@@ -106,7 +108,7 @@ export async function runQuoteSaveBaselineCases():Promise<TestResult[]> {
     const h=harness();let finish:((value:unknown)=>void)|undefined,signal:AbortSignal|undefined
     h.store.snapshot=(_o,_q,s)=>{h.calls.push('snapshot');signal=s;return new Promise(resolve=>{finish=resolve})}
     await responseIs(await h.run(request(),5),'unavailable',503);assert.equal(signal?.aborted,true)
-    finish!(h.snapshot);await Promise.resolve();assert.deepEqual(h.calls,['auth','snapshot'])
+    finish!(h.snapshot);await Promise.resolve();assert.deepEqual(h.calls,['auth','role','snapshot'])
     const aborted=harness(),controller=new AbortController();controller.abort()
     await responseIs(await aborted.run(request(undefined,{signal:controller.signal})),'unavailable',503);assert.deepEqual(aborted.calls,[])
   })

@@ -18,7 +18,8 @@ type Row = Record<string, unknown>
 const origin = 'https://adapter-native.fixture.example.invalid'
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const quoteSaveServerNativeEvidence: Row[] = []
-const auth = (owner: string) => ({ getUser: async () => ({ data: { user: { id: owner } }, error: null }) })
+const auth = (owner: string) => ({ getUser: async () => ({ data: { user: { id: owner } }, error: null }),
+  readOwnerRole: async (expectedOwner: string) => { assert.equal(expectedOwner, owner); return { data: { owner_id: owner, role: 'owner' }, error: null } } })
 const request = (intent: PilotQuoteSaveIntent) => new Request(origin + '/dormant-save', { method: 'POST',
   headers: { origin, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify(intent) })
 

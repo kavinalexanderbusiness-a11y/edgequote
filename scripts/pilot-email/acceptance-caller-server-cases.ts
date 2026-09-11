@@ -7,14 +7,14 @@ import { buildPilotAcceptanceCommitRequest, parsePilotAcceptancePreviewRequest, 
 import { previewQuoteAcceptance, commitQuoteAcceptance, reconcileQuoteAcceptance, createPilotQuoteAcceptanceStore,
   type PilotQuoteAcceptanceStore } from '../../src/lib/quotes/pilotQuoteAcceptanceServer'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { PilotQuoteSaveAuth } from '../../src/lib/quotes/pilotQuoteSave'
+import type { PilotQuoteIdentityAuth } from '../../src/lib/quotes/pilotQuoteSave'
 type Row=Record<string,unknown>
 export const acceptanceCallerServerEvidence:Row[]=[]
 const origin='https://acceptance-caller.fixture.example.invalid'
 const http=(value:unknown,init:RequestInit={})=>new Request(origin+'/dormant',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(value),...init})
 function harness(portal=false) {
   const f=acceptanceCallerFixture(portal),request=buildPilotAcceptanceCommitRequest(f.request,f.expected,f.choice),calls:string[]=[]
-  const auth:PilotQuoteSaveAuth={async getUser(){calls.push('auth');return {data:{user:{id:acceptanceCallerOwner}},error:null}}}
+  const auth:PilotQuoteIdentityAuth={async getUser(){calls.push('auth');return {data:{user:{id:acceptanceCallerOwner}},error:null}}}
   const store:PilotQuoteAcceptanceStore={async preview(a,r,s){calls.push('preview');assert.equal(a.owner,portal?null:acceptanceCallerOwner);assert.equal(s.aborted,false);assert.equal(r.quoteId,request.quoteId);return {code:'preview',expected:f.expected}},
     async commit(a,r,s){calls.push('commit');assert.equal(s.aborted,false);assert.deepEqual(r,request);return f.receipt},async reconcile(){calls.push('reconcile');return {code:'unknown'}}}
   const options={trustedOrigin:origin,bodyTimeoutMs:1000,operationTimeoutMs:1000}

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { PilotQuoteSaveAuth, PilotQuoteSaveRequestOptions } from './pilotQuoteSave'
+import type { PilotQuoteIdentityAuth, PilotQuoteSaveRequestOptions } from './pilotQuoteSave'
 import { copyPilotQuoteSaveJson } from './pilotQuoteSaveReceipt'
 import { PilotQuoteSaveHttpRefusal, pilotQuoteSaveReply, boundedQuoteSaveRead, quoteSaveTimeout,
   validateQuoteSaveRequest, readQuoteSaveBody } from './pilotQuoteSaveHttp'
@@ -54,7 +54,7 @@ const correlation = (request: PilotAcceptanceCommitRequest) => ({clientOperation
 const unknown = (request: PilotAcceptanceCommitRequest) => pilotQuoteSaveReply({code:'unknown',...correlation(request)},503)
 const refused = (reason: PilotAcceptanceRefusal, request?: PilotAcceptanceCommitRequest) =>
   pilotQuoteSaveReply({code:'refused',...(request ? correlation(request) : {}),reason},refusalStatus[reason])
-async function authority(auth: PilotQuoteSaveAuth, r: PilotAcceptancePreviewRequest, signal: AbortSignal, ms: number): Promise<PilotAcceptanceAuthority> {
+async function authority(auth: PilotQuoteIdentityAuth, r: PilotAcceptancePreviewRequest, signal: AbortSignal, ms: number): Promise<PilotAcceptanceAuthority> {
   if (Object.hasOwn(r,'portalToken')) return {owner:null,portalToken:r.portalToken!}
   const user = await boundedQuoteSaveRead(()=>auth.getUser(),signal,ms)
   if (user.error || !user.data?.user || !uuid(user.data.user.id)) throw new PilotQuoteSaveHttpRefusal('unauthenticated',401)
@@ -65,7 +65,7 @@ function errorReason(error: unknown): PilotAcceptanceRefusal {
   if (error instanceof PilotQuoteSaveHttpRefusal && Object.hasOwn(refusalStatus,error.code)) return error.code as PilotAcceptanceRefusal
   return 'unavailable'
 }
-async function handle(mode: 'preview' | 'commit' | 'reconcile', store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth,
+async function handle(mode: 'preview' | 'commit' | 'reconcile', store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth,
   request: Request, options: PilotQuoteSaveRequestOptions): Promise<Response> {
   let captured: PilotAcceptanceCommitRequest | undefined, invoked = false
   try {
@@ -111,9 +111,9 @@ async function handle(mode: 'preview' | 'commit' | 'reconcile', store: PilotQuot
     return refused(errorReason(error),captured)
   }
 }
-export const previewQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
+export const previewQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
   handle('preview',store,auth,request,options)
-export const commitQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
+export const commitQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
   handle('commit',store,auth,request,options)
-export const reconcileQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
+export const reconcileQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
   handle('reconcile',store,auth,request,options)

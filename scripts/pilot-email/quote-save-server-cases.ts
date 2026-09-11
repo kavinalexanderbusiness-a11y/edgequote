@@ -79,7 +79,10 @@ function harness() {
     async commit(o, q, plan, signal) { calls.push('commit'); assert.equal(o, owner); assert.equal(q, quote); assert.equal(signal.aborted, false);
       plans.push(clone(plan)); return f.receipt(plan) },
   }
-  const auth: PilotQuoteSaveAuth = { async getUser() { calls.push('auth'); return { data: { user: { id: owner } }, error: null } } }
+  const auth: PilotQuoteSaveAuth = {
+    async getUser() { calls.push('auth'); return { data: { user: { id: owner } }, error: null } },
+    async readOwnerRole(expectedOwner) { calls.push('role'); assert.equal(expectedOwner, owner); return { data: { owner_id: owner, role: 'owner' }, error: null } },
+  }
   const run = (r = request(f.intent), options: Partial<PilotQuoteSaveRequestOptions> = {}) => savePilotQuoteSaveRequest(store, auth, r,
     { trustedOrigin: origin, bodyTimeoutMs: 1000, operationTimeoutMs: 1000, ...options })
   return { ...f, calls, plans, store, auth, run }
@@ -106,7 +109,7 @@ export async function runQuoteSaveServerCases(): Promise<TestResult[]> {
   }
   await test('verified owner, original baseline, two readonly RPCs and exactly one complete commit', async () => {
     const h = harness(), result = await responseIs(await h.run(), 'committed', 200)
-    assert.deepEqual(h.calls, ['auth', 'snapshot', 'targets', 'commit'])
+    assert.deepEqual(h.calls, ['auth', 'role', 'snapshot', 'targets', 'commit'])
     assert.equal(h.plans.length, 1); assert.equal(h.plans[0].expected_editor_revision, revision)
     assert.equal((result.quote as Row).notes, h.intent.values.notes)
     assert.equal(Object.hasOwn(result, 'expected'), false)
@@ -205,7 +208,7 @@ export async function runQuoteSaveServerCases(): Promise<TestResult[]> {
       (s: PilotQuoteSaveEditorSnapshot) => { s.identity.quote.user_id = id(99) },
       (s: PilotQuoteSaveEditorSnapshot) => { s.quote.row.id = id(99) }]) {
       const h = harness(); change(h.snapshot)
-      await responseIs(await h.run(), 'unavailable', 503); assert.deepEqual(h.calls, ['auth', 'snapshot'])
+      await responseIs(await h.run(), 'unavailable', 503); assert.deepEqual(h.calls, ['auth', 'role', 'snapshot'])
     }
   })
   await test('incomplete, malformed and stale baseline cannot be silently refreshed', async () => {
@@ -214,9 +217,10 @@ export async function runQuoteSaveServerCases(): Promise<TestResult[]> {
       [{ ...fixture().snapshot, services: undefined }, 'unavailable', 503],
       [{ ...fixture().snapshot, editor_revision: '9'.repeat(32) }, 'stale_editor', 409],
       [{ code: 'not_found' }, 'not_found', 404],
+      [{ code: 'forbidden' }, 'forbidden', 403],
     ] as const) {
       const h = harness(); h.store.snapshot = async () => { h.calls.push('snapshot'); return value }
-      await responseIs(await h.run(), code, status); assert.deepEqual(h.calls, ['auth', 'snapshot'])
+      await responseIs(await h.run(), code, status); assert.deepEqual(h.calls, ['auth', 'role', 'snapshot'])
     }
   })
   await test('failed, partial, foreign and stale target reads cause zero commits', async () => {
@@ -232,27 +236,29 @@ export async function runQuoteSaveServerCases(): Promise<TestResult[]> {
       }
       const code = kind === 'foreign' ? 'stale_targets' : ['stale', 'refusal'].includes(kind) ? 'stale_editor' : 'unavailable'
       await responseIs(await h.run(), code, code === 'unavailable' ? 503 : 409)
-      assert.deepEqual(h.calls, ['auth', 'snapshot', 'targets'])
+      assert.deepEqual(h.calls, ['auth', 'role', 'snapshot', 'targets'])
     }
   })
   await test('read timeout and precommit cancellation issue no mutation', async () => {
     const h = harness(); h.store.snapshot = () => { h.calls.push('snapshot'); return new Promise(() => {}) }
-    await responseIs(await h.run(undefined, { operationTimeoutMs: 5 }), 'unavailable', 503); assert.deepEqual(h.calls, ['auth', 'snapshot'])
+    await responseIs(await h.run(undefined, { operationTimeoutMs: 5 }), 'unavailable', 503); assert.deepEqual(h.calls, ['auth', 'role', 'snapshot'])
     const a = harness(), abort = new AbortController(); a.store.targets = async s => { a.calls.push('targets'); abort.abort(); return a.targets(s) }
     await responseIs(await a.run(request(a.intent, { signal: abort.signal })), 'unavailable', 503)
-    assert.deepEqual(a.calls, ['auth', 'snapshot', 'targets'])
+    assert.deepEqual(a.calls, ['auth', 'role', 'snapshot', 'targets'])
   })
-  await test('only exact proven pre-DML refusal object is a definitive conflict', async () => {
-    const h = harness(); h.store.commit = async () => { h.calls.push('commit'); return { code: 'stale_editor' } }
-    await responseIs(await h.run(), 'stale_editor', 409); assert.deepEqual(h.calls, ['auth', 'snapshot', 'targets', 'commit'])
-    const extra = harness(); extra.store.commit = async () => { extra.calls.push('commit'); return { code: 'stale_editor', detail: privateSentinel } }
-    await responseIs(await extra.run(), 'unknown', 503); assert.equal(extra.calls.filter(c => c === 'commit').length, 1)
+  await test('only exact proven pre-DML refusal object is a definitive refusal', async () => {
+    for (const [code, status] of [['stale_editor', 409], ['forbidden', 403]] as const) {
+      const h = harness(); h.store.commit = async () => { h.calls.push('commit'); return { code } }
+      await responseIs(await h.run(), code, status); assert.deepEqual(h.calls, ['auth', 'role', 'snapshot', 'targets', 'commit'])
+      const extra = harness(); extra.store.commit = async () => { extra.calls.push('commit'); return { code, detail: privateSentinel } }
+      await responseIs(await extra.run(), 'unknown', 503); assert.equal(extra.calls.filter(c => c === 'commit').length, 1)
+    }
   })
   await test('lost response remains unknown; exactly one dispatch with no automatic retry', async () => {
     const h = harness(); let committed = false
     h.store.commit = async () => { h.calls.push('commit'); committed = true; throw new Error(privateSentinel) }
     await responseIs(await h.run(), 'unknown', 503); assert.equal(committed, true)
-    assert.deepEqual(h.calls, ['auth', 'snapshot', 'targets', 'commit'])
+    assert.deepEqual(h.calls, ['auth', 'role', 'snapshot', 'targets', 'commit'])
     quoteSaveServerEvidence.push({ case: 'response_loss', dispatched: 1, status: 'unknown', retry: false, rollbackClaim: false })
   })
   await test('commit timeout aborts transport; late valid acknowledgement is not returned', async () => {
@@ -260,7 +266,7 @@ export async function runQuoteSaveServerCases(): Promise<TestResult[]> {
     h.store.commit = (_o, _q, p, s) => { h.calls.push('commit'); plan = p; signal = s; return new Promise(resolve => { finish = resolve }) }
     await responseIs(await h.run(undefined, { operationTimeoutMs: 5 }), 'unknown', 503)
     assert.equal(signal?.aborted, true); finish!(h.receipt(plan!)); await Promise.resolve()
-    assert.deepEqual(h.calls, ['auth', 'snapshot', 'targets', 'commit'])
+    assert.deepEqual(h.calls, ['auth', 'role', 'snapshot', 'targets', 'commit'])
   })
   await test('client disconnect after commit dispatch stays unknown', async () => {
     const h = harness(), abort = new AbortController()

@@ -1,5 +1,7 @@
 import { PilotQuoteSaveHttpRefusal as Refusal, pilotQuoteSaveReply as reply, pilotQuoteSaveUnavailable as unavailable, boundedQuoteSaveRead as bounded, quoteSaveTimeout as duration, validateQuoteSaveRequest as validateRequest, readQuoteSaveBody } from './pilotQuoteSaveHttp'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { requirePilotQuoteSaveOwner, type PilotQuoteSaveAuth } from './pilotQuoteSaveAuth'
+export type { PilotQuoteSaveAuth, PilotQuoteIdentityAuth } from './pilotQuoteSaveAuth'
 import {
   buildPilotQuoteSavePlan, parsePilotQuoteSaveIntent, PilotQuoteSavePlanError,
   PILOT_QUOTE_SAVE_INTERNAL_BYTES,
@@ -11,12 +13,9 @@ import {
 } from './pilotQuoteSaveReceipt'
 
 // Dormant SERVER adapter only: no route, credentials, live client or loader is
-// created here. A future mount must supply verified getUser auth and a separate
+// created here. A future mount must supply canonical owner auth and a separate
 // service client. The only write is the one complete transaction below.
 type Row = Record<string, unknown>
-export interface PilotQuoteSaveAuth {
-  getUser(): Promise<{ data: { user: { id: string } | null }; error?: unknown }>
-}
 export interface PilotQuoteSaveStore {
   snapshot(owner: string, quote: string, signal: AbortSignal): Promise<unknown>
   targets(selection: PilotQuoteSaveTargetRequest, signal: AbortSignal): Promise<unknown>
@@ -62,7 +61,7 @@ export function createPilotQuoteSaveStore(sb: SupabaseClient): PilotQuoteSaveSto
 // These are exact pre-DML return objects in the pinned transaction. An SDK
 // error (including SQL errors), unexpected keys or any unknown code is NOT
 // proof of refusal after dispatch and stays unknown.
-const refusalStatus: Record<string, number> = { not_found: 404, stale_editor: 409, stale_targets: 409,
+const refusalStatus: Record<string, number> = { forbidden: 403, not_found: 404, stale_editor: 409, stale_targets: 409,
   retained_customer_binding: 409, pricing_settings_unavailable: 409, invalid_plan: 409,
   unsupported_isolation: 503, snapshot_too_large: 503 }
 function knownRefusal(value: unknown): Refusal | null {
@@ -155,9 +154,7 @@ export async function savePilotQuoteSaveRequest(store: PilotQuoteSaveStore, auth
     validateRequest(request, options.trustedOrigin)
     const bodyMs = duration(options.bodyTimeoutMs, 10_000), operationMs = duration(options.operationTimeoutMs, 15_000)
     const intent = await readQuoteSaveBody(request, bodyMs, parsePilotQuoteSaveIntent)
-    const session = await bounded(() => auth.getUser(), request.signal, operationMs)
-    if (session.error || !session.data?.user || !uuid(session.data.user.id)) throw new Refusal('unauthenticated', 401)
-    const owner = session.data.user.id
+    const owner = await requirePilotQuoteSaveOwner(auth, request.signal, operationMs)
     const snapshot = bindSnapshot(await bounded(signal => store.snapshot(owner, intent.quoteId, signal), request.signal, operationMs), owner, intent)
     const plan = await buildPilotQuoteSavePlan(snapshot, intent, async selection => {
       if (selection.owner !== owner || selection.quote_id !== intent.quoteId || selection.expected_editor_revision !== intent.expectedEditorRevision) throw unavailable()

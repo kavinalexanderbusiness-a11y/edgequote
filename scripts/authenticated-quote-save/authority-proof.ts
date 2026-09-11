@@ -53,6 +53,16 @@ async function main() {
     report.native = await runAuthorityCases(db, expected)
     const result = report.native as { pass: boolean; tests: { pass: boolean }[]; allSessionsClosed: boolean }
     report.pass = result.pass === true && result.tests.length > 0 && result.tests.every(t => t.pass) && result.allSessionsClosed
+    if (expected === 'corrected') {
+      const { runAuthorityHttpCases } = await import('./authority-http-cases')
+      const { runQuoteSaveServerCases } = await import('../pilot-email/quote-save-server-cases')
+      const { runQuoteSaveBaselineCases } = await import('../pilot-email/quote-save-baseline-cases')
+      const http = await runAuthorityHttpCases()
+      const regression = [...await runQuoteSaveServerCases(), ...await runQuoteSaveBaselineCases()]
+      report.http = http; report.regression = regression
+      report.pass = report.pass && http.length === 27 && http.every(t => t.pass)
+        && regression.length === 39 && regression.every(t => t.pass)
+    }
   } catch (error) {
     report.error = error instanceof Error ? error.message.slice(0, 2000) : 'Authority proof failed'
   } finally {
@@ -65,7 +75,8 @@ async function main() {
     writeFileSync(join(output, 'authority-proof.json'), JSON.stringify(report, null, 2))
     const native = report.native as { tests?: { name: string; pass: boolean; error?: string }[] } | undefined
     console.log(JSON.stringify({ pass: report.pass, expected: report.expected, head: report.head,
-      tests: native?.tests, error: report.error, observerClosed: report.observerClosed }))
+      tests: native?.tests, http: report.http, regression: report.regression,
+      error: report.error, observerClosed: report.observerClosed }))
     if (!report.pass) process.exitCode = 1
   }
 }
