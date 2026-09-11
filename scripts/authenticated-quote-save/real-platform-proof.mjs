@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, chmodSync } from 'node:fs'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { internalBootstrapRelays } from './internal-bootstrap-relays.mjs'
 
 const source = realpathSync(fileURLToPath(new URL('../../', import.meta.url)))
 const output = join(source, 'outputs/authenticated-quote-save-real-20260911')
@@ -12,7 +13,7 @@ const network = 'edgequote-auth-save-internal-' + process.env.GITHUB_RUN_ID
 const report = {startedAt: new Date().toISOString(), pass: false, sourcePins: {}, events: [], cleanup: {},
   scope: 'Disposable real GoTrue/PostgREST/PG and source-bound Next browser Save. No production or provider activation.'}
 const digest = value => createHash('sha256').update(value).digest('hex')
-let taskRoot, cli, platform, child, netCreated = false
+let taskRoot, cli, platform, child, relays, netCreated = false
 const sensitive = []
 const scrub = value => {
   let text = String(value)
@@ -70,8 +71,34 @@ async function main() {
   for(const img of images) docker('pull',img)
   docker('network','create','--internal','--label','edgequote.auth-save='+process.env.GITHUB_RUN_ID,network);netCreated=true
   report.events.push({event:'internal network created',at:new Date().toISOString()})
-  // CLI output includes local keys; capture silently and never place it in artifacts.
-  command(cli,['start','--network-id',network,'--exclude','realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor'],480000)
+  const bootstrapNetwork=JSON.parse(docker('network','inspect',network))[0]
+  if(bootstrapNetwork.Internal!==true)throw Error('Bootstrap network lost internal isolation')
+  report.bootstrapNetwork={id:bootstrapNetwork.Id,internal:true}
+  report.bootstrapRelays=[]
+  relays=internalBootstrapRelays({network,project,evidence:report.bootstrapRelays,inspect:name=>{
+    try{return JSON.parse(docker('inspect',name))[0]}catch{return null}
+  }})
+  // Async start lets fixed localhost relays appear during the CLI's real retry
+  // window, after each target is inspected. No healthcheck or SQL is bypassed.
+  await new Promise((done,reject)=>{
+    const starter=spawn(cli,['start','--network-id',network,'--exclude','realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor'],
+      {cwd:platform,env,stdio:['ignore','pipe','pipe']})
+    let log='',running=true,busy=false,stopping=false,relayError,force,discovering=Promise.resolve()
+    const stop=()=>{
+      if(stopping||!running)return
+      stopping=true;starter.kill('SIGTERM');force=setTimeout(()=>starter.kill('SIGKILL'),10000)
+    }
+    const timer=setTimeout(()=>{relayError=Error('Bounded CLI bootstrap timeout');stop()},480000)
+    const tick=setInterval(()=>{
+      if(!running||busy)return
+      busy=true;discovering=relays.discover().catch(error=>{relayError=error;stop()}).finally(()=>{busy=false})
+    },250)
+    starter.stdout.on('data',b=>{log=(log+b).slice(-12000)})
+    starter.stderr.on('data',b=>{log=(log+b).slice(-12000)})
+    const ended=()=>{running=false;clearInterval(tick);clearTimeout(timer);clearTimeout(force)}
+    starter.on('error',error=>{ended();reject(error)})
+    starter.on('exit',code=>{ended();void discovering.then(()=>{code===0&&!relayError?done():reject(relayError||Error('Pinned CLI bootstrap failed: '+scrub(log)))})})
+  })
   const names=docker('ps','--format','{{.Names}}').trim().split('\n').filter(n=>n.includes(project))
   const expected=['db','kong','auth','rest','storage'].map(s=>'supabase_'+s+'_'+project)
   if(names.length!==expected.length||expected.some(n=>!names.includes(n)))throw Error('Unexpected running platform container set: '+names.join(','))
@@ -91,6 +118,8 @@ async function main() {
     if(normalized!==images[idx])throw Error('Platform image override: '+c.image)
   }
   const status=JSON.parse(command(cli,['status','--output','json']))
+  await relays.close()
+  if(report.bootstrapRelays.length!==2||report.bootstrapRelays.some(p=>!p.opened||!p.closed||p.listenerError))throw Error('Bootstrap relay evidence incomplete')
   const api=new URL(status.API_URL),dbURL=new URL(status.DB_URL)
   if(!['127.0.0.1','localhost'].includes(api.hostname)||api.port!=='8000'||!['127.0.0.1','localhost'].includes(dbURL.hostname)||dbURL.port!=='54322'||dbURL.pathname!=='/postgres')throw Error('CLI returned unexpected disposable targets')
   if(!status.ANON_KEY||!status.SERVICE_ROLE_KEY||!dbURL.password)throw Error('Actual local platform credentials missing')
@@ -137,6 +166,7 @@ async function main() {
 }
 try{await main()}catch(error){report.error=scrub(error.message)}
 finally{
+  if(relays){try{await relays.close();report.cleanup.bootstrapRelaysClosed=true}catch(error){report.cleanup.relayError=scrub(error.message);report.pass=false}}
   if(cli&&platform){
     try{command(cli,['stop','--no-backup'],180000);report.cleanup.cliStopped=true}
     catch(error){report.cleanup.error=scrub(error.message);report.pass=false}

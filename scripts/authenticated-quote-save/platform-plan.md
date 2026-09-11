@@ -102,6 +102,16 @@ with `email_confirm:true`. Do not invite, send email, or insert Auth users in SQ
    `--exclude realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor`.
    Unknown exclusions only warn, so validate exact expected containers and do not
    use the obsolete `inbucket` name. Never ignore a health check.
+   Actual run34641699561 established that the pinned CLI cannot reach its
+   localhost54322 bootstrap connection on this internal network. The successor
+   uses two independently reviewed raw TCP bootstrap relays, bound only to
+   127.0.0.1:54322 and127.0.0.1:8000 after inspecting the exact running DB/Kong
+   container and pinned image on the sole internal network. They forward only
+   to that container's private IP and native port; no SQL/API reply is changed.
+   Occupied ports fail. Both relays close before the namespace browser workload.
+   This preserves the network's external isolation and actual CLI retries and
+   health checks. See Docker's internal-network host-access rule and the pinned
+   CLI db-setup.ts/start.handler.ts cited by the independent review.
 3. Verify all five running containers belong only to the intended internal
    network. Record their image digests and network identity. Auth and Storage
    must remain enabled so their real schema migration jobs run.
