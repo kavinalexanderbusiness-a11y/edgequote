@@ -2,7 +2,7 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { resolve, join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { build } from 'esbuild'
 import ts from 'typescript'
 import type { TestResult } from './database'
@@ -184,7 +184,13 @@ window.__pilotResults=results;
 `
 }
 
-/** Explicit focused browser proof. Caller owns presentation of these results. */
+/** Bounded, synthetic-only process evidence; a future receipt may include this
+ * alongside the unchanged 20 browser assertions. No environment is collected. */
+export const quoteSaveBrowserHarnessEvidence: Record<string, unknown> = {}
+
+/** Explicit focused browser proof. One isolated process launch, no startup
+ * retry/skip or sandbox bypass. Readiness requires a matching live CDP endpoint,
+ * not merely a port file. Caller owns presentation of these results. */
 export async function runQuoteSaveCallerCases(chrome = 'C:/Program Files/Google/Chrome/Application/chrome.exe'): Promise<TestResult[]> {
   const bundle = await build({ stdin: { contents: browserSource(), sourcefile: 'quote-save-caller-fixture.tsx', resolveDir: process.cwd(), loader: 'tsx' },
     write: false, bundle: true, platform: 'browser', format: 'esm', target: 'chrome120', jsx: 'automatic', tsconfig: resolve('tsconfig.json'),
@@ -194,42 +200,149 @@ export async function runQuoteSaveCallerCases(chrome = 'C:/Program Files/Google/
     res.setHeader('Content-Type', req.url === '/fixture.js' ? 'text/javascript' : 'text/html')
     res.end(req.url === '/fixture.js' ? bundle.outputFiles[0].text : '<!doctype html><title>Isolated quote Save proof</title><script type="module" src="/fixture.js"></script>')
   })
-  await new Promise<void>(r=>server.listen(0,'127.0.0.1',r))
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('No isolated loopback port')
-  const profileRoot = resolve(tmpdir()), profile = mkdtempSync(join(profileRoot,'edgehq-save-proof-'))
-  const child = spawn(chrome,['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-background-networking',
-    '--disable-component-update','--disable-sync','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore',windowsHide:true})
+  for (const key of Object.keys(quoteSaveBrowserHarnessEvidence)) delete quoteSaveBrowserHarnessEvidence[key]
+  const evidence = quoteSaveBrowserHarnessEvidence
+  evidence.launches = 0
+  const profileRoot = resolve(tmpdir()), wait = (ms:number)=>new Promise(r=>setTimeout(r,ms))
+  let profile: string | null = null, child: ChildProcess | null = null
   let socket: WebSocket | null = null
-  const wait = (ms:number)=>new Promise(r=>setTimeout(r,ms))
+  let childClosed = false, exit: { code: number | null; signal: NodeJS.Signals | null } | null = null
+  let spawnError = '', stderr = '', phase = 'loopback setup', readyError = ''
+  let launchedAt = 0, result: TestResult[] | null = null, failure: Error | null = null
+  let send: ((method:string,params?:Record<string,unknown>,timeoutMs?:number)=>Promise<any>) | null = null
+  const diagnostic = (message: string) => {
+    const error = new Error([
+      message, `phase=${phase}; elapsedMs=${launchedAt ? Date.now()-launchedAt : 0}; exit=${JSON.stringify(exit)}; spawnError=${spawnError || 'none'}`,
+      `stderr=${stderr.trim().slice(-1200) || '(empty)'}`, readyError ? `readiness=${readyError.slice(0,250)}` : '',
+    ].filter(Boolean).join('\n').slice(0,1900))
+    error.name='IsolatedBrowserHarnessError'
+    return error
+  }
+  const ensureAlive = () => {
+    if (spawnError || childClosed || exit) throw diagnostic('Isolated Chrome exited before proof completion')
+  }
+  const loopbackSocket = (value: unknown, port: string): value is string => {
+    try { const u = new URL(String(value)); return u.protocol === 'ws:' && u.hostname === '127.0.0.1' && u.port === port && u.pathname.startsWith('/devtools/') } catch { return false }
+  }
   try {
-    let port = ''
-    for (let attempt=0;attempt<100;attempt++) { try { port=readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n')[0];break } catch { await wait(100) } }
-    if (!port) throw new Error('Isolated Chrome did not start')
-    const tabs = await fetch('http://127.0.0.1:'+port+'/json/list').then(r=>r.json()) as {type:string;webSocketDebuggerUrl:string}[]
-    const target = tabs.find(t=>t.type==='page')
-    if (!target) throw new Error('Isolated browser page unavailable')
-    socket = new WebSocket(target.webSocketDebuggerUrl)
-    await new Promise<void>((res,rej)=>{socket!.addEventListener('open',()=>res(),{once:true});socket!.addEventListener('error',()=>rej(new Error('CDP failed')),{once:true})})
+    await new Promise<void>((res,rej)=>{server.once('error',rej);server.listen(0,'127.0.0.1',()=>{server.removeListener('error',rej);res()})})
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('No isolated loopback port')
+    profile = mkdtempSync(join(profileRoot,'edgehq-save-proof-'))
+    phase = 'Chrome startup'; launchedAt = Date.now(); evidence.launches = 1
+    child = spawn(chrome,['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-background-networking',
+      '--disable-component-update','--disable-sync','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],
+    {stdio:['ignore','ignore','pipe'],windowsHide:true,detached:process.platform !== 'win32'})
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data',(chunk:string)=>{stderr=(stderr+chunk).slice(-4096)})
+    child.once('error',error=>{spawnError=error.message.slice(0,400)})
+    child.once('exit',(code,signal)=>{exit={code,signal}})
+    child.once('close',()=>{childClosed=true})
+    let targetUrl = '', port = ''
+    const startupDeadline = launchedAt+30_000
+    while (Date.now()<startupDeadline) {
+      ensureAlive()
+      try {
+        const parts = readFileSync(join(profile,'DevToolsActivePort'),'utf8').trim().split(/\r?\n/)
+        if (!/^\d{1,5}$/.test(parts[0]) || Number(parts[0])<1 || Number(parts[0])>65535 || !parts[1]?.startsWith('/devtools/browser/')) throw new Error('Incomplete DevTools port announcement')
+        port = parts[0]
+        const get = async (path:string) => {
+          const response = await fetch(`http://127.0.0.1:${port}${path}`,{signal:AbortSignal.timeout(Math.max(1,Math.min(1000,startupDeadline-Date.now())))})
+          if (!response.ok) throw new Error(`CDP ${path} returned ${response.status}`)
+          return response.json()
+        }
+        const version = await get('/json/version')
+        if (!loopbackSocket(version.webSocketDebuggerUrl,port) || new URL(version.webSocketDebuggerUrl).pathname !== parts[1]) throw new Error('CDP endpoint does not match this isolated profile')
+        const tabs = await get('/json/list') as {type:string;webSocketDebuggerUrl:string}[]
+        const target = Array.isArray(tabs) && tabs.find(t=>t.type==='page' && loopbackSocket(t.webSocketDebuggerUrl,port))
+        if (!target) throw new Error('CDP is listening but initial page is not ready')
+        targetUrl=target.webSocketDebuggerUrl; evidence.browserVersion=version.Browser; break
+      } catch (error) { readyError=error instanceof Error ? error.message : 'CDP readiness failed' }
+      await wait(Math.min(100,Math.max(0,startupDeadline-Date.now())))
+    }
+    ensureAlive()
+    if (!targetUrl) throw diagnostic('Isolated Chrome did not become CDP-ready within 30000ms')
+    evidence.startupMs=Date.now()-launchedAt
+    phase='CDP connection'; socket=new WebSocket(targetUrl)
+    await new Promise<void>((res,rej)=>{
+      const timer=setTimeout(()=>rej(diagnostic('CDP connection timed out')),3000)
+      socket!.addEventListener('open',()=>{clearTimeout(timer);res()},{once:true})
+      socket!.addEventListener('error',()=>{clearTimeout(timer);rej(diagnostic('CDP connection failed'))},{once:true})
+      socket!.addEventListener('close',()=>{clearTimeout(timer);rej(diagnostic('CDP closed during connection'))},{once:true})
+    })
     let nextId=0
-    const pending = new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void}>()
+    const pending = new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
     const errors:string[]=[]
-    socket.addEventListener('message',event=>{const m=JSON.parse(String(event.data));if(m.id){const p=pending.get(m.id);pending.delete(m.id);if(m.error)p?.reject(new Error(m.error.message));else p?.resolve(m.result)}
-      else if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description??m.params.exceptionDetails.text)})
-    const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((res,rej)=>{const id=++nextId;pending.set(id,{resolve:res,reject:rej});socket!.send(JSON.stringify({id,method,params}))})
+    socket.addEventListener('message',event=>{
+      try {
+        const m=JSON.parse(String(event.data))
+        if(m.id){const p=pending.get(m.id);if(p){clearTimeout(p.timer);pending.delete(m.id);if(m.error)p.reject(new Error(m.error.message));else p.resolve(m.result)}}
+        else if(m.method==='Runtime.exceptionThrown')errors.push(String(m.params.exceptionDetails.exception?.description??m.params.exceptionDetails.text).slice(0,1500))
+      } catch { errors.push('Malformed CDP event') }
+    })
+    const rejectPending=()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(diagnostic('CDP connection closed'))}pending.clear()}
+    socket.addEventListener('close',rejectPending);socket.addEventListener('error',rejectPending)
+    send=(method:string,params:Record<string,unknown>={},timeoutMs=5000)=>new Promise<any>((res,rej)=>{
+      const id=++nextId
+      const timer=setTimeout(()=>{pending.delete(id);rej(diagnostic(`CDP ${method} timed out`))},timeoutMs)
+      pending.set(id,{resolve:res,reject:rej,timer})
+      try { socket!.send(JSON.stringify({id,method,params})) } catch { clearTimeout(timer);pending.delete(id);rej(diagnostic('CDP send failed')) }
+    })
+    phase='browser assertions'
     await send('Runtime.enable');await send('Page.enable');await send('Page.navigate',{url:'http://127.0.0.1:'+address.port})
-    for(let attempt=0;attempt<180;attempt++) {
+    const proofDeadline=Date.now()+25_000
+    while(Date.now()<proofDeadline) {
+      ensureAlive()
       if(errors.length)throw new Error(errors.join('\n').slice(0,3000))
-      const result=await send('Runtime.evaluate',{expression:'window.__pilotResults ?? null',returnByValue:true})
-      if(Array.isArray(result.result?.value))return result.result.value as TestResult[]
+      const evaluated=await send('Runtime.evaluate',{expression:'window.__pilotResults ?? null',returnByValue:true})
+      if(Array.isArray(evaluated.result?.value)){result=evaluated.result.value as TestResult[];break}
       await wait(100)
     }
-    throw new Error('Isolated browser proof timed out')
+    if(!result)throw diagnostic('Isolated browser proof timed out')
+  } catch(error) {
+    failure=error instanceof Error && error.name==='IsolatedBrowserHarnessError' ? error
+      : diagnostic(error instanceof Error ? error.message : 'Isolated browser proof failed')
   } finally {
-    socket?.close(); child.kill();await new Promise<void>(r=>server.close(()=>r()));await wait(300)
-    // Delete only the fresh, verified task-owned profile; never the user's Chrome profile.
-    if(resolve(profile).startsWith(profileRoot+sep)&&profile.includes('edgehq-save-proof-')) {
-      try { rmSync(profile,{recursive:true,force:true,maxRetries:3,retryDelay:100}) } catch { /* Chrome can briefly retain profile locks */ }
+    phase='cleanup'
+    const cleanupErrors:string[]=[]
+    if(socket?.readyState===WebSocket.OPEN && send){try{await send('Browser.close',{},1500)}catch{/* closing the browser can close CDP before its reply */}}
+    try{socket?.close()}catch{/* failed connection has no open socket */}
+    if(child?.pid) {
+      const pid=child.pid, closingDeadline=Date.now()+1500
+      while(!childClosed && Date.now()<closingDeadline)await wait(50)
+      if(process.platform==='win32') {
+        if(!childClosed) {
+          // Only the owned child PID/tree. Never kill an existing user's Chrome.
+          const killer=spawn('taskkill.exe',['/PID',String(pid),'/T','/F'],{stdio:'ignore',windowsHide:true})
+          await new Promise<void>(res=>{const timer=setTimeout(()=>{killer.kill();res()},2000);killer.once('error',()=>{clearTimeout(timer);res()});killer.once('close',()=>{clearTimeout(timer);res()})})
+        }
+      } else {
+        // detached=true establishes a dedicated POSIX process group. Descendants
+        // are still closed even if the browser's original process already exited.
+        const signal=(kind:NodeJS.Signals)=>{try{process.kill(-pid,kind)}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')cleanupErrors.push('Could not signal isolated Chrome process group')}}
+        signal('SIGTERM');await wait(150);signal('SIGKILL')
+        const groupExists=()=>{try{process.kill(-pid,0);return true}catch(error){return (error as NodeJS.ErrnoException).code!=='ESRCH'}}
+        const groupDeadline=Date.now()+1500
+        while(groupExists() && Date.now()<groupDeadline)await wait(50)
+        evidence.processGroupGone=!groupExists()
+        if(!evidence.processGroupGone)cleanupErrors.push('Isolated Chrome process group still exists after cleanup')
+      }
+      const exitDeadline=Date.now()+2000
+      while(!childClosed && Date.now()<exitDeadline)await wait(50)
+      if(!childClosed)cleanupErrors.push('Isolated Chrome child did not close')
     }
+    server.closeAllConnections()
+    await new Promise<void>(res=>server.close(()=>res()))
+    // Delete only the exact fresh profile under tmpdir, after the child closes.
+    if(profile && resolve(profile).startsWith(profileRoot+sep) && profile.startsWith(join(profileRoot,'edgehq-save-proof-'))) {
+      try { rmSync(profile,{recursive:true,force:true,maxRetries:3,retryDelay:100}) }
+      catch { cleanupErrors.push('Isolated Chrome profile could not be removed') }
+    }
+    evidence.exit=exit;evidence.childClosed=childClosed;evidence.spawnError=spawnError || null
+    evidence.stderr=stderr.trim().slice(-1600);evidence.cleanupErrors=cleanupErrors
+    evidence.profileRemoved=!!profile && !cleanupErrors.some(e=>e.includes('profile'))
+    if(cleanupErrors.length)failure=new Error([failure?.message,...cleanupErrors].filter(Boolean).join('\n').slice(0,2000))
   }
+  if(failure)throw failure
+  return result!
 }

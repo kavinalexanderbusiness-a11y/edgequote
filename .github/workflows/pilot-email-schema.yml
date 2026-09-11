@@ -88,6 +88,8 @@ jobs:
           psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
       - name: Actual PostgreSQL17 source and integration proof
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/schema-proof.ts
+      - name: Dormant quote Save HTTP boundary and native adapter proof
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-server-proof.ts
       - name: Isolated quote Save browser and default autosave proof
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-browser-proof.ts /usr/bin/google-chrome
       - name: Preserve the exact proof receipt
@@ -104,5 +106,13 @@ jobs:
         with:
           name: pilot-quote-save-browser-${{ github.sha }}
           path: outputs/pilot-full-quote-save-20260910/browser-save-proof.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve the separate server proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quote-save-server-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/server-save-proof.json
           if-no-files-found: error
           retention-days: 14

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { verifyAutosaveOwnership } from '../lib/autosaveOwnership'
-import { runQuoteSaveCallerCases } from './quote-save-caller-cases'
+import { runQuoteSaveCallerCases, quoteSaveBrowserHarnessEvidence } from './quote-save-caller-cases'
 import type { TestResult } from './database'
 
 const output = resolve('outputs/pilot-full-quote-save-20260910')
@@ -36,6 +36,7 @@ async function main() {
   } catch (error) {
     report.error = error instanceof Error ? error.message.slice(0, 2000) : 'Isolated browser proof failed'
   } finally {
+    report.browserHarness = quoteSaveBrowserHarnessEvidence
     report.completedAt = new Date().toISOString()
     mkdirSync(output, { recursive: true })
     writeFileSync(join(output, 'browser-save-proof.json'), JSON.stringify(report, null, 2))

@@ -60,7 +60,7 @@ async function main() {
     read('supabase/proposals/pilot-quote-save-contract-resolutions.md')
     for (const file of [
       'src/lib/quotes/pilotQuoteSavePlan.ts', 'src/lib/quotes/pilotQuoteSaveEditor.ts',
-      'src/lib/quotes/pilotQuoteSaveReceipt.ts',
+      'src/lib/quotes/pilotQuoteSaveReceipt.ts', 'src/lib/quotes/pilotQuoteSave.ts',
       'src/types/index.ts', 'src/lib/quoteServices.ts', 'src/lib/quoteOptions.ts',
       'src/lib/payments/depositGate.ts', 'src/lib/pricingConfig.ts', 'src/lib/servicePricing.ts',
       'src/lib/utils.ts', 'src/lib/measure/data.ts', 'src/lib/measurePricing.ts',
