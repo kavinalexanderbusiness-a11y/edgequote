@@ -84,3 +84,37 @@ This case supplies no attributable reconciliation endpoint, operation journal,
 new schema or production route. A stronger recovery feature requires separately
 reviewed transactional operation persistence and finalization contracts. Local
 pending prevention is not a global exactly-once guarantee across tabs/devices.
+
+## Versioned acceptance and owner authority prerequisite
+
+The explicit `quote-acceptance-versioned` manual mode preserves both completed
+Save packets and runs only the new acceptance cases. It first applies the reviewed
+dormant versioned acceptance proposal after the existing Save prerequisites in a
+new disposable database. This is not permission to apply production DDL.
+
+This lane corrects owner-on-behalf authority in the dormant HTTP adapter and SQL
+proposal: fresh verified identity must pass the canonical owner-bound role gate,
+and native authority rechecks eligibility after the shared settings lock. Portal
+authority remains token/customer-bound. A later denied reconciliation remains
+unknown; it cannot establish that an earlier write failed.
+
+The focused 24-case synthetic HTTP suite is separate from six real owner-authority
+stages. In the latter, the generated server holds one synthetic owner B acceptance
+after actual HTTP authorization, then an independent SQL connection commits
+removal of only B's settings before release to the unchanged native call. The
+native refusal and fresh HTTP/direct-native denials must leave the captured
+business rows unchanged after that explicit revocation. This is a deterministic
+sequential boundary test, not a concurrent database lock proof. Original and
+post-prerequisite row snapshots remain separately labeled.
+
+Nine subsequent browser stages use real owner A Save UI and token-authorized
+acceptance HTTP requests: preview V1, normal Save V2, stale V1 refusal with zero
+writes, explicit preview V2, then one accepted native COMMIT and fresh Auth/readback.
+The proof compiles the actual canonical wire parsers and terms classifier in memory
+with consumed source/dependency hashes. Native SQL supplies fingerprints, amount
+and acceptance-current facts. It observes 23 selected business table families plus
+shared units, including the documented acceptance audit and notification effects.
+No acceptance UI, concurrency, durable recovery or global exactly-once claim is made.
+
+Evidence goes to `outputs/authenticated-quote-acceptance-real-20260911`; the new
+synthetic server report, platform report and browser report stay separate.

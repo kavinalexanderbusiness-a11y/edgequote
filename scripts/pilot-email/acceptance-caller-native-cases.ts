@@ -7,8 +7,11 @@ import { termsClaimPatch } from '../../src/lib/payments/termsTimingConflict'
 import { buildPilotAcceptanceCommitRequest, parsePilotAcceptancePreview, parsePilotAcceptanceCommitReply,
   type PilotAcceptancePreviewRequest, type PilotAcceptanceExpected, type PilotAcceptanceReceipt } from '../../src/lib/quotes/pilotQuoteAcceptance'
 import { createPilotQuoteAcceptanceStore, previewQuoteAcceptance, commitQuoteAcceptance, reconcileQuoteAcceptance } from '../../src/lib/quotes/pilotQuoteAcceptanceServer'
+import type { PilotQuoteSaveAuth } from '../../src/lib/quotes/pilotQuoteSaveAuth'
 
 // Cloud-only bridge: synthetic verified Auth/Request, real service-only SQL.
+// Owner role reads use the real bound-role RPC under the privileged fixture
+// session with synthetic JWT claims; this is not an authenticated ACL proof.
 // All fixture setup/write cases are outer ROLLBACK transactions. No new session
 // is opened; there is no browser/PostgREST or durable-COMMIT claim here.
 type Row=Record<string,unknown>
@@ -86,12 +89,25 @@ export async function runAcceptanceCallerNativeCases(db:Database):Promise<TestRe
     }
     const option=shape==='options'?String(await identityValue(db,'select id as value from public.quote_options where quote_id=$1::uuid order by sort_order,id limit 1',[f.quote])):null
     const previewRequest:PilotAcceptancePreviewRequest={version:1,quoteId:f.quote,optionId:option,...(mode==='portal'?{portalToken:token}:{})}
-    const auth={getUser:async()=>({data:{user:{id:f.owner}},error:null})},options={trustedOrigin:origin}
-    return {f,token,previewRequest,auth,options}
+    const roleReads:string[]=[]
+    const auth:PilotQuoteSaveAuth={getUser:async()=>({data:{user:{id:f.owner}},error:null}),
+      async readOwnerRole(expectedOwner,signal){
+        assert.equal(signal.aborted,false);assert.equal(expectedOwner,f.owner);roleReads.push(expectedOwner)
+        await db.exec('savepoint acceptance_caller_role')
+        try {
+          assert.equal(await identityValue(db,'select current_user as value'),'postgres')
+          await db.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)",
+            [f.owner,JSON.stringify({sub:f.owner,role:'authenticated'})])
+          return {data:await identityValue(db,'select public.pilot_quote_save_owner_role($1::uuid) as value',[expectedOwner]),error:null}
+        } finally {
+          await db.exec('rollback to savepoint acceptance_caller_role; release savepoint acceptance_caller_role')
+        }
+      }},options={trustedOrigin:origin}
+    return {f,token,previewRequest,auth,options,roleReads}
   }
   for(const [index,mode,shape] of [[1,'portal','services'],[2,'owner','options'],[3,'portal','no_charge'],[4,'owner','plain']] as const)
     await test(mode+' '+shape+' actual preview and accepted HTTP response match native ledger',async()=>{
-      const {f,token,previewRequest,auth,options}=await setup(8300+index,mode,shape),b=bridge(db),before=await rows(db,f.owner)
+      const {f,token,previewRequest,auth,options,roleReads}=await setup(8300+index,mode,shape),b=bridge(db),before=await rows(db,f.owner)
       const p=await previewQuoteAcceptance(b.store,auth,request(previewRequest),options);assert.equal(p.status,200)
       const previewResponse=await p.json(),preview=parsePilotAcceptancePreview(previewResponse,previewRequest);assert.ok(preview&&preview.code==='preview')
       assert.deepEqual(await rows(db,f.owner),before)
@@ -108,12 +124,15 @@ export async function runAcceptanceCallerNativeCases(db:Database):Promise<TestRe
       assert.deepEqual(after.quote_addons.filter(x=>x.is_selected).map(x=>String(x.id)).sort(),intent.addonIds)
       if(shape==='no_charge'){assert.equal(preview.expected.offered.public.no_charge,true);assert.equal(parsed.receipt.accepted_amount,0)}
       assert.deepEqual(b.calls,['pilot_quote_acceptance_preview','pilot_quote_acceptance_commit'])
+      assert.deepEqual(roleReads,mode==='owner'?[f.owner,f.owner]:[])
       const capture:AcceptanceCallerResponseFixture={name:mode+'-'+shape,mode,ownerId:f.owner,quoteId:f.quote,optionId:previewRequest.optionId,previewResponse,commitResponse,reason,note,termsAck:true}
       const serialized=JSON.stringify(capture);for(const forbidden of [token,'Private fixture note','Synthetic declared no charge','terms_payment_claim','no_charge_reason','no_charge_by'])assert.equal(serialized.includes(forbidden),false)
       acceptanceCallerResponseFixtures.push(capture)
       acceptanceCallerNativeEvidence.push({name:capture.name,calls:b.calls,previewZeroWrites:true,rowsBefore:hash(before),rowsAfter:hash(after),
         previewResponseSha256:hash(previewResponse),commitResponseSha256:hash(commitResponse),nativeWriteCount:1,
         transport:'acceptance RPC: actual service_role NULL-JWT SQL',authority:'synthetic verified Auth/Request',
+        ownerRoleRead:mode==='owner'?'actual expected-owner RPC under privileged fixture SQL with synthetic JWT claims; not Auth/ACL evidence':null,
+        ownerRoleReads:roleReads.length,
         noChargeSetup:shape==='no_charge'?'native quote_set_no_charge under authenticated synthetic fixture owner JWT':null,
         outerTransaction:'rolled back fixture',durableOuterCommitProved:false})
     })
@@ -131,6 +150,7 @@ export async function runAcceptanceCallerNativeCases(db:Database):Promise<TestRe
     const after=await rows(db,h.f.owner);assert.equal(after.quote_acceptances.length,1)
     const reconciled=await (await reconcileQuoteAcceptance(b.store,h.auth,request(intent),h.options)).json();assert.equal(reconciled.code,'unknown');assert.deepEqual(await rows(db,h.f.owner),after)
     assert.deepEqual(b.calls,['pilot_quote_acceptance_preview','pilot_quote_acceptance_commit','pilot_quote_acceptance_reconcile']);assert.equal(b.receipts.length,1)
+    assert.deepEqual(h.roleReads,[h.f.owner,h.f.owner,h.f.owner])
     acceptanceCallerNativeEvidence.push({name:'lost-native-result',nativeWriteCount:1,httpCode:raw.code,reconcileCode:reconciled.code,automaticReplay:false,
       rowsAfterWrite:hash(after),rowsAfterReconcile:hash(await rows(db,h.f.owner)),outerTransaction:'rolled back fixture',durableOuterCommitProved:false})
   })

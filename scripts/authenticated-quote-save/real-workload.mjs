@@ -9,11 +9,14 @@ import {seedFixtures,readFixture} from './fixtures.mjs'
 import {generateMount} from './generate-mount.mjs'
 import {runAuthenticatedQuoteSaveBrowser} from './browser-cases.mjs'
 import {runLostAcknowledgementBrowser} from './lost-ack-browser-cases.mjs'
+import {runVersionedAcceptanceBrowser,acceptanceFixtureTerms} from './versioned-acceptance-browser-cases.mjs'
+import {runAcceptanceAuthorityBrowser} from './acceptance-authority-browser-cases.mjs'
 
 const config=JSON.parse(readFileSync(process.argv[2],'utf8'))
 const {source,taskRoot,output,marker}=config
 const lostAck=config.proofCase==='lost-acknowledgement'
-assert(['acknowledged','lost-acknowledgement'].includes(config.proofCase),'Explicit proof case required')
+const versionedAcceptance=config.proofCase==='versioned-acceptance'
+assert(['acknowledged','lost-acknowledgement','versioned-acceptance'].includes(config.proofCase),'Explicit proof case required')
 const report={startedAt:new Date().toISOString(),pass:false,proofCase:config.proofCase,candidate:config.candidate,tree:config.tree,runId:config.runId,
   platformSubstitutions:[],schemaApplications:[],sqlConnections:[],cleanup:{},scope:'Real local Auth and PostgREST with actual canonical cookie/browser clients, source adapters and normally committed native Save; synthetic business identities only.'}
 const hash=v=>createHash('sha256').update(v).digest('hex')
@@ -91,7 +94,8 @@ async function main(){
   await sql("comment on database postgres is 'edgequote disposable real auth quote save only'")
   // Exact checked-in SQL files, no synthetic platform prelude, substitutions or skipped statements.
   const schemaFiles=[...readdirSync(join(source,'supabase/migrations')).filter(f=>f.endsWith('.sql')).sort().map(f=>'supabase/migrations/'+f),
-    'supabase/proposals/pilot-email-core.sql','supabase/proposals/pilot-quote-identity.sql','supabase/proposals/pilot-quote-save.sql']
+    'supabase/proposals/pilot-email-core.sql','supabase/proposals/pilot-quote-identity.sql','supabase/proposals/pilot-quote-save.sql',
+    ...(versionedAcceptance?['supabase/proposals/pilot-quote-versioned-acceptance.sql']:[])]
   for(const file of schemaFiles){
     const bytes=readFileSync(join(source,file))
     const entry={file,sha256:hash(bytes),applied:false};report.schemaApplications.push(entry)
@@ -103,7 +107,7 @@ async function main(){
   await sql("notify pgrst, 'reload schema'")
   report.nativeDefinitions=(await sql("select p.oid::regprocedure::text as signature, pg_get_functiondef(p.oid) as definition "+
     "from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' "+
-    "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname in ('current_app_role','_pilot_quote_save_lock')) order by p.oid::regprocedure::text"))
+    "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname like 'pilot_quote_acceptance%' or p.proname like '_pilot_qva%' or p.proname in ('current_app_role','_pilot_quote_save_lock','quote_apply_choice','quote_record_acceptance')) order by p.oid::regprocedure::text"))
   const sideEffects=async()=>{
     const tables=(await sql("select to_regclass('cron.job')::text as cron,to_regclass('net.http_request_queue')::text as queue,to_regclass('net._http_response')::text as responses"))[0]
     const counts={}
@@ -119,7 +123,8 @@ async function main(){
   report.beforeExternalIO=await sideEffects()
   assert(Object.values(report.beforeExternalIO).every(v=>v===0),'Unexpected scheduled/provider work before fixture')
   const admin=createClient(config.apiUrl,config.serviceKey,{auth:{persistSession:false,autoRefreshToken:false}})
-  fixture=await seedFixtures({sql,createUser:async(email,password)=>{
+  const termsFixture=versionedAcceptance?await acceptanceFixtureTerms():null
+  fixture=await seedFixtures({sql,...(termsFixture?{acceptanceFixture:{...termsFixture,onPrivateValue:value=>secret.push(value)}}:{}),createUser:async(email,password)=>{
     secret.push(password)
     const result=await admin.auth.admin.createUser({email,password,email_confirm:true})
     if(result.error||!result.data.user?.id)throw Error('Actual local GoTrue createUser failed: '+scrub(result.error?.message||'missing ID'))
@@ -129,8 +134,11 @@ async function main(){
   report.beforeRows=fixture.before
   const faultDirectory=join(taskRoot,'private-response-fault')
   if(lostAck)mkdirSync(faultDirectory,{mode:0o700})
+  const authorityDirectory=join(taskRoot,'private-acceptance-authority')
+  if(versionedAcceptance)mkdirSync(authorityDirectory,{mode:0o700})
   const mounted=await generateMount({source,directory:join(taskRoot,'app'),marker,
-    ...(lostAck?{lostAcknowledgement:{directory:faultDirectory,ownerId:fixture.ownerA,quoteId:fixture.quoteA}}:{})})
+    ...(lostAck?{lostAcknowledgement:{directory:faultDirectory,ownerId:fixture.ownerA,quoteId:fixture.quoteA}}:{}),
+    ...(versionedAcceptance?{versionedAcceptance:{directory:authorityDirectory,ownerId:fixture.ownerB,quoteId:fixture.quoteB}}:{})})
   report.mount=mounted
   const nextConfig=(await import(pathToFileURL(join(mounted.directory,'next.config.mjs')).href)).default
   for(const phase of ['phase-production-build','phase-production-server']){
@@ -201,9 +209,56 @@ async function main(){
     },
     readEvents:async()=>readFaultEvents(),
   }:undefined
-  const runBrowser=lostAck?runLostAcknowledgementBrowser:runAuthenticatedQuoteSaveBrowser
+  if(versionedAcceptance){
+    const events=()=>existsSync(join(authorityDirectory,'events.jsonl'))?readFileSync(join(authorityDirectory,'events.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[]
+    const authorityGate={
+      waitHeld:async()=>{
+        const deadline=Date.now()+12000
+        while(Date.now()<deadline){
+          if(existsSync(join(authorityDirectory,'held.json')))return JSON.parse(readFileSync(join(authorityDirectory,'held.json'),'utf8'))
+          if(appClosed())throw Error('Acceptance app exited before authority barrier')
+          await new Promise(resolve=>setTimeout(resolve,20))
+        }
+        throw Error('Actual owner-authority barrier not reached')
+      },
+      revokeAndRelease:async operationId=>{
+        const held=JSON.parse(readFileSync(join(authorityDirectory,'held.json'),'utf8'))
+        assert.equal(held.operationId,operationId);assert.equal(held.ownerId,fixture.ownerB);assert.equal(held.quoteId,fixture.quoteB)
+        // Explicit test-only mutation, confined to the freshly seeded owner B.
+        await sql("begin; delete from public.business_settings where user_id='"+fixture.ownerB+"'::uuid; set constraints all immediate; commit;")
+        const after=await readFixture(sql,fixture)
+        assert.equal(after.ownerB.business_settings.length,0)
+        appendFileSync(join(authorityDirectory,'events.jsonl'),JSON.stringify({kind:'owner-settings-revocation-committed',at:new Date().toISOString(),
+          ownerId:fixture.ownerB,quoteId:fixture.quoteB,operationId})+'\n',{mode:0o600})
+        writeFileSync(join(authorityDirectory,'release.tmp'),JSON.stringify({operationId}),{flag:'wx',mode:0o600})
+        renameSync(join(authorityDirectory,'release.tmp'),join(authorityDirectory,'release.json'))
+        return after
+      },
+      readEvents:async()=>events(),
+      directNative:async(mode,request)=>{
+        assert(['preview','commit','reconcile'].includes(mode));assert.equal(request.quoteId,fixture.quoteB)
+        const args={p_owner:fixture.ownerB,p_portal_token:null,p_quote:fixture.quoteB,p_option:request.optionId,
+          ...(mode==='preview'?{}:{p_expected:request.expected,p_addons:request.addonIds,p_reason:request.reason,p_note:request.note}),
+          ...(mode==='commit'?{p_terms_ack:request.termsAck}:{})}
+        const result=await admin.rpc('pilot_quote_acceptance_'+mode,args)
+        if(result.error)throw Error('Actual native owner prerequisite RPC failed: '+scrub(result.error.message))
+        return result.data
+      },
+    }
+    report.ownerAuthority=await runAcceptanceAuthorityBrowser({browser,baseURL:config.origin,fixture,readIndependentRows:()=>readFixture(sql,fixture),authorityGate})
+    if(report.ownerAuthority?.pass!==true)throw Error('Real owner acceptance authority prerequisite did not pass')
+    // Portal case starts from the observed post-prerequisite state. Preserve both
+    // snapshots and reports; do not disguise the explicit synthetic revocation.
+    report.afterOwnerAuthorityRows=await readFixture(sql,fixture)
+    fixture.before=report.afterOwnerAuthorityRows
+  }
+  const runBrowser=versionedAcceptance?runVersionedAcceptanceBrowser:lostAck?runLostAcknowledgementBrowser:runAuthenticatedQuoteSaveBrowser
   const browserResult=await runBrowser({browser,baseURL:config.origin,fixture,fault,
     readIndependentRows:()=>readFixture(sql,fixture),
+    readNativeAcceptanceFacts:async()=>{
+      assert(versionedAcceptance,'Native acceptance facts belong only to the versioned case')
+      return (await sql("select public.quote_material_fingerprint('"+fixture.quoteA+"'::uuid) as \"documentFingerprint\", public.quote_terms_fingerprint('"+fixture.ownerA+"'::uuid) as \"termsFingerprint\", public.quote_acceptance_is_current('"+fixture.quoteA+"'::uuid) as \"acceptanceCurrent\""))[0]
+    },
     readFreshOwnerRows:async()=>{
       // New client + new actual password session; never reuse browser tokens or service role.
       const fresh=createClient(config.apiUrl,config.anonKey,{auth:{persistSession:false,autoRefreshToken:false}})
@@ -229,7 +284,7 @@ async function main(){
   assert(Object.values(report.afterExternalIO).every(v=>v===0),'Unexpected scheduled/provider I/O')
   const nativeAfter=await sql("select p.oid::regprocedure::text as signature, pg_get_functiondef(p.oid) as definition "+
     "from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' "+
-    "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname in ('current_app_role','_pilot_quote_save_lock')) order by p.oid::regprocedure::text")
+    "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname like 'pilot_quote_acceptance%' or p.proname like '_pilot_qva%' or p.proname in ('current_app_role','_pilot_quote_save_lock','quote_apply_choice','quote_record_acceptance')) order by p.oid::regprocedure::text")
   assert.deepEqual(nativeAfter,report.nativeDefinitions,'Native definitions changed during proof')
   report.nativeDefinitionsUnchanged=true
   report.pass=true

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { PilotQuoteIdentityAuth, PilotQuoteSaveRequestOptions } from './pilotQuoteSave'
+import type { PilotQuoteSaveRequestOptions } from './pilotQuoteSave'
+import { requirePilotQuoteSaveOwner, type PilotQuoteSaveAuth } from './pilotQuoteSaveAuth'
 import { copyPilotQuoteSaveJson } from './pilotQuoteSaveReceipt'
 import { PilotQuoteSaveHttpRefusal, pilotQuoteSaveReply, boundedQuoteSaveRead, quoteSaveTimeout,
   validateQuoteSaveRequest, readQuoteSaveBody } from './pilotQuoteSaveHttp'
@@ -18,7 +19,6 @@ export interface PilotQuoteAcceptanceStore {
   reconcile(authority: PilotAcceptanceAuthority, request: PilotAcceptanceCommitRequest, signal: AbortSignal): Promise<unknown>
 }
 const row = (v: unknown): v is Row => v !== null && typeof v === 'object' && !Array.isArray(v)
-const uuid = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v)
 const unavailable = () => new Error('acceptance_unavailable')
 const internalBytes = 16 * 1024 * 1024
 export function createPilotQuoteAcceptanceStore(sb: SupabaseClient): PilotQuoteAcceptanceStore {
@@ -45,7 +45,7 @@ export function createPilotQuoteAcceptanceStore(sb: SupabaseClient): PilotQuoteA
 }
 const refusalStatus: Record<PilotAcceptanceRefusal,number> = { invalid_request:400,unsupported_isolation:503,not_found:404,
   not_eligible:409,invalid_choice:409,quote_changed:409,method_not_allowed:405,forbidden_origin:403,
-  request_too_large:413,unauthenticated:401,unavailable:503 }
+  request_too_large:413,unauthenticated:401,forbidden:403,unavailable:503 }
 function knownNative(value: unknown): PilotAcceptanceRefusal | null {
   return row(value) && Object.keys(value).length === 1 && typeof value.code === 'string'
     && (PILOT_ACCEPTANCE_NATIVE_REFUSALS as readonly string[]).includes(value.code) ? value.code as PilotAcceptanceRefusal : null
@@ -54,18 +54,16 @@ const correlation = (request: PilotAcceptanceCommitRequest) => ({clientOperation
 const unknown = (request: PilotAcceptanceCommitRequest) => pilotQuoteSaveReply({code:'unknown',...correlation(request)},503)
 const refused = (reason: PilotAcceptanceRefusal, request?: PilotAcceptanceCommitRequest) =>
   pilotQuoteSaveReply({code:'refused',...(request ? correlation(request) : {}),reason},refusalStatus[reason])
-async function authority(auth: PilotQuoteIdentityAuth, r: PilotAcceptancePreviewRequest, signal: AbortSignal, ms: number): Promise<PilotAcceptanceAuthority> {
+async function authority(auth: PilotQuoteSaveAuth, r: PilotAcceptancePreviewRequest, signal: AbortSignal, ms: number): Promise<PilotAcceptanceAuthority> {
   if (Object.hasOwn(r,'portalToken')) return {owner:null,portalToken:r.portalToken!}
-  const user = await boundedQuoteSaveRead(()=>auth.getUser(),signal,ms)
-  if (user.error || !user.data?.user || !uuid(user.data.user.id)) throw new PilotQuoteSaveHttpRefusal('unauthenticated',401)
-  return {owner:user.data.user.id,portalToken:null}
+  return {owner:await requirePilotQuoteSaveOwner(auth,signal,ms),portalToken:null}
 }
 function errorReason(error: unknown): PilotAcceptanceRefusal {
   if (error instanceof PilotAcceptanceRequestError) return error.code
   if (error instanceof PilotQuoteSaveHttpRefusal && Object.hasOwn(refusalStatus,error.code)) return error.code as PilotAcceptanceRefusal
   return 'unavailable'
 }
-async function handle(mode: 'preview' | 'commit' | 'reconcile', store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth,
+async function handle(mode: 'preview' | 'commit' | 'reconcile', store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth,
   request: Request, options: PilotQuoteSaveRequestOptions): Promise<Response> {
   let captured: PilotAcceptanceCommitRequest | undefined, invoked = false
   try {
@@ -107,13 +105,15 @@ async function handle(mode: 'preview' | 'commit' | 'reconcile', store: PilotQuot
     if (!parsed || parsed.code !== 'accepted') return unknown(captured!)
     return pilotQuoteSaveReply(parsed)
   } catch (error) {
+    // A refused reconciliation read cannot establish that its earlier write
+    // failed. Keep that operation unresolved even when current authority ended.
     if (captured && (invoked || mode === 'reconcile')) return unknown(captured)
     return refused(errorReason(error),captured)
   }
 }
-export const previewQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
+export const previewQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
   handle('preview',store,auth,request,options)
-export const commitQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
+export const commitQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
   handle('commit',store,auth,request,options)
-export const reconcileQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteIdentityAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
+export const reconcileQuoteAcceptance = (store: PilotQuoteAcceptanceStore, auth: PilotQuoteSaveAuth, request: Request, options: PilotQuoteSaveRequestOptions) =>
   handle('reconcile',store,auth,request,options)

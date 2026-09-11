@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { boundedQuoteSaveRead, PilotQuoteSaveHttpRefusal, pilotQuoteSaveUnavailable } from './pilotQuoteSaveHttp'
 
-/** Existing identity-only capability remains separate for dormant acceptance. */
+/** Verified identity alone does not establish business-owner authority. */
 export interface PilotQuoteIdentityAuth {
   getUser(): Promise<{ data: { user: { id: string } | null }; error?: unknown }>
 }
@@ -15,7 +15,8 @@ const row = (v: unknown): v is Record<string, unknown> => v !== null && typeof v
  * The RPC compares auth.uid() with expectedOwner in the SAME statement that
  * reads current_app_role(). A client/account change cannot lend another user's
  * owner role to the previously verified UUID, including an A→B→A change.
- * This read is not the write fence: native Save rechecks under its row lock. */
+ * This read is not the write fence: native Save and owner-on-behalf acceptance
+ * recheck under their shared row lock. */
 export function createPilotQuoteSaveAuth(client: SupabaseClient): PilotQuoteSaveAuth {
   return {
     getUser: () => client.auth.getUser(),
@@ -27,7 +28,7 @@ export function createPilotQuoteSaveAuth(client: SupabaseClient): PilotQuoteSave
   }
 }
 
-/** Mandatory, fail-closed owner gate shared by baseline and Save. Role read
+/** Mandatory owner gate shared by baseline, Save and owner acceptance. Role read
  * failures remain distinct from a confirmed denial; neither touches the store. */
 export async function requirePilotQuoteSaveOwner(auth: PilotQuoteSaveAuth, signal: AbortSignal, ms: number): Promise<string> {
   const session = await boundedQuoteSaveRead(() => auth.getUser(), signal, ms)

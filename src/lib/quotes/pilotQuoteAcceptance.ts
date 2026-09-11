@@ -28,8 +28,8 @@ export type PilotAcceptanceReceipt = { code: 'accepted'; quote_id: string; accep
   kind: 'customer' | 'owner_on_behalf'; source: 'portal' | 'dashboard'; actor_id: string; customer_id: string | null;
   accepted_amount: number; selected_option_id: string | null; addon_ids: string[]; document_fingerprint: string;
   terms_fingerprint: string | null; previous_acceptance_id: string | null }
-export const PILOT_ACCEPTANCE_NATIVE_REFUSALS = ['invalid_request','unsupported_isolation','not_found','not_eligible','invalid_choice','quote_changed'] as const
-export const PILOT_ACCEPTANCE_HTTP_REFUSALS = ['method_not_allowed','forbidden_origin','invalid_request','request_too_large','unauthenticated','unavailable'] as const
+export const PILOT_ACCEPTANCE_NATIVE_REFUSALS = ['invalid_request','unsupported_isolation','not_found','not_eligible','invalid_choice','quote_changed','forbidden'] as const
+export const PILOT_ACCEPTANCE_HTTP_REFUSALS = ['method_not_allowed','forbidden_origin','invalid_request','request_too_large','unauthenticated','forbidden','unavailable'] as const
 export type PilotAcceptanceRefusal = typeof PILOT_ACCEPTANCE_NATIVE_REFUSALS[number] | typeof PILOT_ACCEPTANCE_HTTP_REFUSALS[number]
 export type PilotAcceptancePreviewReply = { code: 'preview'; expected: PilotAcceptanceExpected } | { code: 'refused'; reason: PilotAcceptanceRefusal }
 type Correlation = { clientOperationId: string; previewRevision: string }
@@ -177,6 +177,7 @@ export function pilotAcceptanceRefusalMessage(reason: PilotAcceptanceRefusal): s
     method_not_allowed:'This confirmation could not be sent.', forbidden_origin:'This confirmation must be sent from the current site.',
     request_too_large:'This confirmation is too large to send. Keep your notes and review the quote.',
     unauthenticated:'Sign in again before recording acceptance.', unavailable:'The confirmation could not be loaded. Try again before accepting.',
+    forbidden:'Only a verified business owner can record acceptance on behalf of a customer.',
   }
   return messages[reason]
 }

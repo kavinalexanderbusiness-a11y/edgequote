@@ -41,7 +41,8 @@ export async function readFixture(sql, fixture) {
   if (typeof sql !== 'function') throw Error('Actual SQL transport required')
   const owners = ['ownerA', 'ownerB', 'denied'].map(key => [key, uuid(fixture[key])])
   if (new Set(owners.map(([, owner]) => owner)).size !== 3) throw Error('Fixture users must be distinct')
-  const ownerRows = owner => `jsonb_build_object(${TABLES.map(([table, order]) =>
+  const tables = fixture.acceptanceVersioned ? [...TABLES, ['notifications', 't.id']] : TABLES
+  const ownerRows = owner => `jsonb_build_object(${tables.map(([table, order]) =>
     `${literal(table)},(select coalesce(jsonb_agg(to_jsonb(t) order by ${order}),'[]'::jsonb)
       from public.${table} t where t.user_id=${idSql(owner)})`).join(',')})`
   const rows = await sql(`select jsonb_build_object(
@@ -55,7 +56,7 @@ export async function readFixture(sql, fixture) {
   }
   const result = rows[0].fixture_rows
   for (const [key] of owners) {
-    if (!result[key] || TABLES.some(([table]) => !Array.isArray(result[key][table]))) {
+    if (!result[key] || tables.some(([table]) => !Array.isArray(result[key][table]))) {
       throw Error('Incomplete independent fixture readback')
     }
   }
@@ -98,7 +99,7 @@ function quoteSql({ owner, customer, property, quote, suffix, price, hours, rate
  * createUser(email,password) must return the UUID from real GoTrue, not a fake.
  * The denied user owns a quote but has no settings, making its owner-role test
  * meaningful rather than merely asking it to read another tenant's quote. */
-export async function seedFixtures({ sql, createUser }) {
+export async function seedFixtures({ sql, createUser, acceptanceFixture }) {
   if (typeof sql !== 'function' || typeof createUser !== 'function') throw Error('Actual SQL and GoTrue transports required')
   const run = randomUUID()
   const fixture = { password: PASSWORD, emailA: `owner-a-${run}@fixture.example.invalid`,
@@ -130,6 +131,35 @@ export async function seedFixtures({ sql, createUser }) {
       (${idSql(primary)},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'General visit',null,1,'each',101.23,68,null,null,null,3,'service');
     set constraints all immediate;
     commit;`)
+  if (acceptanceFixture) {
+    const { termsText, patch } = acceptanceFixture
+    if (typeof termsText !== 'string' || !termsText.trim() || !patch
+      || typeof patch.terms_payment_claim !== 'string' || !/^[0-9a-f]{32}$/.test(patch.terms_payment_claim_fingerprint)
+      || !Number.isInteger(patch.terms_payment_claim_version)
+      || typeof acceptanceFixture.onPrivateValue !== 'function') throw Error('Canonical fixture terms metadata and private-value scrubber required')
+    fixture.acceptanceVersioned = true
+    fixture.portalTokenA = 'synthetic-portal-' + randomUUID()
+    fixture.portalTokenB = 'synthetic-foreign-' + randomUUID()
+    fixture.revokedPortalTokenA = 'synthetic-revoked-' + randomUUID()
+    for (const value of [fixture.portalTokenA, fixture.portalTokenB, fixture.revokedPortalTokenA]) acceptanceFixture.onPrivateValue(value)
+    fixture.addonIdsA = [randomUUID(), randomUUID()]
+    fixture.termsA = termsText
+    await sql(`begin;
+      update public.quotes set status='sent',sent_at=clock_timestamp(),issued_date=current_date,valid_until=current_date+30
+        where id in (${idSql(fixture.quoteA)},${idSql(fixture.quoteB)},${idSql(fixture.quoteDenied)});
+      update public.business_settings set terms_text=${literal(termsText)},terms_payment_claim=${literal(patch.terms_payment_claim)},
+        terms_payment_claim_fingerprint=${literal(patch.terms_payment_claim_fingerprint)},terms_payment_claim_version=${patch.terms_payment_claim_version}
+        where user_id=${idSql(fixture.ownerA)};
+      insert into public.customer_portal_tokens(token,user_id,customer_id,revoked) values
+        (${literal(fixture.portalTokenA)},${idSql(fixture.ownerA)},${idSql(fixture.customerA)},false),
+        (${literal(fixture.portalTokenB)},${idSql(fixture.ownerB)},${idSql(fixture.customerB)},false),
+        (${literal(fixture.revokedPortalTokenA)},${idSql(fixture.ownerA)},${idSql(fixture.customerA)},true);
+      insert into public.quote_addons(id,user_id,quote_id,name,price,is_selected,sort_order) values
+        (${idSql(fixture.addonIdsA[0])},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'Included fixture detail',17.35,true,0),
+        (${idSql(fixture.addonIdsA[1])},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'Unselected fixture extra',29.75,false,1);
+      set constraints all immediate;
+      commit;`)
+  }
   fixture.before = await readFixture(sql, fixture)
   if (fixture.before.ownerA.business_settings.length !== 1 || fixture.before.ownerB.business_settings.length !== 1
     || fixture.before.denied.business_settings.length !== 0

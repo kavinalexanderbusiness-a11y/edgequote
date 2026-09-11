@@ -70,6 +70,11 @@ begin
   -- Implemented by the separately owned dormant full Save proposal.
   perform public._pilot_quote_save_lock(v_owner,p_quote,
     array_remove(array[q.customer_id],null),array_remove(array[q.property_id],null));
+  -- Fresh statement after the shared settings lock: an earlier HTTP role read
+  -- or preview is not authority for this action. Owner precedence matches
+  -- current_app_role(); portal authority remains the token/customer binding.
+  if p_owner is not null and not public._pilot_qs_is_owner(v_owner) then
+    return jsonb_build_object('code','forbidden'); end if;
   if p_portal_token is not null then
     select * into t from public.customer_portal_tokens where token=p_portal_token for update;
     if not found or t.revoked or t.user_id is distinct from v_owner

@@ -24,7 +24,7 @@ async function prospectiveRealpath(path) {
 /** Generate only an isolated, disposable Next development mount. The caller
  * owns source/SHA verification, internal-network containment and cleanup.
  * This helper starts nothing, installs nothing and never writes in source. */
-export async function generateMount({ source, directory, marker, lostAcknowledgement }) {
+export async function generateMount({ source, directory, marker, lostAcknowledgement, versionedAcceptance }) {
   if (process.env.GITHUB_ACTIONS !== 'true' || marker !== MARKER) throw Error('Disposable cloud generation required')
   if (typeof source !== 'string' || typeof directory !== 'string' || !isAbsolute(source) || !isAbsolute(directory)) {
     throw Error('Absolute source and temporary directory required')
@@ -39,6 +39,14 @@ export async function generateMount({ source, directory, marker, lostAcknowledge
       || inside(sourceRoot, fault) || inside(fault, sourceRoot)
       || !['ownerId', 'quoteId'].every(k => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(lostAcknowledgement[k]))) {
       throw Error('Private sibling fault directory and fixed synthetic identity required')
+    }
+  }
+  if (versionedAcceptance) {
+    const gate = await realpath(versionedAcceptance.directory)
+    if (lostAcknowledgement || gate !== versionedAcceptance.directory || dirname(gate) !== dirname(target) || gate === target
+      || inside(sourceRoot, gate) || inside(gate, sourceRoot)
+      || !['ownerId', 'quoteId'].every(k => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(versionedAcceptance[k]))) {
+      throw Error('Private sibling acceptance gate and fixed synthetic identity required')
     }
   }
   try { if ((await readdir(target)).length !== 0) throw Error('Temporary mount directory must be empty') }
@@ -311,6 +319,74 @@ export async function POST(request: Request) {
   return deliver(response, intent)
 }
 `
+  }
+  if (versionedAcceptance) {
+    files['proof-acceptance.ts'] = `import 'server-only'
+import { appendFile, readFile, writeFile, rename } from 'node:fs/promises'
+import { join } from 'node:path'
+import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { createPilotQuoteSaveAuth } from '@/lib/quotes/pilotQuoteSaveAuth'
+import { createPilotQuoteAcceptanceStore } from '@/lib/quotes/pilotQuoteAcceptanceServer'
+import { assertProofRuntime } from './proof-server'
+
+const directory = ${literal(versionedAcceptance.directory)}
+const ownerId = ${literal(versionedAcceptance.ownerId)}, quoteId = ${literal(versionedAcceptance.quoteId)}
+async function event(kind: string, quote: string, owner: string | null, operationId?: string) {
+  assertProofRuntime()
+  await appendFile(join(directory, 'events.jsonl'), JSON.stringify({ kind, quoteId: quote, ownerId: owner, operationId,
+    at: new Date().toISOString() }) + '\\n', { mode: 0o600 })
+}
+export async function acceptancePorts() {
+  assertProofRuntime()
+  const client = await createClient(), service = createAdminClient()
+  if (!service) throw Error('Disposable server credential required')
+  const actual = createPilotQuoteAcceptanceStore(service)
+  const store: typeof actual = {
+    preview: async (a, r, signal) => { await event('acceptance-preview-dispatch', r.quoteId, a.owner); return actual.preview(a, r, signal) },
+    reconcile: async (a, r, signal) => { await event('acceptance-reconcile-dispatch', r.quoteId, a.owner, r.clientOperationId); return actual.reconcile(a, r, signal) },
+    commit: async (a, r, signal) => {
+      if (a.owner === ownerId && r.quoteId === quoteId) {
+        let claimed = false
+        try { await writeFile(join(directory, 'claimed'), r.clientOperationId, { flag: 'wx', mode: 0o600 }); claimed = true }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+        if (claimed) {
+          // Reached only after the actual adapter verified owner Auth/role.
+          await event('owner-authority-passed-before-native', r.quoteId, a.owner, r.clientOperationId)
+          await writeFile(join(directory, 'held.tmp'), JSON.stringify({ operationId: r.clientOperationId, ownerId, quoteId }), { flag: 'wx', mode: 0o600 })
+          await rename(join(directory, 'held.tmp'), join(directory, 'held.json'))
+          const deadline = Date.now() + 10000
+          while (true) {
+            let release: { operationId?: string } | null = null
+            try { release = JSON.parse(await readFile(join(directory, 'release.json'), 'utf8')) }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+            if (release) { if (release.operationId !== r.clientOperationId) throw Error('Mismatched authority barrier'); break }
+            if (signal.aborted || Date.now() >= deadline) throw Error('Bounded acceptance authority barrier expired')
+            await new Promise(resolve => setTimeout(resolve, 20))
+          }
+        }
+      }
+      await event('acceptance-commit-dispatch', r.quoteId, a.owner, r.clientOperationId)
+      const result = await actual.commit(a, r, signal)
+      await event('acceptance-commit-return', r.quoteId, a.owner, r.clientOperationId)
+      return result
+    },
+  }
+  return { auth: createPilotQuoteSaveAuth(client), store }
+}
+`
+    for (const [mode, handler] of [['preview', 'previewQuoteAcceptance'], ['commit', 'commitQuoteAcceptance'], ['reconcile', 'reconcileQuoteAcceptance']]) {
+      files['app/api/acceptance/' + mode + '/route.ts'] = `import { ${handler} } from '@/lib/quotes/pilotQuoteAcceptanceServer'
+import { acceptancePorts } from '../../../../proof-acceptance'
+import { trustedOrigin } from '../../../../proof-server'
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export async function POST(request: Request) {
+  const { auth, store } = await acceptancePorts()
+  return ${handler}(store, auth, request, { trustedOrigin })
+}
+`
+    }
   }
   await mkdir(target, { recursive: true })
   if (await realpath(target) !== target || inside(sourceRoot, target) || inside(target, sourceRoot)) throw Error('Temporary mount location changed')
