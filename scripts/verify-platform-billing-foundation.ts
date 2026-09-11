@@ -24,7 +24,7 @@ async function main() {
       assert.doesNotMatch(read(file), /platform_billing_accounts|platform_subscriptions|platform_billing_events|from\s*['"][^'"]*\/billing\//, file)
     }
     assert.deepEqual(files('src/lib/billing').sort(), [
-      'provider.ts', 'reconcile.ts', 'reconcileTypes.ts', 'types.ts', 'webhook.ts',
+      'planCatalogue.ts', 'planPolicy.ts', 'provider.ts', 'reconcile.ts', 'reconcileTypes.ts', 'types.ts', 'webhook.ts',
     ].map(file => `src/lib/billing/${file}`).sort())
     assert.doesNotMatch(read('src/lib/billing/types.ts'), /\b(import|function|const|class|process|fetch)\b/)
   })

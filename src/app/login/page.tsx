@@ -168,7 +168,7 @@ function LoginForm() {
             >
               Create account
             </Link>
-            <Link href="/plans" className="mt-3 inline-flex min-h-11 items-center text-sm text-accent-text hover:underline">Compare Base and Premium</Link>
+            <Link href="/plans" className="mt-3 inline-flex min-h-11 items-center text-sm text-accent-text hover:underline">Compare Base, Plus and Premium</Link>
           </div>
 
           {/* Below the button, not beside the password label: somebody reaches

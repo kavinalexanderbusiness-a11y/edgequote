@@ -243,8 +243,8 @@ export default function SetupPage() {
         </div>
         {firstRun && (
           <aside className="mt-5 rounded-xl border border-border bg-bg-secondary p-4 text-sm">
-            <h2 className="font-semibold text-ink">Explore Base and Premium</h2>
-            <p className="mt-1 text-ink-muted">Preview plans from CA$29/month. Subscription checkout is coming later; you have not been charged.</p>
+            <h2 className="font-semibold text-ink">Explore Base, Plus and Premium</h2>
+            <p className="mt-1 text-ink-muted">Start with free early access. No card is required, and there is no automatic move to a paid plan. Subscription checkout is not available yet.</p>
             <Link href="/plans" className="mt-2 inline-flex min-h-11 items-center font-medium text-accent-text hover:underline">Compare plans</Link>
           </aside>
         )}
