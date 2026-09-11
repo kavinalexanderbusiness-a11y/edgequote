@@ -6,7 +6,7 @@ import {
 } from '../../src/lib/propertyEstimate'
 import { M2_TO_SQFT, M_TO_FT } from '../../src/lib/measure/geometry'
 import { pricePlans, type ServicePricingPlan } from '../../src/lib/measurePricing'
-import { PRODUCT_PLAN_STATUS, PROPOSED_PRODUCT_PLANS } from '../../src/lib/productPlans'
+import { PRODUCT_PLAN_STATUS, PRODUCT_PLANS } from '../../src/lib/productPlans'
 
 type Check = (name: string, passed: boolean, detail?: string) => void
 
@@ -106,7 +106,12 @@ export function verifyPropertyEstimator(check: Check): void {
   equal('empty price book never acquires invented prices', propertyEstimatePlans([], measured), [])
   equal('positive low prices get no invented minimum charge', propertyEstimatePlans([plan({ rate: 0.0001 })], estimateArea([part({ area: '100' })])), pricePlans([plan({ rate: 0.0001 })], 100, 'area'))
   check('automatic detection is unavailable until actually connected', AUTOMATIC_MEASUREMENT.available === false)
-  check('proposed product catalogue does not activate enforcement', PRODUCT_PLAN_STATUS.enforcementEnabled === false)
-  check('proposed subscription prices, billing cadence and quotas remain undecided', PROPOSED_PRODUCT_PLANS.every(p =>
-    p.status === 'proposed' && p.price === null && p.billingCadence === null && p.scanAllowance === null && p.seatLimit === null))
+  check('plan preview activates neither billing nor paid restrictions', PRODUCT_PLAN_STATUS.status === 'preview'
+    && PRODUCT_PLAN_STATUS.billingActive === false && PRODUCT_PLAN_STATUS.enforcementEnabled === false)
+  equal('approved plans have explicit monthly CAD prices in cents', PRODUCT_PLANS.map(p => [p.id, p.name, p.monthlyPriceCents, p.currency, p.billingCadence]), [
+    ['base', 'Base', 2900, 'CAD', 'month'], ['plus', 'Plus', 5900, 'CAD', 'month'], ['premium', 'Premium', 9900, 'CAD', 'month'],
+  ])
+  check('plan preview grants no scanner, provider-credit or seat allowances', PRODUCT_PLANS.every(p =>
+    !Object.hasOwn(p, 'scanAllowance') && !Object.hasOwn(p, 'seatLimit') && !Object.hasOwn(p, 'providerCredits')
+    && p.features.every(f => !/scan|sms|email|ai_credits|unlimited/.test(f.id))))
 }

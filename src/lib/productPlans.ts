@@ -1,58 +1,64 @@
-/** Proposed product packaging only. This catalogue never decides access. */
-export type ProposedPlanId = 'starter' | 'pro' | 'premium'
+/** Canonical plan preview. Prices describe future opt-in billing, never access. */
+export type ProductPlanId = 'base' | 'plus' | 'premium'
+export type ProductFeatureId =
+  | 'customers' | 'quotes_invoices' | 'scheduling'
+  | 'recurring_visits' | 'team_crews' | 'time_tracking' | 'job_cost'
+  | 'advanced_insights' | 'operational_suggestions'
 
-export interface ProposedPlanFeature {
-  id: string
-  label: string
-  availability: 'available' | 'planned'
+export interface ProductPlanFeature {
+  readonly id: ProductFeatureId
+  readonly label: string
 }
 
-export interface ProposedProductPlan {
-  id: ProposedPlanId
-  name: string
-  summary: string
-  status: 'proposed'
-  price: null
-  billingCadence: null
-  scanAllowance: null
-  seatLimit: null
-  features: readonly ProposedPlanFeature[]
+export interface ProductPlan {
+  readonly id: ProductPlanId
+  readonly name: string
+  readonly summary: string
+  readonly monthlyPriceCents: 2900 | 5900 | 9900
+  readonly currency: 'CAD'
+  readonly billingCadence: 'month'
+  readonly features: readonly ProductPlanFeature[]
 }
 
-export const PRODUCT_PLAN_STATUS = {
-  status: 'proposed',
+export const PRODUCT_PLAN_STATUS = Object.freeze({
+  status: 'preview',
+  billingActive: false,
   enforcementEnabled: false,
-} as const
+} as const)
 
-export const PROPOSED_PRODUCT_PLANS: readonly ProposedProductPlan[] = [
-  {
-    id: 'starter', name: 'Starter', summary: 'The everyday tools to run your business.',
-    status: 'proposed', price: null, billingCadence: null, scanAllowance: null, seatLimit: null,
-    features: [
-      { id: 'customers', label: 'Customers and properties', availability: 'available' },
-      { id: 'quotes', label: 'Quotes and invoices', availability: 'available' },
-      { id: 'schedule', label: 'Visit scheduling', availability: 'available' },
-      { id: 'manual-estimates', label: 'Property estimates from measurements you enter', availability: 'available' },
-    ],
-  },
-  {
-    id: 'pro', name: 'Pro', summary: 'Starter tools, with more help preparing and following up on work.',
-    status: 'proposed', price: null, billingCadence: null, scanAllowance: null, seatLimit: null,
-    features: [
-      { id: 'quote-options', label: 'Multiple quote options', availability: 'available' },
-      { id: 'image-scanner', label: 'Assisted image measurement', availability: 'available' },
-      { id: 'automation', label: 'Follow-up and automation tools', availability: 'available' },
-      { id: 'automatic-scans', label: 'Automatic lawn and driveway scans — allowance to be decided', availability: 'planned' },
-    ],
-  },
-  {
-    id: 'premium', name: 'Premium', summary: 'Pro tools, with more for teams and customer self-service.',
-    status: 'proposed', price: null, billingCadence: null, scanAllowance: null, seatLimit: null,
-    features: [
-      { id: 'workforce', label: 'Workforce tools', availability: 'available' },
-      { id: 'reporting', label: 'Business reporting', availability: 'available' },
-      { id: 'higher-scan-allowance', label: 'Higher automatic scan allowance — amount to be decided', availability: 'planned' },
-      { id: 'branded-quoter', label: 'Branded customer lawn and driveway quoter', availability: 'planned' },
-    ],
-  },
-]
+const feature = (id: ProductFeatureId, label: string): ProductPlanFeature => Object.freeze({ id, label })
+const baseFeatures = Object.freeze([
+  feature('customers', 'Customers and service locations'),
+  feature('quotes_invoices', 'Quotes and invoices'),
+  feature('scheduling', 'Visit scheduling'),
+])
+const plusFeatures = Object.freeze([
+  ...baseFeatures,
+  feature('recurring_visits', 'Recurring visits and service plans'),
+  feature('team_crews', 'Team, crews and assignments'),
+  feature('time_tracking', 'Time tracking and timesheets'),
+  feature('job_cost', 'Job and crew labour-cost insights'),
+])
+const premiumFeatures = Object.freeze([
+  ...plusFeatures,
+  feature('advanced_insights', 'Advanced business insights'),
+  feature('operational_suggestions', 'Rebooking and operational suggestions'),
+])
+
+// Cumulative features make inheritance explicit for every consumer. This is a
+// catalogue, not a licence, a provider grant or proof of a paid subscription.
+// No seats, scanning or provider-credit allowances are assigned here.
+export const PRODUCT_PLANS: readonly ProductPlan[] = Object.freeze([
+  Object.freeze({
+    id: 'base', name: 'Base', summary: 'The everyday tools to run your business.',
+    monthlyPriceCents: 2900, currency: 'CAD', billingCadence: 'month', features: baseFeatures,
+  } as const),
+  Object.freeze({
+    id: 'plus', name: 'Plus', summary: 'Keep recurring work and your team organized.',
+    monthlyPriceCents: 5900, currency: 'CAD', billingCadence: 'month', features: plusFeatures,
+  } as const),
+  Object.freeze({
+    id: 'premium', name: 'Premium', summary: 'See the bigger picture and decide what to do next.',
+    monthlyPriceCents: 9900, currency: 'CAD', billingCadence: 'month', features: premiumFeatures,
+  } as const),
+])

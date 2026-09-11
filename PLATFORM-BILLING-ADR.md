@@ -1,8 +1,8 @@
 # ADR-003 — Platform billing (EdgeHQ → the business owner)
 
-**Status: B1 + B2 OFFLINE DRAFTS, UNAPPLIED. Free early access; paid activation is deferred.**
+**Status: B1 + B2 OFFLINE DRAFTS, UNAPPLIED; B3 plan preview and dormant read-only preparation. Free early access; paid activation and private Stripe setup are deferred.**
 
-Updated September 5, 2026. The user approved public self-service signup and free early access. A later paid price, billing cadence and trial duration remain unset. The old proposed trial defaults, business-insert trigger, backfill and `standard` plan are withdrawn. This revision prepares an isolated foundation and reconciliation engine; it does not make paid signup ready.
+Updated September 11, 2026 (UTC). The user approved public self-service signup and free early access, followed by three future monthly plans: Base CAD29, Plus CAD59 and Premium CAD99. These supersede the withdrawn CAD49 single offer and earlier two-plan/proposed catalogues. No timed trial or automatic conversion is approved. The user's latest instruction defers private Stripe setup; no action is needed from them now. The old trial defaults, business-insert trigger, backfill and `standard` plan remain withdrawn. This preparation does not make paid signup ready.
 
 ## Merchant payments and platform billing
 
@@ -23,7 +23,7 @@ Different keys in the same Stripe account are insufficient. Merchant reconciliat
 
 The billing subject remains the owner's `auth.users.id`. The existing unique `business_settings.user_id` identifies an owner; this introduces no second organization identity. Trusted account creation must verify a current business settings row. Crew users must never create, read or change billing records, even if faulty server code creates a mapping for a crew UUID.
 
-All writes are server-owned. No account can declare itself paid through an owner-writable settings column, browser table write, metadata claim or public RPC. Current CRM access remains unchanged: there is no entitlement resolver, enforcement flag, trial, signup trigger or runtime consumer in B1.
+All writes are server-owned. No account can declare itself paid through an owner-writable settings column, browser table write, metadata claim or public RPC. Current CRM access remains unchanged. B1 contains no entitlement resolver, enforcement flag, trial, signup trigger or runtime consumer. B3 adds an unmounted preview policy with literal inactive/disabled outputs; it does not implement paid entitlement enforcement.
 
 ## B1 draft objects
 
@@ -66,7 +66,7 @@ The account's new coordination columns are private. Authenticated callers retain
 
 [reconcile.ts](src/lib/billing/reconcile.ts) claims before fetching current provider state and accepts only complete, owner/account/mode-matching snapshots. It returns retry for unknown mappings, failed reads, busy leases, invalid states or unsuccessful commits. An event row's existence is not successful processing. No raw payloads, provider exceptions or credentials are persisted.
 
-[webhook.ts](src/lib/billing/webhook.ts) is an **unmounted server library**. There is no `/api/platform/billing/webhook`, checkout, portal, billing UI, signup hook or background consumer. Setting environment variables alone cannot activate it. Its prepared handler verifies the exact raw payload with HMAC-SHA256, constant-time v1 comparison and a five-minute signature tolerance. It verifies each key's actual current account with `/v1/account`, requires the SaaS and EPS account IDs to differ, and retrieves the event using the SaaS account key before any database claim. Connect/organization deliveries and wrong mode fail. Supported `customer.subscription.*` events reconcile; unknown subscription event types retry; verified non-subscription events are deliberate no-ops.
+[webhook.ts](src/lib/billing/webhook.ts) is an **unmounted server library**. There is no `/api/platform/billing/webhook`, checkout, portal, subscription-management UI, signup hook or background consumer. The public Plans page is a static preview only. Setting environment variables alone cannot activate billing. The prepared handler verifies the exact raw payload with HMAC-SHA256, constant-time v1 comparison and a five-minute signature tolerance. It verifies each key's actual current account with `/v1/account`, requires the SaaS and EPS account IDs to differ, and retrieves the event using the SaaS account key before any database claim. Connect/organization deliveries and wrong mode fail. Supported `customer.subscription.*` events reconcile; unknown subscription event types retry; verified non-subscription events are deliberate no-ops.
 
 [provider.ts](src/lib/billing/provider.ts) performs only GET requests, always to the fixed Stripe API origin with redirects refused, no caching and bounded request timeouts. It pins the documented `2025-03-31.basil` contract, loads every subscription page with `status=all`, and explicitly retrieves required IDs omitted from the list. Periods come from the subscription item, not removed top-level fields. B1 represents one price/period pair, so incomplete or multiple-item subscriptions remain reviewable retries. This does not choose or create a price. Provider errors are reduced to generic responses, without logging raw exceptions or headers.
 
@@ -78,11 +78,19 @@ The transport guard executes the actual signature verifier, adapter and core usi
 
 Before exposing any billing route: apply the exact approved schema through S106; verify the separate Stripe account and pinned endpoint version in test mode; run real concurrent backend and provider replay tests; and add trusted owner-only customer mapping creation. Checkout needs a server-owned allowlist for an explicitly approved paid offer, durable idempotent coordination that prevents concurrent duplicate customers/checkouts/subscriptions, and fixed server-owned return URLs. Portal sessions must use the authenticated owner's stored customer, never a submitted customer ID. Test renewal, cancellation, failed payment, retries and return-page interruption with no effects on merchant money recording. Free early access continues until that separate activation decision. No charging, trial timer, restrictions or automatic conversion are introduced here.
 
-## Commercial decisions still open
+## B3 preview preparation and commercial decisions
 
-Self-service access is the intended product direction. It does not choose prices, payment cadence, card-up-front versus trial-first, trial length, grace periods, seats, feature policy or treatment of existing businesses. Do not infer those from the old draft website or hard-code them while they are undecided. No platform provider environment variable, price, account, subscription, trial or backfill is created by this lane.
+The canonical [product catalogue](src/lib/productPlans.ts) now supplies Base CAD29, Plus CAD59 and Premium CAD99 per month to the public comparison. Base covers the core CRM; Plus adds recurring visits, workforce/time and job-cost tools; Premium adds advanced insights and operational suggestions. The suggestions do not autonomously act or message customers. Provider delivery, paid scans, AI credits, online payment processing and unlimited seats/usage are not included promises. Existing businesses keep their current free access until explicit opt-in. Signup requires no card and causes no conversion or charge.
+
+[planCatalogue.ts](src/lib/billing/planCatalogue.ts) prepares GET-only verification of both actual accounts and all three exact configured product/price objects. It has no sandbox/live default IDs. It checks active products/prices, matching mode, fixed CAD amount, monthly licensed recurrence, no trial/default quantity transformation, and complete expanded currency facts. The before-tax offer refuses an inclusive-tax price. It never certifies tax setup or enables Checkout. Only synthetic fixtures have exercised this adapter in this lane; the coordinator's sandbox identifiers are not provider-verification evidence.
+
+[planPolicy.ts](src/lib/billing/planPolicy.ts) is an unmounted server preview policy with injected fresh authentication/database-role ports. It never infers a paid plan from a posted plan, signup, missing row, Checkout redirect or B1/B2 subscription status. B1/B2 do not retain the durable opt-in and complete quantity/discount/commercial facts needed for paid authority. Its result preserves existing role permissions, has no current paid plan and disables subscription management, charging, plan changes and enforcement. A future mounted server resolver and closure of each direct SQL/RPC feature writer remain required; this preview is not that implementation.
+
+Grace periods, seat/usage limits, tax setup and a consent-bound proration/upgrade/downgrade policy remain unresolved. Paid plan switches stay unavailable until reviewed; cancellation must be at the paid-period end. Do not invent these settings or silently change existing subscriptions. No platform provider environment variable, price, account, subscription, trial or backfill is created by this code lane. Stripe account, identity, agreement, payout and tax setup are paused until the user resumes.
 
 Any later restrictions need an explicit product decision and a single server-owned resolver. Customer payment recording, business records and export access must remain protected. B1 introduces no enforcement and changes no missing-row behavior.
+
+The source-stage scope, feature evidence and remaining gates are recorded in [B3 readiness](PLATFORM-BILLING-B3-READINESS.md). B1/B2 drafts and existing merchant/provider-capability paths remain unchanged.
 
 ## Local verification and its limits
 

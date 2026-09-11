@@ -215,8 +215,8 @@ function SignupFlow() {
               </Button>
             </form>
             <p className="mt-5 text-center text-sm text-ink-muted">
-              No subscription charge at signup.{' '}
-              <Link href="/plans" className="text-accent-text hover:underline">Preview Base and Premium plans</Link>
+              Free early access. No card required, and no automatic move to a paid plan.{' '}
+              <Link href="/plans" className="text-accent-text hover:underline">Preview Base, Plus and Premium plans</Link>
             </p>
           </div>
           <p className="text-center text-xs text-ink-faint mt-6">

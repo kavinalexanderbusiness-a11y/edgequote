@@ -19,6 +19,7 @@
     "verify:platform-billing-foundation": "tsx scripts/verify-platform-billing-foundation.ts",
     "verify:platform-billing-reconciliation": "tsx scripts/verify-platform-billing-reconciliation.ts",
     "verify:platform-billing-transport": "tsx scripts/verify-platform-billing-transport.ts",
+    "verify:platform-billing-plans": "tsx scripts/verify-platform-billing-plans.ts",
     "verify:merchant-connections": "tsx scripts/verify-merchant-connections.ts",
     "verify:signup-resume": "tsx scripts/verify-signup-resume.ts",
     "verify:browser-monitoring": "tsx scripts/verify-browser-monitoring.ts",
