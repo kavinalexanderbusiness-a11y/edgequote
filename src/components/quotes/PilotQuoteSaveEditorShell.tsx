@@ -10,12 +10,15 @@ import { validatePilotQuoteSaveDraftValues, type PilotQuoteSaveIntent } from '@/
 import { PilotQuoteSaveCaller, type PendingQuoteSave, type PilotQuoteDraftRecovery, type PilotQuoteRecoveryInventory, type PilotQuoteSaveRecovery } from '@/lib/quotes/pilotQuoteSaveCaller'
 import { QuoteBuilder, type PilotQuoteEditorHandle } from './QuoteBuilder'
 import { confirm } from '@/lib/confirm'
+import type { PilotQuoteAuxiliaryReady } from '@/lib/quotes/pilotQuoteAuxiliaryLoader'
 
-/** Explicit input from a future authenticated context loader. The baseline's
- * eight pricing columns are NOT a replacement for this separate contract. */
+/** The owner wrapper supplies the verified loader result. The original typed
+ * context remains an isolated fixture seam until the activation/legacy-door
+ * gate; it is not a substitute for the owner wrapper in a production route. */
 export type PilotQuoteAuxiliaryContext =
   | { code: 'loading' | 'unavailable'; ownerId: string }
-  | { code: 'ready'; complete: true; ownerId: string; customers: Customer[]; templates: ServiceTemplate[];
+  | PilotQuoteAuxiliaryReady
+  | { code: 'ready'; complete: true; ownerId: string; source?: never; customers: Customer[]; templates: ServiceTemplate[];
       tiers: TravelFeeTier[]; settings: BusinessSettings | null }
 export type PilotQuoteSaveEditorShellProps = {
   quoteId: string
@@ -34,12 +37,17 @@ const nullableNumber = (v: unknown) => v === null || finite(v)
 const nullableString = (v: unknown) => v === null || typeof v === 'string'
 const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(v)
 
-/** These checks cover owner binding and fields consumed by this editor. The
- * caller must supply complete typed records; a real auxiliary loader remains a
- * separate activation gate. No failed read is coerced to an empty catalogue. */
-function readyContext(input: PilotQuoteAuxiliaryContext, owner: string | undefined): ReadyContext | null {
+/** Defence at the component boundary. The owner wrapper additionally revokes
+ * reads/actions synchronously on auth changes, including between renders. */
+function readyContext(input: PilotQuoteAuxiliaryContext, owner: string | undefined, generation: number | undefined, quoteId: string): ReadyContext | null {
   const v = copyPilotQuoteSaveJson(input, 2_000_000)
   if (!v || v.code !== 'ready' || v.complete !== true || v.ownerId !== owner) return null
+  if (Object.hasOwn(v, 'source')) {
+    const source: unknown = v.source
+    if (!row(source) || Object.keys(source).length !== 4 || source.kind !== 'verified-owner-auxiliary'
+      || source.quoteId !== quoteId || source.ownerId !== owner || source.leaseGeneration !== generation
+      || !v.source || v.settings === null || !Array.isArray(v.units) || !Array.isArray(v.plans)) return null
+  }
   const owned = (items: unknown, check: (r: Record<string, unknown>) => boolean) => Array.isArray(items) && items.length <= 10_000
     && new Set(items.map(x => row(x) ? x.id : null)).size === items.length
     && items.every(x => row(x) && uuid(x.id) && x.user_id === owner && check(x))
@@ -60,6 +68,20 @@ function readyContext(input: PilotQuoteAuxiliaryContext, owner: string | undefin
         'pricing_recommended_mult','pricing_premium_mult','pricing_travel_rate'].every(k => nullableNumber(s[k]))) return null
   }
   return v
+}
+
+function verifiedContext(context: ReadyContext): context is PilotQuoteAuxiliaryReady {
+  return context.source?.kind === 'verified-owner-auxiliary'
+}
+
+/** Missing canonical links refuse actions; they never turn a saved document
+ * into a manual customer or an unrelated current catalogue selection. */
+function contextContainsValues(context: ReadyContext, values: QuoteFormValues, originalCustomerId = values.customer_id): boolean {
+  if (!verifiedContext(context)) return true
+  if (uuid(values.customer_id) && !context.customers.some(customer => customer.id === values.customer_id
+    && (customer.archived_at === null || customer.id === originalCustomerId))) return false
+  const templateIds = [values.service_template_id, ...values.services.map(service => service.service_template_id)].filter(Boolean)
+  return templateIds.every(id => context.templates.some(template => template.id === id))
 }
 
 // Bounded even when the injected read ignores cancellation. Late results cannot
@@ -120,12 +142,15 @@ function VersionValues({ values }: { values: QuoteFormValues }) {
 export function PilotQuoteSaveEditorShell(props: PilotQuoteSaveEditorShellProps) {
   const generation = useSyncExternalStore(subscribeCacheOwner, getCacheGeneration, () => 0)
   const lease = cacheLease()
-  const context = useMemo(() => readyContext(props.context, lease?.owner), [props.context, lease?.owner])
+  const [instance, setInstance] = useState<Instance | null>(null)
+  const context = useMemo(() => {
+    const ready = readyContext(props.context, lease?.owner, lease?.gen, props.quoteId)
+    return ready && (!instance || contextContainsValues(ready, instance.baseline.values)) ? ready : null
+  }, [props.context, props.quoteId, lease?.owner, lease?.gen, instance])
   const contextReady = context !== null
   const currentProps = useRef(props); currentProps.current = props
   const currentContext = useRef(context); currentContext.current = context
   const editor = useRef<PilotQuoteEditorHandle>(null)
-  const [instance, setInstance] = useState<Instance | null>(null)
   const active = useRef<Instance | null>(null)
   const [state, setState] = useState('loading')
   const [message, setMessage] = useState<string | null>(null)
@@ -141,11 +166,15 @@ export function PilotQuoteSaveEditorShell(props: PilotQuoteSaveEditorShellProps)
 
   const install = (baseline: PilotQuoteSaveBaseline, bound: CacheLease, adoption?: AutosaveSubmissionAdoption, values = baseline.values) => {
     if (!alive.current || !isCurrentLease(bound) || currentProps.current.quoteId !== baseline.quoteId || !currentContext.current) return
+    if (!contextContainsValues(currentContext.current, values, baseline.values.customer_id)) {
+      setState('context_unavailable'); return
+    }
     let next: Instance
     const caller = new PilotQuoteSaveCaller({ quoteId: baseline.quoteId, expectedEditorRevision: baseline.editorRevision,
       editorGeneration: adoption?.destination.binding.generation, adoption, validateValues: validatePilotQuoteSaveDraftValues,
       write: input => {
         if (active.current !== next || !currentContext.current || !isCurrentLease(bound)
+          || !contextContainsValues(currentContext.current, input.values, baseline.values.customer_id)
           || currentProps.current.quoteId !== baseline.quoteId) return Promise.reject(new Error('Editor context unavailable'))
         return currentProps.current.write(input)
       }, readReconciliation: p => currentProps.current.readReconciliation(p),
@@ -298,6 +327,10 @@ export function PilotQuoteSaveEditorShell(props: PilotQuoteSaveEditorShellProps)
 
   const usable = contextReady && editorState === 'ready'
   const shownContext = context ?? instance.context
+  const ownerContext = verifiedContext(shownContext) ? shownContext : undefined
+  const pickerCustomers = ownerContext ? ownerContext.customers
+    .filter(customer => customer.archived_at === null || customer.id === instance.baseline.values.customer_id)
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)) : shownContext.customers
   return <section className="space-y-4" aria-label="Quote editor">
     <div className="flex flex-wrap items-center gap-3">
       <h2 className="font-semibold">{instance.baseline.quoteNumber}</h2>
@@ -340,7 +373,8 @@ export function PilotQuoteSaveEditorShell(props: PilotQuoteSaveEditorShellProps)
       </>}
     </section>}
     <fieldset disabled={!contextReady} className="m-0 min-w-0 border-0 p-0">
-    <QuoteBuilder key={instance.caller.autosaveKey} customers={shownContext.customers} templates={shownContext.templates} tiers={shownContext.tiers}
+    <QuoteBuilder key={instance.caller.autosaveKey} customers={pickerCustomers} templates={shownContext.templates} tiers={shownContext.tiers}
+      pilotAuxiliary={ownerContext}
       settings={shownContext.settings} defaultValues={instance.values} isEdit pilotSave={instance.caller} pilotEditorRef={editor} onPilotEditorState={setEditorState}
       autosaveBaselineUpdatedAt={instance.baseline.quoteUpdatedAt} optionsLockedName={instance.baseline.selectedOption?.name ?? null}
       onCancel={close} onSubmit={async () => false} />
