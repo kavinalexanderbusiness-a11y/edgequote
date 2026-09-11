@@ -7,9 +7,10 @@ import { internalBootstrapRelays } from './internal-bootstrap-relays.mjs'
 
 const source = realpathSync(fileURLToPath(new URL('../../', import.meta.url)))
 const proofCase = process.env.PILOT_AUTH_SAVE_CASE || 'acknowledged'
-if (!['acknowledged', 'lost-acknowledgement', 'versioned-acceptance'].includes(proofCase)) throw Error('Unsupported real Save proof case')
+if (!['acknowledged', 'lost-acknowledgement', 'versioned-acceptance', 'acceptance-lock-order'].includes(proofCase)) throw Error('Unsupported real Save proof case')
 const output = join(source, proofCase === 'acknowledged' ? 'outputs/authenticated-quote-save-real-20260911'
-  : proofCase === 'lost-acknowledgement' ? 'outputs/authenticated-quote-save-lost-ack-20260911' : 'outputs/authenticated-quote-acceptance-real-20260911')
+  : proofCase === 'lost-acknowledgement' ? 'outputs/authenticated-quote-save-lost-ack-20260911'
+  : proofCase === 'acceptance-lock-order' ? 'outputs/quote-acceptance-lock-order-20260911' : 'outputs/authenticated-quote-acceptance-real-20260911')
 const marker = 'EDGEHQ_DISPOSABLE_REAL_AUTH_SAVE_ONLY'
 const project = 'edgequote-auth-save-disposable'
 const network = 'edgequote-auth-save-internal-' + process.env.GITHUB_RUN_ID

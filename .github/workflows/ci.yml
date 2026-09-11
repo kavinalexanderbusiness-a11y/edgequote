@@ -20,7 +20,7 @@ on:
         description: 'Explicit isolated prerequisite; ordinary CI remains the default'
         type: choice
         default: normal
-        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack, quote-acceptance-versioned]
+        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack, quote-acceptance-versioned, quote-acceptance-lock-order]
       authority_expectation:
         description: 'Only for the isolated source-bound authority proof'
         type: choice
@@ -36,7 +36,7 @@ concurrency:
 
 jobs:
   verify:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack' && inputs.proof != 'quote-acceptance-versioned') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack' && inputs.proof != 'quote-acceptance-versioned' && inputs.proof != 'quote-acceptance-lock-order') }}
     name: typecheck · lint · build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -129,7 +129,7 @@ jobs:
         run: npm run build
 
   quote-save-authenticated:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.proof == 'quote-save-authenticated' || inputs.proof == 'quote-save-lost-ack' || inputs.proof == 'quote-acceptance-versioned') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.proof == 'quote-save-authenticated' || inputs.proof == 'quote-save-lost-ack' || inputs.proof == 'quote-acceptance-versioned' || inputs.proof == 'quote-acceptance-lock-order') }}
     name: Disposable real Auth and browser quote Save
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -139,7 +139,7 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       SUPABASE_TELEMETRY_DISABLED: '1'
       DO_NOT_TRACK: '1'
-      PILOT_AUTH_SAVE_CASE: ${{ inputs.proof == 'quote-acceptance-versioned' && 'versioned-acceptance' || inputs.proof == 'quote-save-lost-ack' && 'lost-acknowledgement' || 'acknowledged' }}
+      PILOT_AUTH_SAVE_CASE: ${{ inputs.proof == 'quote-acceptance-lock-order' && 'acceptance-lock-order' || inputs.proof == 'quote-acceptance-versioned' && 'versioned-acceptance' || inputs.proof == 'quote-save-lost-ack' && 'lost-acknowledgement' || 'acknowledged' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -173,7 +173,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.proof }}-${{ github.sha }}
-          path: ${{ inputs.proof == 'quote-acceptance-versioned' && 'outputs/authenticated-quote-acceptance-real-20260911/*.json' || inputs.proof == 'quote-save-lost-ack' && 'outputs/authenticated-quote-save-lost-ack-20260911/*.json' || 'outputs/authenticated-quote-save-real-20260911/*.json' }}
+          path: ${{ inputs.proof == 'quote-acceptance-lock-order' && 'outputs/quote-acceptance-lock-order-20260911/*.json' || inputs.proof == 'quote-acceptance-versioned' && 'outputs/authenticated-quote-acceptance-real-20260911/*.json' || inputs.proof == 'quote-save-lost-ack' && 'outputs/authenticated-quote-save-lost-ack-20260911/*.json' || 'outputs/authenticated-quote-save-real-20260911/*.json' }}
           if-no-files-found: error
           retention-days: 14
 

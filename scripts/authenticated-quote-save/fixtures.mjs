@@ -99,7 +99,7 @@ function quoteSql({ owner, customer, property, quote, suffix, price, hours, rate
  * createUser(email,password) must return the UUID from real GoTrue, not a fake.
  * The denied user owns a quote but has no settings, making its owner-role test
  * meaningful rather than merely asking it to read another tenant's quote. */
-export async function seedFixtures({ sql, createUser, acceptanceFixture }) {
+export async function seedFixtures({ sql, createUser, acceptanceFixture, sharedUnitId }) {
   if (typeof sql !== 'function' || typeof createUser !== 'function') throw Error('Actual SQL and GoTrue transports required')
   const run = randomUUID()
   const fixture = { password: PASSWORD, emailA: `owner-a-${run}@fixture.example.invalid`,
@@ -107,7 +107,12 @@ export async function seedFixtures({ sql, createUser, acceptanceFixture }) {
     customerA: randomUUID(), propertyA: randomUUID(), quoteA: randomUUID(),
     customerB: randomUUID(), propertyB: randomUUID(), quoteB: randomUUID(),
     customerDenied: randomUUID(), propertyDenied: randomUUID(), quoteDenied: randomUUID(),
-    unitId: randomUUID(), serviceIdsA: [randomUUID(), randomUUID(), randomUUID()].sort() }
+    unitId: sharedUnitId ? uuid(sharedUnitId) : randomUUID(), serviceIdsA: [randomUUID(), randomUUID(), randomUUID()].sort() }
+  if (sharedUnitId) {
+    const unit = await sql(`select id from public.service_units where id=${idSql(sharedUnitId)} and user_id is null
+      and code='each' and label='Each' and abbrev='ea' and step=1 and decimals=0 and sort_order=0 and active`)
+    if (unit.length !== 1 || unit[0].id !== sharedUnitId) throw Error('Exact existing synthetic shared unit required')
+  }
   fixture.ownerA = uuid(await createUser(fixture.emailA, PASSWORD))
   fixture.ownerB = uuid(await createUser(fixture.emailB, PASSWORD))
   fixture.denied = uuid(await createUser(fixture.deniedEmail, PASSWORD))
@@ -122,8 +127,8 @@ export async function seedFixtures({ sql, createUser, acceptanceFixture }) {
       suffix: 'B', price: 207.89, hours: 2.37, rate: 48.19, area: 4321.09 })}
     ${quoteSql({ owner: fixture.denied, customer: fixture.customerDenied, property: fixture.propertyDenied, quote: fixture.quoteDenied,
       suffix: 'DENIED', price: 101.23, hours: 1.13, rate: 37.17, area: 1234.56 })}
-    insert into public.service_units(id,user_id,code,label,abbrev,step,decimals,sort_order,active)
-      values(${idSql(fixture.unitId)},null,'each','Each','ea',1,0,0,true);
+    ${sharedUnitId ? '' : `insert into public.service_units(id,user_id,code,label,abbrev,step,decimals,sort_order,active)
+      values(${idSql(fixture.unitId)},null,'each','Each','ea',1,0,0,true);`}
     insert into public.quote_services(id,user_id,quote_id,service_type,service_template_id,quantity,unit,unit_price,
       est_minutes,discount_type,discount_value,notes,sort_order,kind) values
       (${idSql(cleanup)},${idSql(fixture.ownerA)},${idSql(fixture.quoteA)},'Included cleanup',null,3,'each',0,30,null,null,'Cleanup scope',20,'service'),

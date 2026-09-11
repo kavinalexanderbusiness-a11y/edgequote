@@ -118,3 +118,33 @@ No acceptance UI, concurrency, durable recovery or global exactly-once claim is 
 
 Evidence goes to `outputs/authenticated-quote-acceptance-real-20260911`; the new
 synthetic server report, platform report and browser report stay separate.
+
+## Observed acceptance lock ordering
+
+The manual `quote-acceptance-lock-order` input runs six new synthetic fixtures
+on the same pinned disposable stack. It preserves all completed predecessor
+packets and skips their suites. Product modules and native SQL are unchanged.
+Evidence goes to `outputs/quote-acceptance-lock-order-20260911`.
+
+Four schedules exercise both orders of actual Save UI and portal or owner
+acceptance HTTP requests. A quote-only transaction gate holds the first native
+request while an independent observer proves its transaction-ID wait and the
+second request's conflict on the exact canonical owner advisory lock. Backend
+identity, granted/ungranted lock tags, pending requests and unchanged rows are
+required before release. One eight-second barrier budget applies; absent proof
+fails the schedule without a sequential fallback or timeout relaxation.
+
+The remaining schedules order owner acceptance against settings deletion. R1
+uses actual HTTP acceptance behind an uncommitted deletion. R2 deliberately uses
+a native acceptance call in an outer service transaction: its return is provisional
+until COMMIT, and an independent committed snapshot precedes deletion COMMIT.
+R2 is not HTTP or acceptance-UI acknowledgement evidence. Its nonempty required
+terms fixture makes current acceptance false after settings removal; the committed
+ledger must remain intact. Later owner actions refuse and reconciliation stays
+unknown.
+
+The harness admits no further schedules after failure. It records rows before
+and after cleanup, propagates incomplete drain/closure as failure, and observes
+external IO and unchanged native definitions again. Cancellation or gate release
+does not establish rollback; released pending work may commit. Only a completed,
+reviewed exact-run artifact can support a runtime PASS claim.

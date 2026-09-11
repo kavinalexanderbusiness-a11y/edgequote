@@ -24,7 +24,7 @@ async function prospectiveRealpath(path) {
 /** Generate only an isolated, disposable Next development mount. The caller
  * owns source/SHA verification, internal-network containment and cleanup.
  * This helper starts nothing, installs nothing and never writes in source. */
-export async function generateMount({ source, directory, marker, lostAcknowledgement, versionedAcceptance }) {
+export async function generateMount({ source, directory, marker, lostAcknowledgement, versionedAcceptance, lockOrderAcceptance }) {
   if (process.env.GITHUB_ACTIONS !== 'true' || marker !== MARKER) throw Error('Disposable cloud generation required')
   if (typeof source !== 'string' || typeof directory !== 'string' || !isAbsolute(source) || !isAbsolute(directory)) {
     throw Error('Absolute source and temporary directory required')
@@ -33,6 +33,7 @@ export async function generateMount({ source, directory, marker, lostAcknowledge
   if (!(await stat(sourceRoot)).isDirectory()) throw Error('Source checkout directory required')
   const target = await prospectiveRealpath(resolve(directory))
   if (inside(sourceRoot, target) || inside(target, sourceRoot)) throw Error('Temporary mount and source checkout must not overlap')
+  if (lockOrderAcceptance && (lockOrderAcceptance !== true || lostAcknowledgement || versionedAcceptance)) throw Error('Lock-order mount cannot contain response/authority fault gates')
   if (lostAcknowledgement) {
     const fault = await realpath(lostAcknowledgement.directory)
     if (fault !== lostAcknowledgement.directory || dirname(fault) !== dirname(target) || fault === target
@@ -320,8 +321,21 @@ export async function POST(request: Request) {
 }
 `
   }
-  if (versionedAcceptance) {
-    files['proof-acceptance.ts'] = `import 'server-only'
+  if (versionedAcceptance || lockOrderAcceptance) {
+    files['proof-acceptance.ts'] = lockOrderAcceptance ? `import 'server-only'
+import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { createPilotQuoteSaveAuth } from '@/lib/quotes/pilotQuoteSaveAuth'
+import { createPilotQuoteAcceptanceStore } from '@/lib/quotes/pilotQuoteAcceptanceServer'
+import { assertProofRuntime } from './proof-server'
+export async function acceptancePorts() {
+  assertProofRuntime()
+  const client = await createClient()
+  const service = createAdminClient()
+  if (!service) throw Error('Disposable service client unavailable')
+  return { auth: createPilotQuoteSaveAuth(client), store: createPilotQuoteAcceptanceStore(service) }
+}
+` : `import 'server-only'
 import { appendFile, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createClient } from '@/lib/supabase/server'

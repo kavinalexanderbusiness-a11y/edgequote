@@ -25,7 +25,7 @@ async function loadCanonicalWire() {
       assert.ok(local && !isAbsolute(local) && local !== '..' && !local.startsWith('../'), 'Canonical bundle input must stay in the checked-out source/dependencies')
       return { actual, path: local, kind: local.startsWith('node_modules/') ? 'dependency' : 'source' }
     }
-    const generated = "export { parsePilotAcceptancePreview, buildPilotAcceptanceCommitRequest, parsePilotAcceptanceCommitReply } from './src/lib/quotes/pilotQuoteAcceptance.ts';\nexport { termsClaimPatch } from './src/lib/payments/termsTimingConflict.ts';\n"
+    const generated = "export { parsePilotAcceptancePreview, buildPilotAcceptanceCommitRequest, parsePilotAcceptanceCommitReply } from './src/lib/quotes/pilotQuoteAcceptance.ts';\nexport { termsClaimPatch } from './src/lib/payments/termsTimingConflict.ts';\nexport { parsePilotQuoteSaveReceipt } from './src/lib/quotes/pilotQuoteSaveReceipt.ts';\n"
     const result = await build({ absWorkingDir: sourceRoot, stdin: { contents: generated, resolveDir: sourceRoot, sourcefile: 'versioned-acceptance-proof-entry.ts', loader: 'ts' },
       bundle: true, platform: 'node', format: 'esm', target: 'node22', write: false, metafile: true, logLevel: 'silent',
       tsconfig: join(sourceRoot, 'tsconfig.json'), plugins: [{ name: 'capture-exact-canonical-proof-inputs', setup(builder) {
@@ -48,7 +48,7 @@ async function loadCanonicalWire() {
     })
     const bytes = result.outputFiles[0].contents
     const wire = await import('data:text/javascript;base64,' + Buffer.from(bytes).toString('base64'))
-    for (const key of ['parsePilotAcceptancePreview', 'buildPilotAcceptanceCommitRequest', 'parsePilotAcceptanceCommitReply', 'termsClaimPatch']) assert.equal(typeof wire[key], 'function')
+    for (const key of ['parsePilotAcceptancePreview', 'buildPilotAcceptanceCommitRequest', 'parsePilotAcceptanceCommitReply', 'termsClaimPatch', 'parsePilotQuoteSaveReceipt']) assert.equal(typeof wire[key], 'function')
     return { wire, evidence: { kind: 'actual-canonical-wire-bundle', esbuildVersion: version, generatedEntrySha256: sha(generated),
       bundleSha256: sha(bytes), bundleBytes: bytes.length, consumedInputs: [...consumed.values()].sort((a, b) => a.path.localeCompare(b.path)), configuration,
       scope: 'Actual TS source and captured dependency bytes compiled in memory; no source policy replacement. Dependency provenance remains the root lock/install gate.' } }
@@ -57,6 +57,7 @@ async function loadCanonicalWire() {
 }
 
 /** Seed helper uses the SAME actual canonical classifier, not a synthetic claim. */
+export const loadAcceptanceProofWire = loadCanonicalWire
 export async function acceptanceFixtureTerms() {
   const { wire } = await loadCanonicalWire()
   return { termsText, patch: wire.termsClaimPatch(termsText) }
