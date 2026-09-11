@@ -96,12 +96,17 @@ jobs:
           command -v psql
           psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
       - name: Actual PostgreSQL17 source and integration proof
+        id: native_proof
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/schema-proof.ts
       - name: Dormant quote Save HTTP boundary and native adapter proof
+        id: server_proof
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-server-proof.ts
       - name: Isolated quote Save browser and default autosave proof
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-browser-proof.ts /usr/bin/google-chrome
       - name: Isolated actual acceptance callers with native response captures
+        # Its inputs are the native/server receipts. An independent Save-browser
+        # failure still fails this job, while this evidence can be collected.
+        if: ${{ !cancelled() && steps.native_proof.outcome == 'success' && steps.server_proof.outcome == 'success' }}
         run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/acceptance-caller-browser-proof.ts /usr/bin/google-chrome
       - name: Preserve the exact proof receipt
         if: always()

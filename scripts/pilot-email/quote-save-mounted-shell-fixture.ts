@@ -8,7 +8,7 @@ const QUOTE=uuid(4),REV='a'.repeat(32);
 const baseline=(values=blank,revision=REV)=>({version:1,code:'baseline',complete:true,ownerId:OWNER,quoteId:QUOTE,editorRevision:revision,
 quoteNumber:'SYN-MOUNT-1',quoteUpdatedAt:STAMP,selectedOption:null,acceptance:{hasRecord:false,current:false},values:clone(values)});
 const readyContext=()=>({code:'ready',complete:true,ownerId:OWNER,customers,templates,tiers:[],settings:null});
-async function waitFor(fn,message,ms=1500){const until=Date.now()+ms;while(Date.now()<until){if(fn())return;await delay(10)}throw Error(message)}
+async function waitFor(fn,message,ms=1500){const until=Date.now()+ms;while(Date.now()<until){if(fn())return;await delay(10)}throw Error(typeof message==='function'?message():message)}
 const textOf=el=>el.textContent.replace(/\\s+/g,' ').trim();
 function button(h,label){const el=[...h.el.querySelectorAll('button')].find(b=>textOf(b)===label);assert(el,'Actual button '+label);return el}
 async function click(h,label){await waitFor(()=>!button(h,label).disabled,'Actual button not ready: '+label);button(h,label).click();
@@ -149,10 +149,21 @@ await test('full editor shell: explicit same-revision continuation uses a fresh 
 await test('full editor shell: two editors continuing one source receive independent durable working copies',async()=>{
  const source=await seedUnsentDraft('Shared source draft');const a=await editor(await mountShell()),b=await editor(await mountShell({withoutOwner:true}));
  for(const h of [a,b]){await click(h,'Review saved and local copies');await click(h,'Refresh saved version')}
- for(const [index,h] of [a,b].entries()){await draftAction(h,'Shared source draft','Continue this draft');await waitFor(()=>field(h,'notes').value==='Shared source draft',
- 'Explicit continuation mounted, editor '+index+'; current='+field(h,'notes').value+'; statuses='+[...h.el.querySelectorAll('[role="status"]')].map(textOf).join(' | '))}
- await input(a,'notes','Editor A working');await input(b,'notes','Editor B working');await delay(850);const drafts=pilotDrafts();
- const aa=drafts.find(x=>x.draft.value.notes==='Editor A working'),bb=drafts.find(x=>x.draft.value.notes==='Editor B working');assert(aa&&bb&&aa.key!==bb.key,'Two live draft keys');assert(localStorage.getItem(source.key)===source.bytes,'Neither editor overwrote original source');assert(a.state.writes.length+b.state.writes.length===0,'No Save during continuation');
+ for(const [index,h] of [a,b].entries()){
+  const previous=field(h,'notes');await draftAction(h,'Shared source draft','Continue this draft');
+  // The new keyed builder intentionally renders only a status while its real
+  // autosave adoption is pending. Neither the predicate nor a diagnostic may
+  // assert a field exists before that gate has produced an editable form.
+  await waitFor(()=>{const current=h.el.querySelector('[name="notes"]'),form=h.el.querySelector('form'),submit=form?.querySelector('button[type="submit"]');
+   return (current instanceof HTMLInputElement||current instanceof HTMLTextAreaElement)&&current.isConnected&&current!==previous
+    &&current.value==='Shared source draft'&&form?.contains(current)&&submit instanceof HTMLButtonElement&&!submit.matches(':disabled')},
+   ()=>'Explicit continuation did not become ready, editor '+index+'; current='+(h.el.querySelector('[name="notes"]')?.value??'<not mounted>')
+    +'; statuses='+[...h.el.querySelectorAll('[role="status"]')].map(textOf).join(' | '));
+ }
+ await input(a,'notes','Editor A working');await input(b,'notes','Editor B working');
+ await waitFor(()=>{const drafts=pilotDrafts();return drafts.some(x=>x.draft.value.notes==='Editor A working')&&drafts.some(x=>x.draft.value.notes==='Editor B working')},'Both editors did not durably store their current values');
+ const drafts=pilotDrafts(),aa=drafts.find(x=>x.draft.value.notes==='Editor A working'),bb=drafts.find(x=>x.draft.value.notes==='Editor B working');
+ assert(aa&&bb&&aa.key!==bb.key&&aa.draft.generation!==bb.draft.generation,'Two live draft keys and generations');assert(localStorage.getItem(source.key)===source.bytes,'Neither editor overwrote original source');assert(a.state.writes.length+b.state.writes.length===0,'No Save during continuation');
 });
 await test('full editor shell: stale original-revision draft stays review-only after a fresh baseline',async()=>{
  const source=await seedUnsentDraft('Stale local draft');const h=await editor(await mountShell({baseline:baseline(blank,'b'.repeat(32))}));await click(h,'Review saved and local copies');await click(h,'Refresh saved version');
