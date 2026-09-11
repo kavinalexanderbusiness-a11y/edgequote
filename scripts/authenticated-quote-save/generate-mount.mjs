@@ -24,7 +24,7 @@ async function prospectiveRealpath(path) {
 /** Generate only an isolated, disposable Next development mount. The caller
  * owns source/SHA verification, internal-network containment and cleanup.
  * This helper starts nothing, installs nothing and never writes in source. */
-export async function generateMount({ source, directory, marker }) {
+export async function generateMount({ source, directory, marker, lostAcknowledgement }) {
   if (process.env.GITHUB_ACTIONS !== 'true' || marker !== MARKER) throw Error('Disposable cloud generation required')
   if (typeof source !== 'string' || typeof directory !== 'string' || !isAbsolute(source) || !isAbsolute(directory)) {
     throw Error('Absolute source and temporary directory required')
@@ -33,6 +33,14 @@ export async function generateMount({ source, directory, marker }) {
   if (!(await stat(sourceRoot)).isDirectory()) throw Error('Source checkout directory required')
   const target = await prospectiveRealpath(resolve(directory))
   if (inside(sourceRoot, target) || inside(target, sourceRoot)) throw Error('Temporary mount and source checkout must not overlap')
+  if (lostAcknowledgement) {
+    const fault = await realpath(lostAcknowledgement.directory)
+    if (fault !== lostAcknowledgement.directory || dirname(fault) !== dirname(target) || fault === target
+      || inside(sourceRoot, fault) || inside(fault, sourceRoot)
+      || !['ownerId', 'quoteId'].every(k => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(lostAcknowledgement[k]))) {
+      throw Error('Private sibling fault directory and fixed synthetic identity required')
+    }
+  }
   try { if ((await readdir(target)).length !== 0) throw Error('Temporary mount directory must be empty') }
   catch (error) { if (error.code !== 'ENOENT') throw error }
   const required = ['src/components/layout/CacheOwner.tsx', 'src/components/quotes/PilotQuoteSaveOwnerEditor.tsx',
@@ -220,6 +228,89 @@ export async function POST(request: Request) {
   return savePilotQuoteSaveRequest(store, auth, request, { trustedOrigin })
 }
 `,
+  }
+  if (lostAcknowledgement) {
+    files['proof-fault.ts'] = `import 'server-only'
+import { appendFile, readFile, writeFile, rename } from 'node:fs/promises'
+import { join } from 'node:path'
+import { assertProofRuntime } from './proof-server'
+import { parsePilotQuoteSaveReceipt } from '@/lib/quotes/pilotQuoteSaveReceipt'
+import type { PilotQuoteSaveStore } from '@/lib/quotes/pilotQuoteSave'
+import type { PilotQuoteSaveIntent } from '@/lib/quotes/pilotQuoteSaveValues'
+
+// Test-only response delivery seam. This file is generated outside the checkout,
+// never imported by a production route and never gives the browser a receipt.
+const directory = ${literal(lostAcknowledgement.directory)}
+const ownerId = ${literal(lostAcknowledgement.ownerId)}, quoteId = ${literal(lostAcknowledgement.quoteId)}
+export async function event(kind: string, operationId?: string) {
+  assertProofRuntime()
+  await appendFile(join(directory, 'events.jsonl'), JSON.stringify({ kind, at: new Date().toISOString(), operationId }) + '\\n', { mode: 0o600 })
+}
+export function observedStore(store: PilotQuoteSaveStore): PilotQuoteSaveStore {
+  return { ...store, commit: async (owner, quote, plan, signal) => {
+    await event('native-commit-dispatch', plan.client_operation_id)
+    const result = await store.commit(owner, quote, plan, signal)
+    await event('native-commit-return', plan.client_operation_id)
+    return result
+  } }
+}
+export async function deliver(response: Response, intent: PilotQuoteSaveIntent) {
+  if (response.status !== 200 || intent?.quoteId !== quoteId) return response
+  const raw = await response.clone().text()
+  const pending = { version: 1 as const, owner: ownerId, quoteId, clientOperationId: intent.clientOperationId,
+    editorGeneration: intent.editorGeneration, originalEditorRevision: intent.expectedEditorRevision,
+    submittedValues: intent.values, submittedSerialization: JSON.stringify(intent.values), stagedAt: Date.now(), state: 'pending' as const }
+  const receipt = parsePilotQuoteSaveReceipt(JSON.parse(raw), pending)
+  if (!receipt) throw Error('Fault refused a non-attributable canonical response')
+  try { await writeFile(join(directory, 'claimed'), intent.clientOperationId, { flag: 'wx', mode: 0o600 }) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return response; throw error }
+  await event('committed-response-held', intent.clientOperationId)
+  await writeFile(join(directory, 'committed.tmp'), JSON.stringify({ intent, receipt }), { flag: 'wx', mode: 0o600 })
+  await rename(join(directory, 'committed.tmp'), join(directory, 'committed.json'))
+  async function waitForBarrier() {
+   const deadline = Date.now() + 90000
+   while (true) {
+    let barrier: { operationId?: string; observedDigest?: string } | null = null
+    try { barrier = JSON.parse(await readFile(join(directory, 'release.json'), 'utf8')) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (barrier) {
+      if (barrier.operationId !== intent.clientOperationId || !/^[0-9a-f]{64}$/.test(barrier.observedDigest ?? '')) throw Error('Wrong SQL observation barrier')
+      return
+    }
+    if (Date.now() >= deadline) throw Error('SQL commit observation barrier timed out')
+    await new Promise(resolve => setTimeout(resolve, 25))
+   }
+  }
+  const authenticBytes = new TextEncoder().encode(raw)
+  let prefixSent = false
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!prefixSent) { prefixSent = true; controller.enqueue(authenticBytes.slice(0, 1)); return }
+      await waitForBarrier()
+      await event('response-dropped', intent.clientOperationId)
+      controller.error(new Error('Disposable intentional lost Save response'))
+    },
+  })
+  // The only altered boundary is delivery: original status/headers and an
+  // authentic prefix, followed by a real stream failure, never a replacement JSON.
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+}
+`
+    files['app/api/save/route.ts'] = `import { savePilotQuoteSaveRequest } from '@/lib/quotes/pilotQuoteSave'
+import { proofPorts, trustedOrigin } from '../../../proof-server'
+import { deliver, event, observedStore } from '../../../proof-fault'
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export async function POST(request: Request) {
+  const retained = request.clone()
+  await event('save-request')
+  const { auth, store } = await proofPorts()
+  const response = await savePilotQuoteSaveRequest(observedStore(store), auth, request, { trustedOrigin })
+  if (response.status !== 200) { void retained.body?.cancel().catch(() => {}); return response }
+  const intent = await retained.json()
+  return deliver(response, intent)
+}
+`
   }
   await mkdir(target, { recursive: true })
   if (await realpath(target) !== target || inside(sourceRoot, target) || inside(target, sourceRoot)) throw Error('Temporary mount location changed')

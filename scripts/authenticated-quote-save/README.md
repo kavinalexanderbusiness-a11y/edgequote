@@ -10,8 +10,10 @@ browser Supabase clients, real Auth users, actual owner auxiliary queries, and
 unchanged baseline/Save server adapters. There must be no injected owner-ready
 context, replacement SDK or fabricated successful transport.
 
-The platform design has independent review approval; runtime preflight remains
-unexecuted. See `platform-plan.md`. The canonical authorization prerequisite in
+The acknowledged first slice passed on 3039762f62441ea5f60533a2367dcff1a61f7e6c,
+run34643273075: nine real Auth/browser stages and 54 focused owner lifecycle
+regressions. Preserve that packet. See `platform-plan.md` for its design. The
+canonical authorization prerequisite in
 `authority-blocker.md` was corrected at c543cae22bc84618ec78fc655213a9d46258fab7
 and independently verified in run34636256963 (72 synthetic/native checks).
 That prerequisite is not real Auth/browser proof. The older native harness's
@@ -54,3 +56,31 @@ It creates owner A, owner B, and a denied account with its own quote but no
 settings, so a denied-role test cannot accidentally pass solely on tenant
 mismatch. Runtime evidence must come from the marked disposable CI platform;
 the helper is never wired to a production route or hosted database target.
+
+## Bounded lost-acknowledgement case
+
+The separate manual `quote-save-lost-ack` input selects only
+`lost-ack-browser-cases.mjs` on the same pinned disposable real platform. It skips
+the acknowledged case and unchanged lifecycle/broad suites. Its output folder
+is `outputs/authenticated-quote-save-lost-ack-20260911`, preserving the first packet.
+
+The generated dev-only route forwards the original Request through canonical
+auth and Save. A transparent store wrapper counts native adapter commit dispatch
+and return; these are not wire-packet counts. The actual committed receipt is
+retained only as private harness evidence. The response stream yields one byte
+of that authentic response, then waits until the browser observes HTTP200 and
+fresh independent SQL reads observe normal COMMIT before deliberately failing.
+No fabricated error/success JSON reaches the caller. Commit and release markers
+are private files published atomically outside the source tree and removed with
+the disposable root. Other canonical refusal responses remain unchanged.
+
+The actual editor must retain the exact unknown pending submission and newer
+typing, avoid a success/close callback, block repeat Save, and preserve recovery
+across reload and genuine same-owner reauthentication. Explicit saved-version
+reads and independent fresh Auth/PostgREST establish current stored facts only.
+They never confirm that a particular pending request saved those values.
+
+This case supplies no attributable reconciliation endpoint, operation journal,
+new schema or production route. A stronger recovery feature requires separately
+reviewed transactional operation persistence and finalization contracts. Local
+pending prevention is not a global exactly-once guarantee across tabs/devices.

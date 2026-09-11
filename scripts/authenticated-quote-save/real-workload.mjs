@@ -1,17 +1,20 @@
 import {execFileSync,spawn} from 'node:child_process'
 import {createHash} from 'node:crypto'
 import {createRequire} from 'node:module'
-import {readFileSync,writeFileSync,mkdirSync,readdirSync,realpathSync,existsSync} from 'node:fs'
+import {readFileSync,writeFileSync,mkdirSync,readdirSync,realpathSync,existsSync,appendFileSync,renameSync} from 'node:fs'
 import {join,relative,isAbsolute} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import assert from 'node:assert/strict'
 import {seedFixtures,readFixture} from './fixtures.mjs'
 import {generateMount} from './generate-mount.mjs'
 import {runAuthenticatedQuoteSaveBrowser} from './browser-cases.mjs'
+import {runLostAcknowledgementBrowser} from './lost-ack-browser-cases.mjs'
 
 const config=JSON.parse(readFileSync(process.argv[2],'utf8'))
 const {source,taskRoot,output,marker}=config
-const report={startedAt:new Date().toISOString(),pass:false,candidate:config.candidate,tree:config.tree,runId:config.runId,
+const lostAck=config.proofCase==='lost-acknowledgement'
+assert(['acknowledged','lost-acknowledgement'].includes(config.proofCase),'Explicit proof case required')
+const report={startedAt:new Date().toISOString(),pass:false,proofCase:config.proofCase,candidate:config.candidate,tree:config.tree,runId:config.runId,
   platformSubstitutions:[],schemaApplications:[],sqlConnections:[],cleanup:{},scope:'Real local Auth and PostgREST with actual canonical cookie/browser clients, source adapters and normally committed native Save; synthetic business identities only.'}
 const hash=v=>createHash('sha256').update(v).digest('hex')
 const req=createRequire(join(source,'package.json'))
@@ -124,7 +127,10 @@ async function main(){
   }})
   report.fixtureOwners={ownerA:fixture.ownerA,ownerB:fixture.ownerB,denied:fixture.denied}
   report.beforeRows=fixture.before
-  const mounted=await generateMount({source,directory:join(taskRoot,'app'),marker})
+  const faultDirectory=join(taskRoot,'private-response-fault')
+  if(lostAck)mkdirSync(faultDirectory,{mode:0o700})
+  const mounted=await generateMount({source,directory:join(taskRoot,'app'),marker,
+    ...(lostAck?{lostAcknowledgement:{directory:faultDirectory,ownerId:fixture.ownerA,quoteId:fixture.quoteA}}:{})})
   report.mount=mounted
   const nextConfig=(await import(pathToFileURL(join(mounted.directory,'next.config.mjs')).href)).default
   for(const phase of ['phase-production-build','phase-production-server']){
@@ -158,7 +164,45 @@ async function main(){
     env:{PATH:process.env.PATH,HOME:process.env.HOME,LANG:'C.UTF-8',DO_NOT_TRACK:'1'},
     args:['--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--disable-component-update','--disable-sync','--no-first-run']})
   report.browserVersion=browser.version()
-  const browserResult=await runAuthenticatedQuoteSaveBrowser({browser,baseURL:config.origin,fixture,
+  const readFaultEvents=()=>existsSync(join(faultDirectory,'events.jsonl'))
+    ?readFileSync(join(faultDirectory,'events.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[]
+  let held
+  const fault=lostAck?{
+    waitCommitted:async()=>{
+      const deadline=Date.now()+60000
+      while(Date.now()<deadline){
+        if(existsSync(join(faultDirectory,'committed.json'))){
+          held=JSON.parse(readFileSync(join(faultDirectory,'committed.json'),'utf8'))
+          assert.equal(held.receipt.code,'committed');assert.equal(held.receipt.owner_id,fixture.ownerA)
+          assert.equal(held.intent.quoteId,fixture.quoteA)
+          return {...held,events:readFaultEvents()}
+        }
+        if(appClosed())throw Error('Temporary app exited before held response')
+        await new Promise(resolve=>setTimeout(resolve,25))
+      }
+      throw Error('Canonical committed response hold timed out')
+    },
+    releaseAfterReadback:async observedRows=>{
+      assert(held,'No canonical committed response held')
+      const actual=await readFixture(sql,fixture)
+      assert.deepEqual(actual,observedRows,'Independent SQL observation changed before release')
+      assert.equal(actual.ownerA.quotes[0].notes,held.intent.values.notes)
+      assert.equal(actual.ownerA.quotes[0].updated_at,held.receipt.quote.updated_at)
+      assert.notEqual(held.receipt.after_revision,held.receipt.before_revision)
+      const barrier={operationId:held.intent.clientOperationId,observedDigest:hash(JSON.stringify(actual))}
+      appendFileSync(join(faultDirectory,'events.jsonl'),JSON.stringify({kind:'sql-commit-observed',at:new Date().toISOString(),...barrier})+'\n',{mode:0o600})
+      writeFileSync(join(faultDirectory,'release.tmp'),JSON.stringify(barrier),{flag:'wx',mode:0o600})
+      renameSync(join(faultDirectory,'release.tmp'),join(faultDirectory,'release.json'))
+      const deadline=Date.now()+20000
+      while(!readFaultEvents().some(event=>event.kind==='response-dropped')){
+        if(Date.now()>=deadline)throw Error('Actual response drop was not observed after SQL barrier')
+        await new Promise(resolve=>setTimeout(resolve,25))
+      }
+    },
+    readEvents:async()=>readFaultEvents(),
+  }:undefined
+  const runBrowser=lostAck?runLostAcknowledgementBrowser:runAuthenticatedQuoteSaveBrowser
+  const browserResult=await runBrowser({browser,baseURL:config.origin,fixture,fault,
     readIndependentRows:()=>readFixture(sql,fixture),
     readFreshOwnerRows:async()=>{
       // New client + new actual password session; never reuse browser tokens or service role.
@@ -177,6 +221,7 @@ async function main(){
       }finally{if(signed){const out=await fresh.auth.signOut({scope:'local'});if(out.error)throw Error('Fresh session sign-out failed')}}
     }})
   report.browser=browserResult
+  if(lostAck)report.responseFaultEvents=readFaultEvents()
   report.generatedSourcePinsAfterRun={};pin(mounted.directory,report.generatedSourcePinsAfterRun)
   if(browserResult?.pass!==true)throw Error('Actual browser cases did not pass')
   report.afterRows=await readFixture(sql,fixture)

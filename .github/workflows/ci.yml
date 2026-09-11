@@ -20,7 +20,7 @@ on:
         description: 'Explicit isolated prerequisite; ordinary CI remains the default'
         type: choice
         default: normal
-        options: [normal, quote-save-authority, quote-save-authenticated]
+        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack]
       authority_expectation:
         description: 'Only for the isolated source-bound authority proof'
         type: choice
@@ -36,7 +36,7 @@ concurrency:
 
 jobs:
   verify:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack') }}
     name: typecheck · lint · build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -129,7 +129,7 @@ jobs:
         run: npm run build
 
   quote-save-authenticated:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.proof == 'quote-save-authenticated' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.proof == 'quote-save-authenticated' || inputs.proof == 'quote-save-lost-ack') }}
     name: Disposable real Auth and browser quote Save
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -139,6 +139,7 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       SUPABASE_TELEMETRY_DISABLED: '1'
       DO_NOT_TRACK: '1'
+      PILOT_AUTH_SAVE_CASE: ${{ inputs.proof == 'quote-save-lost-ack' && 'lost-acknowledgement' || 'acknowledged' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -154,6 +155,7 @@ jobs:
       - name: Real isolated Auth, native commit and browser Save
         run: node scripts/authenticated-quote-save/real-platform-proof.mjs
       - name: Focused regression for the changed owner-render lifecycle
+        if: ${{ inputs.proof == 'quote-save-authenticated' }}
         run: node node_modules/tsx/dist/cli.mjs scripts/verify-pilot-quote-auxiliary-loader.ts
       - name: Preserve affected owner-lifecycle regression evidence
         if: ${{ always() && hashFiles('outputs/pilot-full-quote-save-20260910/quote-auxiliary-loader-proof.json') != '' }}
@@ -167,8 +169,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: quote-save-authenticated-${{ github.sha }}
-          path: outputs/authenticated-quote-save-real-20260911/*.json
+          name: ${{ inputs.proof }}-${{ github.sha }}
+          path: ${{ inputs.proof == 'quote-save-lost-ack' && 'outputs/authenticated-quote-save-lost-ack-20260911/*.json' || 'outputs/authenticated-quote-save-real-20260911/*.json' }}
           if-no-files-found: error
           retention-days: 14
 
