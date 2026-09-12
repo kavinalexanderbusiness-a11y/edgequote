@@ -15,54 +15,10 @@
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { splitStatements, substitutePlatformStatements } from './pg-sql'
 
 const MIGRATIONS = join('supabase', 'migrations')
 const PRELUDE = join('scripts', 'schema', 'platform-prelude.sql')
-
-/** Statements are split on dollar-quote-aware boundaries — a function body full
- *  of semicolons must not be cut in half. Mirrors verify-rebuild's splitter. */
-export function splitStatements(sql: string): string[] {
-  const out: string[] = []
-  let buf = '', i = 0
-  while (i < sql.length) {
-    const c = sql[i]
-    if (c === '-' && sql[i + 1] === '-') {
-      const nl = sql.indexOf('\n', i)
-      const end = nl === -1 ? sql.length : nl
-      buf += sql.slice(i, end); i = end
-      continue
-    }
-    if (c === "'") {
-      let j = i + 1
-      while (j < sql.length) {
-        if (sql[j] === "'" && sql[j + 1] === "'") { j += 2; continue }
-        if (sql[j] === "'") break
-        j++
-      }
-      buf += sql.slice(i, j + 1); i = j + 1
-      continue
-    }
-    if (c === '$') {
-      const m = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(i))
-      if (m) {
-        const tag = m[0]
-        const close = sql.indexOf(tag, i + tag.length)
-        const end = close === -1 ? sql.length : close + tag.length
-        buf += sql.slice(i, end); i = end
-        continue
-      }
-    }
-    if (c === ';') { out.push(buf.trim()); buf = ''; i++; continue }
-    buf += c; i++
-  }
-  if (buf.trim()) out.push(buf.trim())
-  return out.filter(s => s && !/^(--[^\n]*\n?)*$/.test(s))
-}
-
-const SUBSTITUTIONS: RegExp[] = [
-  /^create extension if not exists "?pg_net"?[^;]*;$/gim,
-  /^create extension if not exists "?pg_stat_statements"?[^;]*;$/gim,
-]
 
 export interface CrewTestDb {
   query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>
@@ -109,8 +65,7 @@ export async function bootCrewDb(): Promise<CrewTestDb | { skipped: string }> {
   const db = await PGlite.create({ extensions: Object.fromEntries(Object.entries(contribs).filter(([, v]) => v)) })
 
   const apply = async (sql: string) => {
-    let s = sql
-    for (const p of SUBSTITUTIONS) { s = s.replace(p, '-- [test substitution]'); p.lastIndex = 0 }
+    const s = substitutePlatformStatements(sql).sql
     for (const stmt of splitStatements(s)) await db.exec(stmt + ';')
   }
 

@@ -38,7 +38,7 @@ interface JobRow {
   duration_minutes: number | null
   crew_id: string | null
   notes: string | null
-  no_charge_at: string | null
+  noChargeAt: string | null
 }
 
 interface InvoiceRow {
@@ -56,7 +56,7 @@ async function loadOwnerData(sb: SupabaseClient, settings: OwnerReminderSettings
   const today = tenantMoment(settings.timeZone, now).date
   const tomorrow = addDaysISO(today, 1)
   const { data: jobsData, error: jobsError } = await sb.from('jobs')
-    .select('id, scheduled_date, status, start_time, end_time, duration_minutes, crew_id, notes, no_charge_at')
+    .select('id, scheduled_date, status, start_time, end_time, duration_minutes, crew_id, notes, noChargeAt:no_charge_at')
     .eq('user_id', settings.userId).in('scheduled_date', [today, tomorrow])
     .in('status', ['scheduled', 'in_progress', 'completed']).order('id').limit(MAX_ROWS + 1)
   if (jobsError) throw new Error(`jobs: ${jobsError.message}`)
@@ -92,7 +92,7 @@ async function loadOwnerData(sb: SupabaseClient, settings: OwnerReminderSettings
     crewId: j.crew_id, crewName: j.crew_id ? crewNames.get(j.crew_id) ?? null : null,
     // We deliberately do not put note text on a lock screen. Its presence tells
     // the owner to open the authenticated day plan for equipment/material detail.
-    hasPrepNotes: !!j.notes?.trim(), noCharge: !!j.no_charge_at,
+    hasPrepNotes: !!j.notes?.trim(), noCharge: !!j.noChargeAt,
   }))
   const byId = new Map<string, InvoiceRow>()
   for (const row of [...((openInvoicesRes.data ?? []) as InvoiceRow[]), ...((jobInvoicesRes.data ?? []) as InvoiceRow[])]) byId.set(row.id, row)
