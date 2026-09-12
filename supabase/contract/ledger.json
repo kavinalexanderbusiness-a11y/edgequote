@@ -1188,5 +1188,12 @@
   "sql_md5": "4d7bea696b5f58738df7a524381be929",
   "version": "20260910151337",
   "stmt_count": 1
+ },
+ {
+  "name": "owner_reminder_scheduler",
+  "sql_len": 1376,
+  "sql_md5": "3d76e042015d7a1c7eab956eeb7671a8",
+  "version": "20260912083642",
+  "stmt_count": 1
  }
 ]

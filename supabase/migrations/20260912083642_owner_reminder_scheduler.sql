@@ -35,3 +35,4 @@ select cron.schedule(
       and nullif(cron_secret, '') is not null;
   $cron$
 );
+
