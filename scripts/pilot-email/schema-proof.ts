@@ -22,7 +22,7 @@ import { runQuoteVersionedAcceptanceCases } from './quote-versioned-acceptance-c
 const source = resolve(__dirname, '../..')
 const output = join(source, 'outputs/pilot-full-quote-save-20260910')
 const PROPOSAL_HASH = '434048ade9a3625a280707f12877f694281e72efbaa78b29ae141503876540fb'
-const IDENTITY_PROPOSAL_HASH = '7308c0db5f2f60e5c5ffc338bb9245e7484ff76525be527a12e0352b487b681d'
+const IDENTITY_PROPOSAL_HASH = '41912550714a654c63001b19914abddc3bad17f4e436e437e62f3c642228c56a'
 const sourcePins: Record<string, string> = {}
 const read = (path: string) => {
   const text = readFileSync(join(source, path), 'utf8').replace(/\r\n/g, '\n')
@@ -89,7 +89,9 @@ async function main() {
     }
     await apply('scripts/schema/platform-prelude.sql')
     for (const file of readdirSync(join(source, 'supabase/migrations')).filter(f => f.endsWith('.sql')).sort()) await apply('supabase/migrations/' + file)
+    await apply('supabase/proposals/pilot-quote-shared-profile.sql')
     await apply('supabase/proposals/pilot-email-core.sql')
+    await apply('supabase/proposals/pilot-quote-email-present.sql')
     await apply('supabase/proposals/pilot-quote-identity.sql')
     const nativeDefinition = async () => (await db!.query<{ value: unknown }>(`select jsonb_build_object(
       'triggers',(select jsonb_agg(pg_get_triggerdef(t.oid) order by t.tgname) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal and c.relname in ('messages','notification_log','customers','conversations')),

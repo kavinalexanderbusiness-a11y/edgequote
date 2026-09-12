@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true, "incremental": false, "types": ["node"] },
+  "include": ["profile-isolation-proof.ts"],
+  "exclude": ["../../node_modules"]
+}

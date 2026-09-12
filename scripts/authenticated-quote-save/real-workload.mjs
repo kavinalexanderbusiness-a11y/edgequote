@@ -105,7 +105,8 @@ async function main(){
   await sql("comment on database postgres is 'edgequote disposable real auth quote save only'")
   // Exact checked-in SQL files, no synthetic platform prelude, substitutions or skipped statements.
   const schemaFiles=[...readdirSync(join(source,'supabase/migrations')).filter(f=>f.endsWith('.sql')).sort().map(f=>'supabase/migrations/'+f),
-    'supabase/proposals/pilot-email-core.sql','supabase/proposals/pilot-quote-identity.sql','supabase/proposals/pilot-quote-save.sql',
+    'supabase/proposals/pilot-quote-shared-profile.sql','supabase/proposals/pilot-email-core.sql','supabase/proposals/pilot-quote-email-present.sql',
+    'supabase/proposals/pilot-quote-identity.sql','supabase/proposals/pilot-quote-save.sql',
     ...(usesAcceptance?['supabase/proposals/pilot-quote-versioned-acceptance.sql']:[])]
   for(const file of schemaFiles){
     const bytes=readFileSync(join(source,file))

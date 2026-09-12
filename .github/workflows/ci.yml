@@ -20,7 +20,7 @@ on:
         description: 'Explicit isolated prerequisite; ordinary CI remains the default'
         type: choice
         default: normal
-        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack, quote-acceptance-versioned, quote-acceptance-lock-order, quote-acceptance-ui]
+        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack, quote-acceptance-versioned, quote-acceptance-lock-order, quote-acceptance-ui, quote-shared-profile]
       authority_expectation:
         description: 'Only for the isolated source-bound authority proof'
         type: choice
@@ -36,7 +36,7 @@ concurrency:
 
 jobs:
   verify:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack' && inputs.proof != 'quote-acceptance-versioned' && inputs.proof != 'quote-acceptance-lock-order' && inputs.proof != 'quote-acceptance-ui') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack' && inputs.proof != 'quote-acceptance-versioned' && inputs.proof != 'quote-acceptance-lock-order' && inputs.proof != 'quote-acceptance-ui' && inputs.proof != 'quote-shared-profile') }}
     name: typecheck · lint · build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -231,5 +231,56 @@ jobs:
         with:
           name: quote-save-authority-${{ inputs.authority_expectation }}-${{ github.sha }}
           path: outputs/authenticated-quote-authority-20260911/authority-proof.json
+          if-no-files-found: error
+          retention-days: 14
+
+  quote-shared-profile:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.proof == 'quote-shared-profile' }}
+    name: Disposable quote shared-lock and email-profile isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: pilot_test
+          POSTGRES_PASSWORD: pilot_disposable_password_not_a_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PILOT_EMAIL_DISPOSABLE: EDGEHQ_LOCAL_PG17_PILOT_TEST_ONLY
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Mark only the fixed disposable database
+        env:
+          PGPASSWORD: pilot_disposable_password_not_a_secret
+        run: psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
+      - name: Focused native profile and shared-lock proof
+        run: node node_modules/typescript/bin/tsc --project scripts/pilot-email/tsconfig.profile.json
+      - name: Run only the focused native profile cases
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/profile-isolation-proof.ts
+      - name: Preserve focused evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quote-shared-profile-${{ github.sha }}
+          path: outputs/quote-shared-profile-isolation-20260911/profile-proof.json
           if-no-files-found: error
           retention-days: 14

@@ -48,7 +48,7 @@ async function main() {
     await db.exec('grant usage on schema auth to authenticated')
     report.syntheticCompatibility = ['auth schema USAGE for authenticated; no RPC EXECUTE privilege added']
     for (const file of readdirSync(join(root, 'supabase/migrations')).filter(f => f.endsWith('.sql')).sort()) await apply('supabase/migrations/' + file)
-    for (const file of ['pilot-email-core.sql', 'pilot-quote-identity.sql', 'pilot-quote-save.sql']) await apply('supabase/proposals/' + file)
+    for (const file of ['pilot-quote-shared-profile.sql', 'pilot-email-core.sql', 'pilot-quote-email-present.sql', 'pilot-quote-identity.sql', 'pilot-quote-save.sql']) await apply('supabase/proposals/' + file)
     const { runAuthorityCases } = await import('./authority-native-cases')
     report.native = await runAuthorityCases(db, expected)
     const result = report.native as { pass: boolean; tests: { pass: boolean }[]; allSessionsClosed: boolean }

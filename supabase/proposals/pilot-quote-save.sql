@@ -1,4 +1,5 @@
--- DORMANT ONLY. Requires unchanged pilot-email-core.sql and pilot-quote-identity.sql.
+-- DORMANT ONLY. Requires the neutral shared lock, an explicit verified fixed
+-- email profile, and pilot-quote-identity.sql. Email storage is optional.
 -- No migration, mounted route, acceptance writer/legacy-door change or activation.
 -- This is one Save transaction. Legacy acceptance still needs its own companion.
 begin;
@@ -40,7 +41,10 @@ create function public._pilot_quote_save_lock(p_owner uuid,p_quote uuid,p_custom
 language plpgsql volatile set search_path='' as $$
 declare current_property uuid;
 begin
-  perform public._pilot_email_owner_lock(p_owner);
+  perform public._pilot_quote_owner_lock(p_owner);
+  -- This VOLATILE boundary obtains a fresh post-wait profile check before any
+  -- business row lock/write. It does not promise live schema/profile switching.
+  perform public._pilot_quote_email_profile();
   perform 1 from auth.users where id=p_owner for update;
   if not found then return; end if;
   if exists(select 1 from public.customers where id=any(p_customer_ids) and user_id<>p_owner)
@@ -106,6 +110,7 @@ end $$;
 create function public.pilot_quote_save_snapshot(p_owner uuid,p_quote uuid) returns jsonb
 language plpgsql stable security definer set search_path='' set timezone='UTC' as $$
 begin
+  perform public._pilot_quote_email_profile();
   if p_owner is null or p_quote is null or (auth.uid() is not null and auth.uid() is distinct from p_owner)
     then return jsonb_build_object('code','not_found'); end if;
   if current_setting('transaction_isolation')<>'read committed' then return jsonb_build_object('code','unsupported_isolation'); end if;
@@ -132,6 +137,7 @@ create function public.pilot_quote_save_targets(p_owner uuid,p_quote uuid,p_expe
 language plpgsql stable security definer set search_path='' set timezone='UTC' as $$
 declare s jsonb; t jsonb; r jsonb;
 begin
+  perform public._pilot_quote_email_profile();
   if p_owner is null or p_quote is null or (auth.uid() is not null and auth.uid() is distinct from p_owner)
     then return jsonb_build_object('code','not_found'); end if;
   if current_setting('transaction_isolation')<>'read committed' then return jsonb_build_object('code','unsupported_isolation'); end if;
@@ -172,10 +178,7 @@ $$;
 
 create function public._pilot_qs_retained(p_owner uuid,p_quote uuid) returns jsonb
 language sql stable set search_path='' as $$
-  select jsonb_build_object('workflows',coalesce((select jsonb_agg(to_jsonb(w) order by w.id)
-      from public.pilot_quote_followup_workflows w where w.user_id=p_owner and w.quote_id=p_quote),'[]'::jsonb),
-    'attempts',coalesce((select jsonb_agg(to_jsonb(a) order by a.id) from public.pilot_email_send_attempts a
-      where a.user_id=p_owner and exists(select 1 from public.pilot_quote_followup_workflows w where w.id=a.workflow_id and w.quote_id=p_quote)),'[]'::jsonb));
+  select public._pilot_quote_email_retained(p_owner,p_quote);
 $$;
 
 create function public.pilot_quote_save(p_owner uuid,p_quote uuid,p_plan jsonb) returns jsonb
@@ -305,7 +308,7 @@ begin
   if t->>'code'<>'targets' then return t; end if;
   if t->>'target_revision' is distinct from p_plan->>'expected_target_revision' or t is distinct from p_plan#>'{expected,targets}'
     then return jsonb_build_object('code','stale_targets'); end if;
-  if target_customer is distinct from q.customer_id and exists(select 1 from public.pilot_quote_followup_workflows where user_id=p_owner and quote_id=p_quote)
+  if target_customer is distinct from q.customer_id and jsonb_array_length(public._pilot_qs_retained(p_owner,p_quote)->'workflows')>0
     then return jsonb_build_object('code','retained_customer_binding'); end if;
   if (q.selected_option_id is not null and (p_plan#>>'{options,mode}'<>'preserve' or p_plan#>'{options,rows}'<>'[]'::jsonb or pq.initial_price is distinct from q.initial_price))
     or (q.selected_option_id is null and p_plan#>>'{options,mode}'<>'replace') then return jsonb_build_object('code','invalid_plan'); end if;

@@ -1,4 +1,5 @@
--- Dormant proposal only. Apply after the unchanged PR120 pilot-email-core.sql.
+-- Dormant proposal only. Requires the neutral shared lock and an explicit,
+-- verified fixed email profile; absent mode installs no email business schema.
 -- No route, migration replay, backfill, retention-policy change or activation.
 -- Trusted server code plans with the actual TypeScript resolver, without writes.
 -- This RPC commits identity preparation AND quote identity; it is not full Save.
@@ -86,6 +87,7 @@ declare q public.quotes; old_c public.customers; cs jsonb; ps jsonb; v jsonb;
 begin
   if current_setting('transaction_isolation')<>'read committed' then
     return jsonb_build_object('code','unsupported_isolation'); end if;
+  perform public._pilot_quote_email_profile();
   select * into q from public.quotes where id=p_quote and user_id=p_owner;
   if not found then return jsonb_build_object('code','not_found'); end if;
   if not public._pilot_qi_projection_valid(public._pilot_qi_quote(q),'quote') then
@@ -229,7 +231,10 @@ begin
     return jsonb_build_object('code','invalid_plan'); end if;
 
   -- Same owner serialization as approval/start; never acquire it after row locks.
-  perform public._pilot_email_owner_lock(p_owner);
+  perform public._pilot_quote_owner_lock(p_owner);
+  -- The enclosing writer is VOLATILE: validate in a fresh statement after any
+  -- advisory wait. Fixed-profile installation requires quiescent schema changes.
+  perform public._pilot_quote_email_profile();
   perform 1 from public.customers where user_id=p_owner and id in (old_id,target_id) order by id for update;
   -- Customer FOR UPDATE blocks the FK KEY SHARE of new target-property inserts.
   -- Existing property locks precede quote, matching property deletion's SET NULL.
@@ -285,8 +290,8 @@ begin
     return jsonb_build_object('code','invalid_plan'); end if;
 
   -- Every retained state binds identity, including a never-sent approval.
-  if target_id is distinct from q.customer_id and exists(
-    select 1 from public.pilot_quote_followup_workflows where user_id=p_owner and quote_id=q.id) then
+  if target_id is distinct from q.customer_id and jsonb_array_length(
+    public._pilot_quote_email_retained(p_owner,q.id)->'workflows')>0 then
     return jsonb_build_object('code','retained_customer_binding'); end if;
 
   -- No exception handler below: a late error rolls back ALL of these writes.
