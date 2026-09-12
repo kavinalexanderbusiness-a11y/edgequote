@@ -16,6 +16,10 @@ const literal = value => {
 }
 const idSql = value => `${literal(uuid(value))}::uuid`
 const jsonSql = value => `${literal(JSON.stringify(value))}::jsonb`
+const profile = value => {
+  if (value !== 'absent' && value !== 'present') throw Error('Explicit fixed fixture email profile required')
+  return value
+}
 
 // Explicit table/order vocabulary for independent row observation. Children
 // use commercial order, never response arrival or insertion order. Full rows
@@ -32,6 +36,7 @@ const TABLES = Object.freeze([
   ['messages', 't.id'], ['notification_log', 't.id'], ['audit_events', 't.id'],
   ['integration_events', 't.id'], ['webhook_deliveries', 't.id'],
 ])
+const OPTIONAL_EMAIL_TABLES = new Set(['pilot_quote_followup_workflows', 'pilot_email_send_attempts'])
 
 /** sql(text) returns parsed rows, including native JSON objects. One SELECT
  * observes all three fixture tenants and shared units in one DB snapshot.
@@ -39,18 +44,28 @@ const TABLES = Object.freeze([
  * business mutations and no auth secrets belong in a proof artifact. */
 export async function readFixture(sql, fixture) {
   if (typeof sql !== 'function') throw Error('Actual SQL transport required')
+  const emailProfile = profile(fixture.emailProfile)
   const owners = ['ownerA', 'ownerB', 'denied'].map(key => [key, uuid(fixture[key])])
   if (new Set(owners.map(([, owner]) => owner)).size !== 3) throw Error('Fixture users must be distinct')
   const tables = fixture.acceptanceVersioned ? [...TABLES, ['notifications', 't.id']] : TABLES
   const ownerRows = owner => `jsonb_build_object(${tables.map(([table, order]) =>
-    `${literal(table)},(select coalesce(jsonb_agg(to_jsonb(t) order by ${order}),'[]'::jsonb)
+    emailProfile === 'absent' && OPTIONAL_EMAIL_TABLES.has(table)
+      ? `${literal(table)},'[]'::jsonb`
+      : `${literal(table)},(select coalesce(jsonb_agg(to_jsonb(t) order by ${order}),'[]'::jsonb)
       from public.${table} t where t.user_id=${idSql(owner)})`).join(',')})`
-  const rows = await sql(`select jsonb_build_object(
+  // The materialized profile check and every selected row share one statement
+  // snapshot. The absent branch contains no reference to optional relations;
+  // empty arrays are exposed only for a successful intended-profile result.
+  const rows = await sql(`select verified.email_profile,
+    case when verified.email_profile=${literal(emailProfile)} then jsonb_build_object(
     ${owners.map(([key, owner]) => `${literal(key)},${ownerRows(owner)}`).join(',')},
     'systemUnits',(select coalesce(jsonb_agg(to_jsonb(t) order by t.sort_order,t.id),'[]'::jsonb)
       from public.service_units t where t.user_id is null)
-  ) as fixture_rows`)
+    ) else null end as fixture_rows
+    from (with checked as materialized (select public._pilot_quote_email_profile() as email_profile)
+      select email_profile from checked) verified`)
   if (!Array.isArray(rows) || rows.length !== 1 || !rows[0]?.fixture_rows
+    || rows[0].email_profile !== emailProfile
     || typeof rows[0].fixture_rows !== 'object' || Array.isArray(rows[0].fixture_rows)) {
     throw Error('SQL transport must return one parsed fixture_rows object')
   }
@@ -62,6 +77,79 @@ export async function readFixture(sql, fixture) {
   }
   if (!Array.isArray(result.systemUnits)) throw Error('Incomplete shared unit readback')
   return result
+}
+
+// Native SQL fixture preparation only. Every transition uses the existing
+// reviewed RPC, with no claim/start/confirm/finalize or external send. These are
+// ordinary committed fixture calls, not an assertion about browser authority.
+async function seedRetainedEmail(sql, fixture, onPrivateValue) {
+  if (fixture.emailProfile !== 'present' || fixture.retainedEmail !== true || !fixture.acceptanceVersioned) throw Error('Retained fixture scope mismatch')
+  const registerPrivateState = value => {
+    if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) {
+      if (['secret_ref', 'reply_token', 'reply_to', 'route_token', 'idempotency_key'].includes(key) && typeof child === 'string' && child.length) onPrivateValue(child)
+      else registerPrivateState(child)
+    }
+    return value
+  }
+  const call = async (expression, expectedCode) => {
+    const rows = await sql(`select ${expression} as result`)
+    if (!Array.isArray(rows) || rows.length !== 1 || !rows[0]?.result || rows[0].result.code !== expectedCode) throw Error('Native retained-fixture RPC refused expected transition')
+    return rows[0].result
+  }
+  const secretRef = 'synthetic/shared-profile/' + randomUUID()
+  onPrivateValue(secretRef)
+  const receivingDomain = 'reply.fixture.invalid'
+  await sql(`update public.customers set email=${literal('retained-' + fixture.customerA + '@fixture.example.invalid')},
+    email_opt_in=true,message_prefs=jsonb_build_object('estimates',true)
+    where id=${idSql(fixture.customerA)} and user_id=${idSql(fixture.ownerA)}`)
+  const created = await call(`public.pilot_email_create_connection(${idSql(fixture.ownerA)},
+    ${literal('shared-profile/' + fixture.ownerA)},'proof@fixture.example.invalid',${literal(receivingDomain)},${literal(secretRef)},'fixture-v1')`, 'created')
+  const connectionId = uuid(created.connection_id)
+  for (const state of ['verified', 'active']) await call(`public.pilot_email_set_connection_state(${idSql(connectionId)},${literal(state)})`, 'updated')
+  const approved = await call(`public.pilot_email_approve_workflow(${idSql(connectionId)},${idSql(fixture.customerA)},${idSql(fixture.quoteA)},
+    jsonb_build_array(jsonb_build_object('subject','Synthetic held follow-up','text','Synthetic fixture copy; never sent.',
+      'due_at',(clock_timestamp()+interval '30 days')::text)),${idSql(fixture.ownerA)})`, 'approved')
+  const workflowId = uuid(approved.workflow_id)
+  // Read complete native retained rows immediately after approval. Register
+  // generated capabilities before any later assertion/report can expose them;
+  // retain the untouched values in memory for exact before/after comparisons.
+  const retainedRows = await sql(`select public._pilot_quote_email_retained(${idSql(fixture.ownerA)},${idSql(fixture.quoteA)}) as retained`)
+  const retained = retainedRows?.[0]?.retained
+  if (Array.isArray(retained?.attempts)) for (const attempt of retained.attempts) {
+    for (const value of [attempt?.reply_token, attempt?.payload?.reply_to, attempt?.idempotency_key]) {
+      if (typeof value === 'string' && value.length > 0) onPrivateValue(value)
+    }
+  }
+  if (!Array.isArray(retainedRows) || retainedRows.length !== 1 || !Array.isArray(retained?.workflows)
+    || !Array.isArray(retained?.attempts) || retained.workflows.length !== 1 || retained.attempts.length !== 1) throw Error('Expected exactly one native retained workflow and attempt')
+  const attemptId = uuid(retained.attempts[0].id)
+  if (!/^[a-f0-9]{48}$/.test(retained.attempts[0].reply_token)
+    || retained.attempts[0].payload?.reply_to !== retained.attempts[0].reply_token + '@' + receivingDomain
+    || retained.workflows[0].id !== workflowId || retained.attempts[0].workflow_id !== workflowId) throw Error('Native retained fixture binding differs from approval')
+  await call(`public.pilot_email_hold_workflow(${idSql(workflowId)},'owner_paused')`, 'held')
+  await call(`public.pilot_email_set_connection_state(${idSql(connectionId)},'paused')`, 'updated')
+  const final = await sql(`select jsonb_build_object(
+    'connections',(select coalesce(jsonb_agg(to_jsonb(c) order by c.id),'[]'::jsonb)
+      from public.pilot_email_connections c where c.user_id=${idSql(fixture.ownerA)}),
+    'retained',public._pilot_quote_email_retained(${idSql(fixture.ownerA)},${idSql(fixture.quoteA)}),
+    'events',(select coalesce(jsonb_agg(to_jsonb(e) order by e.id),'[]'::jsonb) from public.pilot_email_webhook_events e
+      where e.connection_id in (select id from public.pilot_email_connections where user_id=${idSql(fixture.ownerA)})),
+    'due_in_future',(select a.due_at>clock_timestamp() from public.pilot_email_send_attempts a where a.id=${idSql(attemptId)})
+    ) as state`)
+  const state = registerPrivateState(final?.[0]?.state), connection = state?.connections?.[0], workflow = state?.retained?.workflows?.[0], attempt = state?.retained?.attempts?.[0]
+  if (!Array.isArray(final) || final.length !== 1 || state?.connections?.length !== 1
+    || state?.retained?.workflows?.length !== 1 || state?.retained?.attempts?.length !== 1 || state?.events?.length !== 0
+    || connection.id !== connectionId || connection.user_id !== fixture.ownerA || connection.state !== 'paused'
+    || workflow.id !== workflowId || workflow.user_id !== fixture.ownerA || workflow.customer_id !== fixture.customerA
+    || workflow.quote_id !== fixture.quoteA || workflow.state !== 'held' || workflow.hold_reason !== 'owner_paused' || !workflow.held_at
+    || attempt.id !== attemptId || attempt.user_id !== fixture.ownerA || attempt.quote_id !== fixture.quoteA
+    || attempt.workflow_id !== workflowId || attempt.state !== 'pending' || attempt.fence !== 0
+    || state.due_in_future !== true
+    || ['lease_until','first_started_at','provider_email_id','confirmed_at','message_id','notification_log_id'].some(key => attempt[key] !== null)) {
+    throw Error('Retained fixture was not paused, held, pending and unsent')
+  }
+  fixture.retainedEmailIds = Object.freeze({ connectionId, workflowId, attemptId })
+  fixture.retainedEmailBefore = state
 }
 
 function settingsSql(owner, name) {
@@ -99,10 +187,16 @@ function quoteSql({ owner, customer, property, quote, suffix, price, hours, rate
  * createUser(email,password) must return the UUID from real GoTrue, not a fake.
  * The denied user owns a quote but has no settings, making its owner-role test
  * meaningful rather than merely asking it to read another tenant's quote. */
-export async function seedFixtures({ sql, createUser, acceptanceFixture, sharedUnitId }) {
+export async function seedFixtures({ sql, createUser, acceptanceFixture, sharedUnitId, emailProfile, retainedEmail = false, onPrivateValue }) {
   if (typeof sql !== 'function' || typeof createUser !== 'function') throw Error('Actual SQL and GoTrue transports required')
+  profile(emailProfile)
+  if (typeof retainedEmail !== 'boolean' || (retainedEmail && (emailProfile !== 'present' || !acceptanceFixture || typeof onPrivateValue !== 'function'))) {
+    throw Error('Retained email fixture requires explicit present profile, acceptance fixture and private-value registration')
+  }
+  const installed = await sql('select public._pilot_quote_email_profile() as email_profile')
+  if (!Array.isArray(installed) || installed.length !== 1 || installed[0]?.email_profile !== emailProfile) throw Error('Fixture profile differs from verified installation')
   const run = randomUUID()
-  const fixture = { password: PASSWORD, emailA: `owner-a-${run}@fixture.example.invalid`,
+  const fixture = { emailProfile, retainedEmail, password: PASSWORD, emailA: `owner-a-${run}@fixture.example.invalid`,
     emailB: `owner-b-${run}@fixture.example.invalid`, deniedEmail: `denied-${run}@fixture.example.invalid`,
     customerA: randomUUID(), propertyA: randomUUID(), quoteA: randomUUID(),
     customerB: randomUUID(), propertyB: randomUUID(), quoteB: randomUUID(),
@@ -165,6 +259,7 @@ export async function seedFixtures({ sql, createUser, acceptanceFixture, sharedU
       set constraints all immediate;
       commit;`)
   }
+  if (retainedEmail) await seedRetainedEmail(sql, fixture, onPrivateValue)
   fixture.before = await readFixture(sql, fixture)
   if (fixture.before.ownerA.business_settings.length !== 1 || fixture.before.ownerB.business_settings.length !== 1
     || fixture.before.denied.business_settings.length !== 0

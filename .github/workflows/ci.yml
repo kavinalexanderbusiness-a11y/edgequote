@@ -20,7 +20,7 @@ on:
         description: 'Explicit isolated prerequisite; ordinary CI remains the default'
         type: choice
         default: normal
-        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack, quote-acceptance-versioned, quote-acceptance-lock-order, quote-acceptance-ui, quote-shared-profile]
+        options: [normal, quote-save-authority, quote-save-authenticated, quote-save-lost-ack, quote-acceptance-versioned, quote-acceptance-lock-order, quote-acceptance-ui, quote-shared-profile, quote-shared-profile-real]
       authority_expectation:
         description: 'Only for the isolated source-bound authority proof'
         type: choice
@@ -36,7 +36,7 @@ concurrency:
 
 jobs:
   verify:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack' && inputs.proof != 'quote-acceptance-versioned' && inputs.proof != 'quote-acceptance-lock-order' && inputs.proof != 'quote-acceptance-ui' && inputs.proof != 'quote-shared-profile') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.proof != 'quote-save-authority' && inputs.proof != 'quote-save-authenticated' && inputs.proof != 'quote-save-lost-ack' && inputs.proof != 'quote-acceptance-versioned' && inputs.proof != 'quote-acceptance-lock-order' && inputs.proof != 'quote-acceptance-ui' && inputs.proof != 'quote-shared-profile' && inputs.proof != 'quote-shared-profile-real') }}
     name: typecheck · lint · build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -282,5 +282,48 @@ jobs:
         with:
           name: quote-shared-profile-${{ github.sha }}
           path: outputs/quote-shared-profile-isolation-20260911/profile-proof.json
+          if-no-files-found: error
+          retention-days: 14
+
+  quote-shared-profile-real:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.proof == 'quote-shared-profile-real' }}
+    name: Real Save and acceptance with email ${{ matrix.email_profile }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        email_profile: [absent, present]
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      SUPABASE_TELEMETRY_DISABLED: '1'
+      DO_NOT_TRACK: '1'
+      PILOT_AUTH_SAVE_CASE: shared-profile
+      PILOT_AUTH_SAVE_EMAIL_PROFILE: ${{ matrix.email_profile }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install the existing locked app dependencies
+        run: npm ci
+      - name: Install only pinned browser protocol tooling
+        run: npm ci --prefix scripts/authenticated-quote-save/tools --ignore-scripts --no-audit --no-fund
+      - name: Fresh fixed profile through actual Auth, PostgREST and U2 browser flow
+        run: node scripts/authenticated-quote-save/real-platform-proof.mjs
+      - name: Preserve this profile's evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quote-shared-profile-real-${{ matrix.email_profile }}-${{ github.sha }}
+          path: |
+            outputs/quote-shared-profile-real-20260911/${{ matrix.email_profile }}/*.json
+            outputs/quote-shared-profile-real-20260911/${{ matrix.email_profile }}/*.png
           if-no-files-found: error
           retention-days: 14

@@ -50,13 +50,34 @@ and a completed exact-runner receipt are required before any runtime PASS claim.
 Output is restricted to sanitized platform/browser JSON evidence; local keys,
 cookie values, Auth request bodies and private workload files are never uploaded.
 
-`fixtures.mjs` supplies the fixture helper. `seedFixtures({sql,createUser})`
+`fixtures.mjs` supplies the fixture helper. `seedFixtures({sql,createUser,emailProfile})`
 requires caller-owned real local Auth and a marked disposable SQL connection;
-`readFixture(sql,fixture)` observes full synthetic tenant rows independently.
+the profile must explicitly be `absent` or `present`. `readFixture(sql,fixture)`
+verifies that profile in its single read statement and observes full synthetic
+tenant rows independently. Only verified absent mode supplies labelled empty
+placeholders for uninstalled email relations.
 It creates owner A, owner B, and a denied account with its own quote but no
 settings, so a denied-role test cannot accidentally pass solely on tenant
 mismatch. Runtime evidence must come from the marked disposable CI platform;
 the helper is never wired to a production route or hosted database target.
+
+## Focused real shared-profile integration
+
+Manual `quote-shared-profile-real` selects two serial jobs, one fresh disposable
+stack each for email absent and present. It never changes a live stack's profile.
+The ten product SQL files and catalogue digests are pinned to `931dbc28` in
+`shared-profile-contract.mjs`; installer mismatch refuses before browser launch.
+
+Each job executes only the existing U2 flow: actual owner Save, stale customer
+refusal, fresh explicit acceptance, and independently authenticated PostgREST
+readback/portal refresh. Present mode seeds one paused connection, held workflow
+and pending unsent attempt before baseline capture. Complete retained rows stay
+unchanged through the flow; generated reply capabilities are redacted only from
+artifact copies after in-memory comparisons and full-row hashes.
+
+Output is `outputs/quote-shared-profile-real-20260911/<profile>`. The native 47-case
+packet and predecessor browser evidence are not rerun or relabelled. This mode
+does not authorize production activation, retention policy or Stripe changes.
 
 ## Bounded lost-acknowledgement case
 

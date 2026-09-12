@@ -4,18 +4,23 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpa
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { internalBootstrapRelays } from './internal-bootstrap-relays.mjs'
+import { SHARED_PROFILE_BASELINE, SHARED_PROFILE_SQL_LF_SHA256 } from './shared-profile-contract.mjs'
 
 const source = realpathSync(fileURLToPath(new URL('../../', import.meta.url)))
 const proofCase = process.env.PILOT_AUTH_SAVE_CASE || 'acknowledged'
-if (!['acknowledged', 'lost-acknowledgement', 'versioned-acceptance', 'acceptance-lock-order', 'customer-acceptance-ui'].includes(proofCase)) throw Error('Unsupported real Save proof case')
-const output = join(source, proofCase === 'acknowledged' ? 'outputs/authenticated-quote-save-real-20260911'
+if (!['acknowledged', 'lost-acknowledgement', 'versioned-acceptance', 'acceptance-lock-order', 'customer-acceptance-ui', 'shared-profile'].includes(proofCase)) throw Error('Unsupported real Save proof case')
+const emailProfile = proofCase === 'shared-profile' ? process.env.PILOT_AUTH_SAVE_EMAIL_PROFILE : 'present'
+if (!['absent', 'present'].includes(emailProfile)) throw Error('Explicit fixed email profile required')
+if (proofCase !== 'shared-profile' && process.env.PILOT_AUTH_SAVE_EMAIL_PROFILE && process.env.PILOT_AUTH_SAVE_EMAIL_PROFILE !== 'present') throw Error('Legacy proof profile override refused')
+const output = join(source, proofCase === 'shared-profile' ? 'outputs/quote-shared-profile-real-20260911/' + emailProfile
+  : proofCase === 'acknowledged' ? 'outputs/authenticated-quote-save-real-20260911'
   : proofCase === 'lost-acknowledgement' ? 'outputs/authenticated-quote-save-lost-ack-20260911'
   : proofCase === 'customer-acceptance-ui' ? 'outputs/quote-acceptance-ui-20260911'
   : proofCase === 'acceptance-lock-order' ? 'outputs/quote-acceptance-lock-order-20260911' : 'outputs/authenticated-quote-acceptance-real-20260911')
 const marker = 'EDGEHQ_DISPOSABLE_REAL_AUTH_SAVE_ONLY'
 const project = 'edgequote-auth-save-disposable'
 const network = 'edgequote-auth-save-internal-' + process.env.GITHUB_RUN_ID
-const report = {startedAt: new Date().toISOString(), pass: false, proofCase, sourcePins: {}, events: [], cleanup: {},
+const report = {startedAt: new Date().toISOString(), pass: false, proofCase, emailProfile, sourcePins: {}, events: [], cleanup: {},
   scope: 'Disposable real GoTrue/PostgREST/PG and source-bound Next browser Save. No production or provider activation.'}
 const digest = value => createHash('sha256').update(value).digest('hex')
 let taskRoot, cli, platform, child, relays, netCreated = false
@@ -46,8 +51,17 @@ async function main() {
   report.runId = process.env.GITHUB_RUN_ID
   if(report.candidate!==process.env.GITHUB_SHA) throw Error('Actual runner differs from candidate')
   if(execFileSync('git',['status','--porcelain','--untracked-files=no'],{cwd:source,encoding:'utf8'}).trim()) throw Error('Tracked checkout must be clean')
-  const files=execFileSync('git',['ls-files','-z'],{cwd:source}).toString().split('\0').filter(f=>/\.(tsx?|mjs|json|sql|ya?ml|toml)$/.test(f)||(proofCase==='customer-acceptance-ui'&&f.endsWith('.css')))
+  const files=execFileSync('git',['ls-files','-z'],{cwd:source}).toString().split('\0').filter(f=>/\.(tsx?|mjs|json|sql|ya?ml|toml)$/.test(f)||(['customer-acceptance-ui','shared-profile'].includes(proofCase)&&f.endsWith('.css')))
   for(const f of files)report.sourcePins[f]=digest(readFileSync(join(source,f)))
+  if(proofCase==='shared-profile'){
+    report.productSqlBaseline=SHARED_PROFILE_BASELINE
+    report.productSqlLfPins={}
+    for(const [file,pin] of Object.entries(SHARED_PROFILE_SQL_LF_SHA256)){
+      const actual=digest(readFileSync(join(source,file),'utf8').replace(/\r\n/g,'\n'))
+      if(actual!==pin)throw Error('Reviewed shared-profile SQL changed: '+file)
+      report.productSqlLfPins[file]=actual
+    }
+  }
   taskRoot=mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP),'edgequote-auth-save-'))
   if(!relative(source,taskRoot).startsWith('..')) throw Error('Disposable root must be outside entire source checkout')
   platform=join(taskRoot,'platform');mkdirSync(join(platform,'supabase'),{recursive:true})
@@ -133,7 +147,7 @@ async function main() {
   const db=inspect.find(c=>c.Name==='/supabase_db_'+project)
   const dbHost=db.NetworkSettings.Networks[network].IPAddress
   if(!/^172\.|^10\.|^192\.168\./.test(dbHost))throw Error('Unexpected internal DB address')
-  const input={source,taskRoot,output,marker,proofCase,apiUrl:'http://127.0.0.1:8000',origin:'http://localhost:3000',
+  const input={source,taskRoot,output,marker,proofCase,emailProfile,apiUrl:'http://127.0.0.1:8000',origin:'http://localhost:3000',
     anonKey:status.ANON_KEY,serviceKey:status.SERVICE_ROLE_KEY,dbHost,dbPassword:decodeURIComponent(dbURL.password),
     gatewayPid:gateway.State.Pid,candidate:report.candidate,tree:report.tree,runId:report.runId,
     chrome:command('which',['google-chrome']).trim()}

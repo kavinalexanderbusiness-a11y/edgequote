@@ -14,16 +14,21 @@ import {runAcceptanceAuthorityBrowser} from './acceptance-authority-browser-case
 import {runLockOrderBrowser} from './lock-order-browser-cases.mjs'
 import {createLockOrderControl} from './lock-order-control.mjs'
 import {runCustomerAcceptanceUIBrowser} from './customer-acceptance-ui-browser-cases.mjs'
+import {SHARED_PROFILE_BASELINE,SHARED_PROFILE_SQL_LF_SHA256,SHARED_PROFILE_CATALOGUE_SHA256,sharedProfileInstallSequence} from './shared-profile-contract.mjs'
 
 const config=JSON.parse(readFileSync(process.argv[2],'utf8'))
 const {source,taskRoot,output,marker}=config
 const lostAck=config.proofCase==='lost-acknowledgement'
 const versionedAcceptance=config.proofCase==='versioned-acceptance'
 const lockOrder=config.proofCase==='acceptance-lock-order'
-const customerUI=config.proofCase==='customer-acceptance-ui'
+const sharedProfile=config.proofCase==='shared-profile'
+const customerUI=config.proofCase==='customer-acceptance-ui'||sharedProfile
 const usesAcceptance=versionedAcceptance||lockOrder||customerUI
-assert(['acknowledged','lost-acknowledgement','versioned-acceptance','acceptance-lock-order','customer-acceptance-ui'].includes(config.proofCase),'Explicit proof case required')
-const report={startedAt:new Date().toISOString(),pass:false,proofCase:config.proofCase,candidate:config.candidate,tree:config.tree,runId:config.runId,
+assert(['acknowledged','lost-acknowledgement','versioned-acceptance','acceptance-lock-order','customer-acceptance-ui','shared-profile'].includes(config.proofCase),'Explicit proof case required')
+const emailProfile=config.emailProfile
+assert(['absent','present'].includes(emailProfile),'Explicit fixed profile required')
+assert(sharedProfile||emailProfile==='present','Legacy proof profile override refused')
+const report={startedAt:new Date().toISOString(),pass:false,proofCase:config.proofCase,emailProfile,candidate:config.candidate,tree:config.tree,runId:config.runId,
   platformSubstitutions:[],schemaApplications:[],sqlConnections:[],cleanup:{},scope:'Real local Auth and PostgREST with actual canonical cookie/browser clients, source adapters and normally committed native Save; synthetic business identities only.'}
 const hash=v=>createHash('sha256').update(v).digest('hex')
 const req=createRequire(join(source,'package.json'))
@@ -35,12 +40,27 @@ const scrub=value=>{
   for(const s of secret)if(s?.length>5)result=result.replaceAll(s,'[local credential omitted]')
   return result.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[local JWT omitted]').slice(-7000)
 }
-let browser,app,appOutput='',fixture,inspectExternalIO
+// Comparisons and full-row digests use original values in memory. Only the
+// artifact copy redacts disposable bearer/reply capabilities, without truncation.
+const registerEmailPrivate=value=>{
+  if(value&&typeof value==='object')for(const [key,child] of Object.entries(value)){
+    if(['secret_ref','reply_token','reply_to','route_token','idempotency_key'].includes(key)&&typeof child==='string'&&child.length)secret.push(child)
+    else registerEmailPrivate(child)
+  }
+  return value
+}
+const artifactString=value=>JSON.stringify(registerEmailPrivate(value),(_key,child)=>{
+  if(typeof child!=='string')return child
+  let safe=child
+  for(const privateValue of [...new Set(secret)].filter(v=>typeof v==='string'&&v.length>5).sort((a,b)=>b.length-a.length))safe=safe.replaceAll(privateValue,'[private fixture value]')
+  return safe.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'[private token]')
+},2)
+let browser,app,appOutput='',fixture,inspectExternalIO,inspectRetainedEmail
 const lockFixtures=[],lockControls=[]
 const customerFixtures=[]
 const nativeDefinitionsSql="select p.oid::regprocedure::text as signature, pg_get_functiondef(p.oid) as definition "+
   "from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' "+
-  "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname like 'pilot_quote_acceptance%' or p.proname like '_pilot_qva%' or p.proname in ('current_app_role','_pilot_quote_save_lock','quote_apply_choice','quote_record_acceptance')) order by p.oid::regprocedure::text"
+  "and (p.proname like 'pilot_quote_save%' or p.proname like '_pilot_qs%' or p.proname like 'pilot_quote_acceptance%' or p.proname like '_pilot_qva%' or p.proname like 'pilot_quote_identity%' or p.proname like '_pilot_quote_email%' or p.proname in ('current_app_role','_pilot_quote_save_lock','_pilot_quote_owner_lock','_pilot_email_owner_lock','quote_apply_choice','quote_record_acceptance')) order by p.oid::regprocedure::text"
 const appClosed=()=>!app||app.exitCode!==null||app.signalCode!==null
 const connectionPids=[]
 function rawSQL(text) {
@@ -104,18 +124,47 @@ async function main(){
   assert.equal(bootstrap.roles.length,5);assert.equal(bootstrap.public_relations,0)
   await sql("comment on database postgres is 'edgequote disposable real auth quote save only'")
   // Exact checked-in SQL files, no synthetic platform prelude, substitutions or skipped statements.
-  const schemaFiles=[...readdirSync(join(source,'supabase/migrations')).filter(f=>f.endsWith('.sql')).sort().map(f=>'supabase/migrations/'+f),
+  const schemaFiles=sharedProfile?sharedProfileInstallSequence(emailProfile,{acceptance:usesAcceptance}):[...readdirSync(join(source,'supabase/migrations')).filter(f=>f.endsWith('.sql')).sort().map(f=>'supabase/migrations/'+f),
     'supabase/proposals/pilot-quote-shared-profile.sql','supabase/proposals/pilot-email-core.sql','supabase/proposals/pilot-quote-email-present.sql',
     'supabase/proposals/pilot-quote-identity.sql','supabase/proposals/pilot-quote-save.sql',
     ...(usesAcceptance?['supabase/proposals/pilot-quote-versioned-acceptance.sql']:[])]
+  if(sharedProfile){
+    report.productSqlBaseline=SHARED_PROFILE_BASELINE
+    for(const [file,pin] of Object.entries(SHARED_PROFILE_SQL_LF_SHA256))assert.equal(hash(readFileSync(join(source,file),'utf8').replace(/\r\n/g,'\n')),pin,'Reviewed SQL changed: '+file)
+    report.intendedSchemaSequence=schemaFiles
+  }
   for(const file of schemaFiles){
     const bytes=readFileSync(join(source,file))
     const entry={file,sha256:hash(bytes),applied:false};report.schemaApplications.push(entry)
     try{execFileSync('psql',['--no-psqlrc','--no-password','--host='+config.dbHost,'--port=5432','--username=postgres','--dbname=postgres',
       '--set=ON_ERROR_STOP=on','--quiet','--file',join(source,file)],{encoding:'utf8',timeout:180000,maxBuffer:10*1024*1024,stdio:['ignore','pipe','pipe'],
       env:{PATH:process.env.PATH,HOME:process.env.HOME,PGPASSWORD:config.dbPassword,PGCONNECT_TIMEOUT:'10'}});entry.applied=true}
-    catch(error){entry.error=scrub(error.stderr||error.message);throw Error('Exact schema application failed at '+file+': '+entry.error)}
+    catch(error){
+      entry.error=scrub(error.stderr||error.message)
+      if(sharedProfile&&file.includes('pilot-quote-email-')){
+        try{report.profileFailureCatalogue=(await sql("select public._pilot_quote_email_catalogue() as catalogue, encode(sha256(convert_to(public._pilot_quote_email_catalogue()::text,'UTF8')),'hex') as observed_sha256"))[0]}
+        catch(diagnostic){report.profileFailureCatalogueError=scrub(diagnostic.message)}
+        report.expectedCatalogueDigests=SHARED_PROFILE_CATALOGUE_SHA256
+      }
+      throw Error('Exact schema application failed at '+file+': '+entry.error)
+    }
   }
+  const profileEvidence=async()=>{
+    const observed=(await sql("select public._pilot_quote_email_profile() as profile, public._pilot_quote_email_expected_profile() as declaration, "+
+      "encode(sha256(convert_to(public._pilot_quote_email_catalogue()::text,'UTF8')),'hex') as catalogue_sha256, "+
+      "(select jsonb_object_agg(k,jsonb_array_length(v)) from jsonb_each(public._pilot_quote_email_catalogue()) c(k,v) where k<>'version') as catalogue_counts, "+
+      "(select jsonb_agg(jsonb_build_object('signature',p.oid::regprocedure::text,'owner',pg_get_userbyid(p.proowner),'config',p.proconfig, "+
+      "'anon',has_function_privilege('anon',p.oid,'execute'),'authenticated',has_function_privilege('authenticated',p.oid,'execute'),'service_role',has_function_privilege('service_role',p.oid,'execute')) order by p.proname) "+
+      "from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and (p.proname like '_pilot_quote_email%' or p.proname in ('_pilot_quote_owner_lock','_pilot_email_owner_lock'))) as private_helpers"))[0]
+    assert.equal(observed.profile,emailProfile)
+    assert.deepEqual(observed.declaration,{version:1,profile:emailProfile,catalogue_sha256:SHARED_PROFILE_CATALOGUE_SHA256[emailProfile]})
+    assert.equal(observed.catalogue_sha256,SHARED_PROFILE_CATALOGUE_SHA256[emailProfile])
+    assert.equal(observed.private_helpers.length,emailProfile==='absent'?5:6)
+    for(const helper of observed.private_helpers){assert.equal(helper.owner,'postgres');assert.deepEqual(helper.config,['search_path=""']);for(const role of ['anon','authenticated','service_role'])assert.equal(helper[role],false)}
+    if(emailProfile==='absent')assert(Object.values(observed.catalogue_counts).every(v=>v===0))
+    return observed
+  }
+  report.profileBefore=await profileEvidence()
   await sql("notify pgrst, 'reload schema'")
   report.nativeDefinitions=await sql(nativeDefinitionsSql)
   const sideEffects=async()=>{
@@ -125,17 +174,28 @@ async function main(){
       if(table)counts[key]=(await sql('select count(*)::int as count from '+table))[0].count
       else counts[key]=0
     }
-    for(const table of ['pilot_email_connections','pilot_email_send_attempts','webhook_deliveries']){
+    for(const table of ['pilot_email_connections','pilot_quote_followup_workflows','pilot_email_send_attempts','pilot_email_webhook_events','webhook_deliveries']){
       if((await sql("select to_regclass('public."+table+"')::text as name"))[0].name)counts[table]=(await sql('select count(*)::int as count from public.'+table))[0].count
     }
+    if(Object.hasOwn(counts,'pilot_email_send_attempts'))counts.email_send_activity=(await sql("select count(*)::int as count from public.pilot_email_send_attempts where state<>'pending' or fence<>0 or lease_until is not null or first_started_at is not null or provider_email_id is not null or confirmed_at is not null or message_id is not null or notification_log_id is not null"))[0].count
+    if(Object.hasOwn(counts,'pilot_email_connections'))counts.active_email_connections=(await sql("select count(*)::int as count from public.pilot_email_connections where state='active'"))[0].count
     return counts
   }
   inspectExternalIO=sideEffects
   report.beforeExternalIO=await sideEffects()
   assert(Object.values(report.beforeExternalIO).every(v=>v===0),'Unexpected scheduled/provider work before fixture')
   const admin=createClient(config.apiUrl,config.serviceKey,{auth:{persistSession:false,autoRefreshToken:false}})
+  if(sharedProfile){
+    const deadline=Date.now()+10000
+    for(;;){
+      const ready=await admin.rpc('pilot_quote_save_snapshot',{p_owner:'00000000-0000-4000-8000-000000000001',p_quote:'00000000-0000-4000-8000-000000000002'})
+      if(!ready.error){assert.deepEqual(ready.data,{code:'forbidden'});report.profilePostgrestReadiness={pass:true,code:ready.data.code,syntheticMissingOwner:true};break}
+      if(ready.error.code!=='PGRST202'||Date.now()>=deadline)throw Error('Exact profile PostgREST readiness failed: '+scrub(ready.error.message))
+      await new Promise(resolve=>setTimeout(resolve,100))
+    }
+  }
   const termsFixture=usesAcceptance?await acceptanceFixtureTerms():null
-  const seed=async sharedUnitId=>seedFixtures({sql,sharedUnitId,...(termsFixture?{acceptanceFixture:{...termsFixture,onPrivateValue:value=>secret.push(value)}}:{}),createUser:async(email,password)=>{
+  const seed=async sharedUnitId=>seedFixtures({sql,sharedUnitId,emailProfile,retainedEmail:sharedProfile&&emailProfile==='present',onPrivateValue:value=>secret.push(value),...(termsFixture?{acceptanceFixture:{...termsFixture,onPrivateValue:value=>secret.push(value)}}:{}),createUser:async(email,password)=>{
     secret.push(password)
     const result=await admin.auth.admin.createUser({email,password,email_confirm:true})
     if(result.error||!result.data.user?.id)throw Error('Actual local GoTrue createUser failed: '+scrub(result.error?.message||'missing ID'))
@@ -147,13 +207,38 @@ async function main(){
     report.lockOrderBeforeRows=Object.fromEntries(lockFixtures.map(f=>[f.id,f.before]))
     report.lockOrderFixtureOwners=lockFixtures.map(f=>({id:f.id,ownerA:f.ownerA,ownerB:f.ownerB,denied:f.denied,quoteA:f.quoteA}))
   }else if(customerUI){
-    for(const id of ['U1','U2'])customerFixtures.push({id,...await seed(customerFixtures[0]?.unitId)})
+    for(const id of sharedProfile?['U2']:['U1','U2'])customerFixtures.push({id,...await seed(customerFixtures[0]?.unitId)})
     fixture=customerFixtures[0]
     report.customerUIBeforeRows=Object.fromEntries(customerFixtures.map(f=>[f.id,f.before]))
     report.customerUIFixtureOwners=customerFixtures.map(f=>({id:f.id,ownerA:f.ownerA,ownerB:f.ownerB,denied:f.denied,quoteA:f.quoteA}))
   }else fixture=await seed()
   report.fixtureOwners={ownerA:fixture.ownerA,ownerB:fixture.ownerB,denied:fixture.denied}
   report.beforeRows=fixture.before
+  if(sharedProfile&&emailProfile==='present'){
+    assert.match(fixture.ownerA,/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/)
+    assert.match(fixture.quoteA,/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/)
+    assert.match(fixture.retainedEmailIds.attemptId,/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/)
+    report.retainedModuleBefore=fixture.retainedEmailBefore
+    report.retainedModuleBeforeSha256=hash(JSON.stringify(fixture.retainedEmailBefore))
+    report.retainedModuleReadbacks=0
+    inspectRetainedEmail=async()=>{
+      const state=(await sql("select jsonb_build_object('connections',(select coalesce(jsonb_agg(to_jsonb(c) order by c.id),'[]'::jsonb) from public.pilot_email_connections c where c.user_id='"+fixture.ownerA+"'::uuid),"+
+        "'retained',public._pilot_quote_email_retained('"+fixture.ownerA+"'::uuid,'"+fixture.quoteA+"'::uuid),"+
+        "'events',(select coalesce(jsonb_agg(to_jsonb(e) order by e.id),'[]'::jsonb) from public.pilot_email_webhook_events e where e.connection_id in (select id from public.pilot_email_connections where user_id='"+fixture.ownerA+"'::uuid)),"+
+        "'due_in_future',(select a.due_at>clock_timestamp() from public.pilot_email_send_attempts a where a.id='"+fixture.retainedEmailIds.attemptId+"'::uuid)) as state"))[0].state
+      registerEmailPrivate(state)
+      assert.deepEqual(state,fixture.retainedEmailBefore,'Complete retained email module changed during real integration')
+      report.retainedModuleReadbacks++
+      return state
+    }
+    await inspectRetainedEmail()
+  }
+  report.afterFixtureExternalIO=await sideEffects()
+  const assertExpectedIO=actual=>{
+    assert.deepEqual(Object.keys(actual).sort(),Object.keys(report.afterFixtureExternalIO).sort())
+    for(const [key,value] of Object.entries(actual))assert.equal(value,sharedProfile&&emailProfile==='present'&&['pilot_email_connections','pilot_quote_followup_workflows','pilot_email_send_attempts'].includes(key)?1:0,'Unexpected retained fixture or external I/O: '+key)
+  }
+  assertExpectedIO(report.afterFixtureExternalIO)
   const faultDirectory=join(taskRoot,'private-response-fault')
   if(lostAck)mkdirSync(faultDirectory,{mode:0o700})
   const authorityDirectory=join(taskRoot,'private-acceptance-authority')
@@ -299,7 +384,8 @@ async function main(){
   }
   const runBrowser=versionedAcceptance?runVersionedAcceptanceBrowser:lostAck?runLostAcknowledgementBrowser:runAuthenticatedQuoteSaveBrowser
   const browserResult=customerUI?await runCustomerAcceptanceUIBrowser({browser,baseURL:config.origin,fixtures:customerFixtures,outputDirectory:output,
-    readRows:async f=>{assert(customerFixtures.includes(f),'Unknown customer UI fixture');return readFixture(sql,f)},
+    ...(sharedProfile?{selectedCases:['U2']}:{}),
+    readRows:async f=>{assert(customerFixtures.includes(f),'Unknown customer UI fixture');const rows=await readFixture(sql,f);if(inspectRetainedEmail)await inspectRetainedEmail();return rows},
     readFacts,readFreshOwnerRows,
   }):lockOrder?await runLockOrderBrowser({browser,baseURL:config.origin,fixtures:lockFixtures,
     createControl:async f=>{
@@ -325,8 +411,10 @@ async function main(){
   report.generatedSourcePinsAfterRun={};pin(mounted.directory,report.generatedSourcePinsAfterRun)
   if(browserResult?.pass!==true)throw Error('Actual browser cases did not pass')
   report.afterRows=await readFixture(sql,fixture)
+  if(inspectRetainedEmail){report.retainedModuleAfter=await inspectRetainedEmail();report.retainedModuleAfterSha256=hash(JSON.stringify(report.retainedModuleAfter))}
   report.afterExternalIO=await sideEffects()
-  assert(Object.values(report.afterExternalIO).every(v=>v===0),'Unexpected scheduled/provider I/O')
+  assertExpectedIO(report.afterExternalIO)
+  report.profileAfter=await profileEvidence();assert.deepEqual(report.profileAfter,report.profileBefore,'Fixed installed profile changed during real integration proof')
   const nativeAfter=await sql(nativeDefinitionsSql)
   assert.deepEqual(nativeAfter,report.nativeDefinitions,'Native definitions changed during proof')
   report.nativeDefinitionsUnchanged=true
@@ -360,7 +448,8 @@ function finish(){
       catch(error){report.customerUIFinalObservedRows[f.id]={unavailable:scrub(error.message)};report.pass=false}
     }
     try{
-      if(inspectExternalIO){report.customerUIFinalExternalIO=await inspectExternalIO();assert(Object.values(report.customerUIFinalExternalIO).every(value=>value===0))}
+      if(inspectRetainedEmail){report.retainedModuleFinal=await inspectRetainedEmail();report.retainedModuleFinalSha256=hash(JSON.stringify(report.retainedModuleFinal))}
+      if(inspectExternalIO){report.customerUIFinalExternalIO=await inspectExternalIO();assert.deepEqual(report.customerUIFinalExternalIO,report.afterFixtureExternalIO)}
       if(report.nativeDefinitions){assert.deepEqual(await sql(nativeDefinitionsSql),report.nativeDefinitions);report.customerUIFinalNativeDefinitionsUnchanged=true}
     }catch(error){report.cleanup.customerUIFinalObservationError=scrub(error.message);report.pass=false}
   }
@@ -372,8 +461,9 @@ function finish(){
     }
   }catch(error){report.cleanup.sqlError=scrub(error.message);report.pass=false}
   report.completedAt=new Date().toISOString()
-  mkdirSync(output,{recursive:true});writeFileSync(join(output,'browser-proof.json'),JSON.stringify(report,null,2))
-  console.log(JSON.stringify({pass:report.pass,candidate:report.candidate,error:report.error,cleanup:report.cleanup}))
+  report.artifactPrivacy={fullRowComparisons:'Performed in memory before capability redaction',retainedReplyCapabilities:'Redacted from serialized artifact; full-row digests preserved'}
+  mkdirSync(output,{recursive:true});writeFileSync(join(output,'browser-proof.json'),artifactString(report))
+  console.log(artifactString({pass:report.pass,candidate:report.candidate,error:report.error,cleanup:report.cleanup}))
   if(!report.pass)process.exitCode=1
   })()
   return finishing

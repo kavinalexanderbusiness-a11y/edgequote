@@ -12,6 +12,45 @@ const money = value => new Intl.NumberFormat('en-CA', { style: 'currency', curre
 const authCookie = cookie => /^sb-.*-auth-token(?:\.\d+)?$/.test(cookie.name)
 const noteV2 = 'Customer UI stale review: scope V2 saved by the actual owner'
 const priceV2 = 151.23
+const emailTables = ['pilot_quote_followup_workflows', 'pilot_email_send_attempts']
+// Only these optional email row fields contain private routing/credential
+// values. Comparisons and digests use the original rows; returned evidence is
+// a separate redacted copy, including on a failed assertion.
+function emailPrivateValues(value, result = new Set()) {
+  if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) {
+    if (['reply_token', 'reply_to', 'route_token', 'secret_ref', 'idempotency_key'].includes(key) && typeof child === 'string' && child.length) result.add(child)
+    else emailPrivateValues(child, result)
+  }
+  return result
+}
+function profileRows(rows, fixture) {
+  assert.ok(['absent', 'present'].includes(fixture.emailProfile), 'An explicit verified email profile is required')
+  for (const owner of ['ownerA', 'ownerB', 'denied']) {
+    assert.equal(Object.keys(rows[owner]).length, 23)
+    for (const table of emailTables) assert.ok(Array.isArray(rows[owner][table]))
+    if (fixture.emailProfile === 'absent' || owner !== 'ownerA') for (const table of emailTables) assert.deepEqual(rows[owner][table], [])
+  }
+  const workflows = rows.ownerA.pilot_quote_followup_workflows, attempts = rows.ownerA.pilot_email_send_attempts
+  if (fixture.emailProfile === 'present') {
+    assert.equal(workflows.length, 1); assert.equal(attempts.length, 1)
+    const workflow = workflows[0], attempt = attempts[0]
+    for (const row of [workflow, attempt]) {
+      assert.equal(row.user_id, fixture.ownerA); assert.equal(row.quote_id, fixture.quoteA); assert.equal(row.customer_id, fixture.customerA)
+    }
+    assert.equal(workflow.state, 'held'); assert.equal(workflow.hold_reason, 'owner_paused')
+    assert.equal(workflow.approved_by, fixture.ownerA); assert.equal(workflow.step_count, 1)
+    assert.ok(Number.isFinite(Date.parse(workflow.held_at)))
+    assert.equal(attempt.workflow_id, workflow.id); assert.equal(attempt.connection_id, workflow.connection_id)
+    assert.equal(attempt.state, 'pending'); assert.equal(attempt.step, 1); assert.equal(attempt.fence, 0)
+    for (const key of ['lease_until', 'first_started_at', 'provider_email_id', 'confirmed_at', 'message_id', 'notification_log_id', 'error_code']) assert.equal(attempt[key], null, 'Retained attempt remains unstarted: ' + key)
+    assert.match(attempt.reply_token, /^[a-f0-9]{48}$/)
+    assert.ok(typeof attempt.payload?.reply_to === 'string' && attempt.payload.reply_to.startsWith(attempt.reply_token + '@'))
+  }
+  return { profile: fixture.emailProfile, rowFamilies: 23, queriedRowFamilies: fixture.emailProfile === 'absent' ? 21 : 23,
+    emailRelations: Object.fromEntries(emailTables.map(table => [table, fixture.emailProfile === 'absent' ? 'verified not installed; empty placeholder' : 'queried installed relation'])),
+    workflows: workflows.length, attempts: attempts.length, workflowState: workflows[0]?.state ?? null,
+    attemptState: attempts[0]?.state ?? null, retainedSha256: sha({ workflows, attempts }) }
+}
 async function bounded(work, label, ms = 30000) {
   let timer
   try { return await Promise.race([Promise.resolve().then(work), new Promise((_, reject) => { timer = setTimeout(() => reject(Error(label + ' timed out')), ms) })]) }
@@ -124,13 +163,16 @@ function acceptedRows(before, after, intent, receipt, fixture, facts) {
     customer_id: fixture.customerA, amount: q.total, href: '/dashboard/quotes/' + fixture.quoteA })) assert.deepEqual(notification[key], value)
 }
 
-export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixtures, readRows, readFacts, readFreshOwnerRows, outputDirectory }) {
+export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixtures, readRows, readFacts, readFreshOwnerRows, outputDirectory, selectedCases = ['U1', 'U2'] }) {
   const report = { pass: false, tests: [], cases: [], contexts: [], failures: [], evidence: [], browserOwnedByCaller: true,
     scope: 'Actual dormant PortalClient acceptance UI, canonical hook/modal, real HTTP/native acceptance and one actual authenticated owner Save.',
     limits: ['The production PortalPage does not activate this capability.', 'Native current acceptance is a database oracle, not an invented UI badge.',
       'Recovery means explicit fresh review after a known stale refusal; no UNKNOWN attribution or response-loss recovery is claimed.',
       'Business comparisons cover the declared 23 table families, control owners and shared units, excluding Auth and private token rows.'] }
-  const secrets = (fixtures ?? []).flatMap(f => [f.password, f.portalTokenA, f.portalTokenB, f.revokedPortalTokenA]).filter(value => typeof value === 'string' && value.length > 0)
+  const retainedSecrets = emailPrivateValues((fixtures ?? []).map(f => f.before))
+  const secrets = new Set((fixtures ?? []).flatMap(f => [f.password, f.portalTokenA, f.portalTokenB, f.revokedPortalTokenA]).filter(value => typeof value === 'string' && value.length > 0))
+  for (const value of retainedSecrets) secrets.add(value)
+  const registerPrivateRows = value => { for (const item of emailPrivateValues(value)) { retainedSecrets.add(item); secrets.add(item) } return value }
   const safe = error => {
     let text = String(error instanceof Error ? error.message : error)
     for (const value of secrets) { text = text.replaceAll(value, '[private fixture value]'); text = text.replaceAll(encodeURIComponent(value), '[private fixture value]') }
@@ -142,7 +184,12 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
   }
   try {
     assert.equal(baseURL, 'http://localhost:3000'); assert.equal(browser.browserType().name(), 'chromium'); assert.equal(browser.isConnected(), true)
-    assert.deepEqual(fixtures.map(f => f.id), ['U1', 'U2']); assert.equal(new Set(fixtures.map(f => f.ownerA)).size, 2)
+    assert.ok(JSON.stringify(selectedCases) === '["U1","U2"]' || JSON.stringify(selectedCases) === '["U2"]', 'Only the original UI suite or explicit U2 profile slice is supported')
+    const profileSlice = selectedCases.length === 1
+    report.selectedCases = [...selectedCases]
+    report.expectedPhases = profileSlice ? 5 : 8
+    if (profileSlice) report.limits.push('This selected U2 slice checks Save and portal acceptance under one verified email profile; identity reassignment, deletion/Undo, owner-on-behalf acceptance and lock schedules are not rerun.')
+    assert.deepEqual(fixtures.map(f => f.id), selectedCases); assert.equal(new Set(fixtures.map(f => f.ownerA)).size, selectedCases.length)
     for (const callback of [readRows, readFacts, readFreshOwnerRows]) assert.equal(typeof callback, 'function')
     const { wire, evidence } = await loadAcceptanceProofWire(); report.evidence.push(evidence); report.browserVersion = browser.version()
     for (const fixture of fixtures) {
@@ -152,7 +199,14 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
       const viewport = fixture.id === 'U1' ? { width: 1440, height: 1100 } : { width: 390, height: 844 }
       let phase = 'preparation', successful = false, portal, owner, preview, preAcceptanceRows = fixture.before, finalRows, finalFacts, acceptedResponseOrder
       let networkOrder = 0
-      const rows = () => bounded(() => readRows(fixture), 'Independent fixture rows')
+      const rows = async () => {
+        const value = registerPrivateRows(await bounded(() => readRows(fixture), 'Independent fixture rows'))
+        if (profileSlice) {
+          profileRows(value, fixture)
+          for (const owner of ['ownerA', 'ownerB', 'denied']) for (const table of emailTables) assert.deepEqual(value[owner][table], fixture.before[owner][table], 'Retained email rows changed: ' + owner + '.' + table)
+        }
+        return value
+      }
       const facts = async () => {
         const value = await bounded(() => readFacts(fixture), 'Independent native facts')
         assert.deepEqual(Object.keys(value).sort(), ['acceptanceCurrent', 'documentFingerprint', 'termsFingerprint'])
@@ -318,6 +372,13 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
       try {
         await check('actual portal loads and fresh native review requires separate terms assent', async () => {
           assert.equal(fixture.acceptanceVersioned, true); assert.equal(Object.keys(fixture.before.ownerA).length, 23)
+          if (profileSlice) {
+            entry.emailProfile = fixture.emailProfile
+            entry.profileBefore = profileRows(fixture.before, fixture)
+            report.limits.push(fixture.emailProfile === 'absent'
+              ? 'This absent-profile run observes 21 installed business table families and two explicitly labelled empty placeholders for verified absent email relations.'
+              : 'This present-profile run observes 23 business table families including one held workflow and its unstarted pending attempt; no email dispatch is exercised.')
+          }
           assert.equal(fixture.before.ownerA.quote_acceptances.length, 0); assert.ok(fixture.termsA.trim())
           portal = await newPage('portal', viewport)
           const hydrated = portal.page.waitForResponse(response => new URL(response.url()).origin === baseURL && new URL(response.url()).pathname === '/api/payments/status')
@@ -429,6 +490,7 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
           assert.equal(counts('/api/acceptance/preview'), fixture.id === 'U1' ? 1 : 2); assert.equal(counts('/api/save'), fixture.id === 'U1' ? 0 : 1)
           assert.equal(counts('/api/acceptance/reconcile'), 0); assert.equal((await portal.context.cookies()).filter(authCookie).length, 0)
           assert.deepEqual(await rows(), finalRows); assert.deepEqual(await facts(), finalFacts)
+          if (profileSlice) { entry.profileAfter = profileRows(finalRows, fixture); assert.deepEqual(entry.profileAfter, entry.profileBefore) }
           assert.ok(captured.every(item => item.noStore)); assert.equal(report.failures.some(f => f.case === fixture.id), false)
           if (outputDirectory) assert.equal(entry.captures.length, fixture.id === 'U1' ? 1 : 2)
           entry.evidence.push({ kind: 'fresh-readback-and-visible-refresh', freshQuoteSha256: sha(fresh.quote), freshServicesSha256: sha(fresh.services),
@@ -438,7 +500,7 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
         successful = true
       } catch (error) {
         entry.error = { phase, message: safe(error) }
-        try { entry.failureRowsBeforeCleanup = await bounded(() => readRows(fixture), 'Failure state before cleanup', 5000) } catch (failure) { entry.failureReadBefore = safe(failure) }
+        try { entry.failureRowsBeforeCleanup = registerPrivateRows(await bounded(() => readRows(fixture), 'Failure state before cleanup', 5000)) } catch (failure) { entry.failureReadBefore = safe(failure) }
       } finally {
         for (const { context, observed } of contexts.reverse()) {
           try { await bounded(() => context.close(), 'Browser context close'); observed.closed = true } catch (error) { entry.cleanup.contextError = safe(error); successful = false }
@@ -446,17 +508,24 @@ export async function runCustomerAcceptanceUIBrowser({ browser, baseURL, fixture
         try { await drain(); entry.cleanup.observationsDrained = true } catch (error) { entry.cleanup.observationError = safe(error); successful = false }
         entry.cleanup.contextsClosed = contexts.every(item => item.observed.closed)
         if (!successful || report.failures.some(f => f.case === fixture.id)) {
-          try { entry.failureRowsAfterCleanup = await bounded(() => readRows(fixture), 'Failure state after cleanup', 5000) } catch (failure) { entry.failureReadAfter = safe(failure) }
+          try { entry.failureRowsAfterCleanup = registerPrivateRows(await bounded(() => readRows(fixture), 'Failure state after cleanup', 5000)) } catch (failure) { entry.failureReadAfter = safe(failure) }
           entry.cleanup.cancellationProvesRollback = false
         }
-        entry.pass = successful && entry.cleanup.contextsClosed && entry.cleanup.observationsDrained && !report.failures.some(f => f.case === fixture.id)
+        entry.pass = successful && entry.phases.length === (fixture.id === 'U1' ? 3 : 5) && entry.phases.every(item => item.pass)
+          && entry.cleanup.contextsClosed && entry.cleanup.observationsDrained && !report.failures.some(f => f.case === fixture.id)
         report.tests.push({ name: fixture.id + ' actual customer acceptance UI', pass: entry.pass, ...(entry.error ? { error: entry.error.message } : {}) })
       }
       if (!entry.pass) break
     }
     report.allOpenedContextsClosed = report.contexts.every(item => item.opened && item.closed)
-    report.pass = report.tests.length === 2 && report.tests.every(test => test.pass) && report.allOpenedContextsClosed && report.failures.length === 0
-    assertPrivateAbsent(JSON.stringify(report))
+    report.pass = report.tests.length === selectedCases.length && report.tests.every(test => test.pass) && report.allOpenedContextsClosed && report.failures.length === 0
   } catch (error) { report.error = safe(error); report.pass = false }
-  return report
+  registerPrivateRows(report)
+  let output = JSON.stringify(report)
+  for (const value of [...retainedSecrets].sort((left, right) => right.length - left.length)) {
+    output = output.replaceAll(value, '[private retained email value]').replaceAll(encodeURIComponent(value), '[private retained email value]')
+  }
+  try { assertPrivateAbsent(output) }
+  catch (error) { return { pass: false, selectedCases: report.selectedCases, error: safe(error), evidenceWithheld: 'Report privacy assertion failed' } }
+  return JSON.parse(output)
 }
