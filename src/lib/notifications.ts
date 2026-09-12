@@ -50,6 +50,8 @@ const PRIORITY: Record<string, NotifPriority> = {
   // state until the owner answers. It groups as an update and the time-off
   // page carries the queue with its own count.
   time_off_requested: 'update',
+  owner_workday_prep: 'update',
+  owner_day_close: 'update',
 }
 export function notifPriority(type: string): NotifPriority {
   return PRIORITY[type] ?? 'update'
@@ -80,6 +82,8 @@ const ACTION_VERB: Record<string, string> = {
   // Its href opens the time-off page on the requests queue, so the verb
   // promises what the tap actually does.
   time_off_requested: 'Review',
+  owner_workday_prep: 'Open day plan',
+  owner_day_close: 'Review day',
 }
 export function notificationActionLabel(type: string): string {
   return ACTION_VERB[type] ?? 'View'
@@ -102,6 +106,8 @@ const TYPE_NOUN: Record<string, string> = {
   crew_message: 'crew message',
   change_order_approved: 'change approved',
   change_order_declined: 'change declined',
+  owner_workday_prep: 'workday preparation',
+  owner_day_close: 'day-close reminder',
 }
 function groupTitle(type: string, n: number): string {
   const noun = TYPE_NOUN[type] ?? type.replace(/_/g, ' ')

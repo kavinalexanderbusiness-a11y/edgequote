@@ -43,6 +43,8 @@ create schema if not exists auth;
 create schema if not exists storage;
 create schema if not exists extensions;
 create schema if not exists net;
+create schema if not exists cron;
+create schema if not exists vault;
 create schema if not exists supabase_migrations;
 
 grant usage on schema public to anon, authenticated, service_role;
@@ -144,6 +146,37 @@ create or replace function net.http_post(
 ) returns bigint
   language sql
   as $$ insert into net._stub_requests (url, body, headers) values (url, body, headers) returning id $$;
+
+-- ── cron + vault ────────────────────────────────────────────────────────────
+-- Supabase Cron and Vault are platform services. The scheduler stub records the
+-- schedule definition but never executes it; the empty Vault table keeps test
+-- rebuilds secret-free and mirrors the columns reminder jobs read at runtime.
+create table if not exists vault.decrypted_secrets (
+  name text primary key,
+  decrypted_secret text
+);
+
+create table if not exists cron._stub_jobs (
+  id bigint generated always as identity primary key,
+  job_name text not null unique,
+  schedule_text text not null,
+  command_text text not null
+);
+
+create or replace function cron.schedule(
+  p_job_name text,
+  p_schedule text,
+  p_command text
+) returns bigint
+  language sql
+  as $$
+    insert into cron._stub_jobs (job_name, schedule_text, command_text)
+    values (p_job_name, p_schedule, p_command)
+    on conflict (job_name) do update
+      set schedule_text = excluded.schedule_text,
+          command_text = excluded.command_text
+    returning id
+  $$;
 
 -- ── extensions ───────────────────────────────────────────────────────────────
 -- pgcrypto/pg_trgm/uuid-ossp are created by the baseline itself (section 1); the

@@ -44,6 +44,8 @@ const ICON: Record<string, typeof FileText> = {
   // business. Same glyph for both would make the bell's two most similar-looking
   // rows mean opposite audiences.
   crew_message: MessagesSquare,
+  owner_workday_prep: CalendarPlus,
+  owner_day_close: DollarSign,
 }
 
 // Fixed-position coordinates for the dropdown panel, measured from the bell.

@@ -59,6 +59,7 @@
     "verify:create-doors": "tsx scripts/verify-create-doors.ts",
     "verify:job-editor": "tsx scripts/verify-job-editor.ts",
     "verify:cron": "tsx scripts/verify-cron.ts",
+    "verify:owner-reminders": "tsx scripts/verify-owner-reminders.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
     "verify:priority-queue": "tsx scripts/verify-priority-queue.ts",
     "verify:guardrails": "tsx scripts/verify-guardrails.ts",
