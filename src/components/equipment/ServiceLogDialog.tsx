@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Equipment, EquipmentService, ServiceKind, SERVICE_KINDS, serviceKindLabel, serviceStatus, warrantyStatus } from '@/lib/equipment'
+import { Equipment, EquipmentService, ServiceKind, SERVICE_KINDS, serviceKindLabel, serviceStatus, warrantyStatus, shouldUpdateHourMeter } from '@/lib/equipment'
 import { formatCurrency, formatDate, localTodayISO, cn } from '@/lib/utils'
 import { toneSoft, toneText } from '@/lib/tone'
 import { toast } from '@/lib/toast'
@@ -38,7 +38,7 @@ export function ServiceLogDialog({ open, userId, equipment, services, parts = []
     service_date: today,
     kind: 'oil' as ServiceKind,
     // Default to the machine's current hours — the common case is "serviced it now".
-    hours: equipment.hours ? String(equipment.hours) : '',
+    hours: equipment.hours != null ? String(equipment.hours) : '',
     cost: '',
     notes: '',
   })
@@ -97,7 +97,7 @@ export function ServiceLogDialog({ open, userId, equipment, services, parts = []
     // forward too — otherwise the next due-date would be computed from a stale
     // reading. (The trigger owns last_service_*; `hours` is the live meter.)
     let meterStale = false
-    if (loggedHours != null && loggedHours > Number(equipment.hours || 0)) {
+    if (shouldUpdateHourMeter(equipment.hours, loggedHours)) {
       const { error: meterErr } = await supabase.from('equipment').update({ hours: loggedHours }).eq('id', equipment.id)
       if (meterErr) meterStale = true
     }
@@ -204,7 +204,7 @@ export function ServiceLogDialog({ open, userId, equipment, services, parts = []
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="Engine hours at service" type="number" min="0" step="0.1" inputMode="decimal"
             value={v.hours} onChange={e => set('hours', e.target.value)}
-            hint="Resets the hour countdown. Higher than the meter? We'll move the meter up." />
+            hint="Leave blank if unknown or not applicable. A recorded reading starts the hour countdown and can advance the meter." />
           <Input label="Cost" type="number" min="0" step="0.01" inputMode="decimal"
             value={v.cost || (partsValue > 0 ? String(partsValue) : '')}
             onChange={e => set('cost', e.target.value)} placeholder="0.00"

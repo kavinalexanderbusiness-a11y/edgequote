@@ -72,6 +72,7 @@
     "verify:analytics": "tsx scripts/verify-analytics.ts",
     "verify:integrations": "tsx scripts/verify-integrations.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
+    "verify:equipment-hours": "tsx scripts/verify-equipment-hours.ts",
     "verify:accounting": "tsx scripts/verify-accounting.ts",
     "verify:reports": "tsx scripts/verify-reports.ts",
     "verify:sales-analytics": "tsx scripts/verify-sales-analytics.ts",
