@@ -26,6 +26,8 @@ const PREF_KEY: Record<string, string> = {
   weather_alert: 'weather',
   weather: 'weather',
   daily_reminder: 'daily_reminder',
+  owner_workday_prep: 'daily_reminder',
+  owner_day_close: 'daily_reminder',
   schedule_change: 'schedule_change',
   schedule_changed: 'schedule_change',
   // ⭐ MAPPED SO IT IS TURN-OFF-ABLE. An unmapped type falls back to its own

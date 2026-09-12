@@ -21,7 +21,11 @@ const PREFS = [
   { key: 'portal_request', label: 'Portal activity', hint: 'A request from the customer portal', Icon: Globe },
   { key: 'review_received', label: 'Reviews', hint: 'A customer leaves a review', Icon: Star },
   { key: 'weather', label: 'Weather alerts', hint: 'Rain delays & weather disruptions', Icon: CloudRain },
-  { key: 'daily_reminder', label: 'Daily reminders', hint: 'Your morning schedule summary', Icon: Sun },
+  { key: 'daily_reminder', label: 'Owner reminder digests', hint: 'Master switch for workday and money summaries', Icon: Sun },
+  { key: 'workday_prep', label: 'Workday preparation', hint: 'Jobs, arrival windows and assigned equipment', Icon: CalendarClock },
+  { key: 'invoice_followup', label: 'Invoice follow-up', hint: 'Completed work to invoice and balances to collect', Icon: DollarSign },
+  { key: 'overdue_balance', label: 'Overdue balances', hint: 'Daily totals when customer balances are overdue', Icon: DollarSign },
+  { key: 'end_of_day', label: 'End-of-day follow-up', hint: 'Open work and the next workday', Icon: Sun },
   { key: 'schedule_change', label: 'Schedule changes', hint: 'A job is moved or rescheduled', Icon: CalendarClock },
   // ⚠️ 'New text messages' above is a CUSTOMER writing in. This is your own crew,
   // on a visit — different people, different urgency, its own switch. The key

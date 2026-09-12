@@ -112,6 +112,11 @@ export async function loadPGlite(): Promise<{ PGlite: any; contribs: Record<stri
  */
 export const PLATFORM_SUBSTITUTIONS: { pattern: RegExp; what: string; why: string }[] = [
   {
+    pattern: /^create extension if not exists "?pg_cron"?[^;]*;$/gim,
+    what: 'create extension pg_cron',
+    why: 'platform-only scheduler; prelude provides cron.schedule()',
+  },
+  {
     pattern: /^create extension if not exists "?pg_net"?[^;]*;$/gim,
     what: 'create extension pg_net',
     why: 'platform-only async HTTP extension; prelude provides net.http_post()',
