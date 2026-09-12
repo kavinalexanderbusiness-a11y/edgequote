@@ -108,7 +108,7 @@ check('notification insert uses deterministic planned ID', /id:\s*planned\.id/.t
 check('23505 is treated as an ordinary duplicate', route.includes("error.code === '23505'"))
 check('customer communication pipeline is never called', !/dispatchToCustomer|sendSms|sendEmail/.test(route))
 check('raw job notes are not copied to notification body', !/body:\s*j\.notes/.test(route))
-const scheduler = readFileSync(join(process.cwd(), 'supabase/migrations/20260912090000_owner_reminder_scheduler.sql'), 'utf8')
+const scheduler = readFileSync(join(process.cwd(), 'supabase/migrations/20260912083642_owner_reminder_scheduler.sql'), 'utf8')
 check('Supabase Cron invokes the producer hourly', scheduler.includes("'5 * * * *'") && scheduler.includes('/api/cron/owner-reminders'))
 check('scheduler reads URL and auth from Vault', scheduler.includes('vault.decrypted_secrets') && scheduler.includes('edgehq_cron_secret'))
 check('scheduler embeds no URL or secret value', !/https:\/\//.test(scheduler) && !/Bearer [A-Za-z0-9_-]{12}/.test(scheduler))
