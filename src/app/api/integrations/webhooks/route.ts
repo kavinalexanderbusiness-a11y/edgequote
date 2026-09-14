@@ -3,6 +3,7 @@
 // land in the same table). Server-side so secret minting stays in one place.
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { logSafeServerError } from '@/lib/serverError'
 import { validateEventSelection } from '@/lib/integrations/events'
 import { generateWebhookSecret } from '@/lib/integrations/keys'
 
@@ -30,6 +31,9 @@ export async function POST(req: NextRequest) {
     description: typeof body.description === 'string' && body.description.trim() ? body.description.trim().slice(0, 200) : null,
     secret: generateWebhookSecret(), source: 'manual',
   }).select('*').single()
-  if (error || !data) return NextResponse.json({ error: error?.message ?? 'insert failed' }, { status: 500 })
+  if (error || !data) {
+    logSafeServerError('integrations.webhooks.insert', error)
+    return NextResponse.json({ error: 'Could not create the webhook.' }, { status: 500 })
+  }
   return NextResponse.json(data, { status: 201 })
 }

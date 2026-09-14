@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const runtime = 'nodejs'
 
@@ -15,6 +16,9 @@ export async function POST(req: NextRequest) {
   let q = supabase.from('push_subscriptions').delete().eq('user_id', user.id)
   if (body?.endpoint) q = q.eq('endpoint', body.endpoint)
   const { error } = await q
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    logSafeServerError('push.unsubscribe.delete', error)
+    return NextResponse.json({ error: 'Could not remove this notification subscription.' }, { status: 500 })
+  }
   return NextResponse.json({ ok: true })
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { logSafeServerError } from '@/lib/serverError'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { renderMessage, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
@@ -87,8 +88,8 @@ async function handler(req: NextRequest) {
   if (error) {
     // A failed read is NOT a quiet day — say so, or an outage looks like "nothing
     // to chase" forever.
-    console.error('[cron/quote-followup] quote query failed:', error.message)
-    return NextResponse.json({ ok: false, error: error.message, note: 'Could not read quotes — nothing was chased this run.' }, { status: 500 })
+    logSafeServerError('cron.quote_followup.quote_query', error)
+    return NextResponse.json({ ok: false, error: 'Quote query failed.', note: 'Could not read quotes — nothing was chased this run.' }, { status: 500 })
   }
   const fetched = (rows as unknown as FollowUpQuote[]) || []
   const truncated = fetched.length > MAX_PER_RUN
@@ -102,8 +103,8 @@ async function handler(req: NextRequest) {
   // turned into money owed — so it aborts the run rather than guessing.
   const { data: invRows, error: invErr } = await supabase.from('invoices').select('quote_id').in('quote_id', quotes.map(q => q.id))
   if (invErr) {
-    console.error('[cron/quote-followup] invoice lookup failed:', invErr.message)
-    return NextResponse.json({ ok: false, error: invErr.message, note: 'Could not read invoices — nothing was chased this run.' }, { status: 500 })
+    logSafeServerError('cron.quote_followup.invoice_query', invErr)
+    return NextResponse.json({ ok: false, error: 'Invoice query failed.', note: 'Could not read invoices — nothing was chased this run.' }, { status: 500 })
   }
   const invoiced = new Set(((invRows as { quote_id: string | null }[]) || []).map(i => i.quote_id))
 

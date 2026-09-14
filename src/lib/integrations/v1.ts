@@ -9,6 +9,7 @@ import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { authenticateRequest, listParams, listEnvelope, apiError } from './apiAuth'
 import { SERIALIZED_FIELDS, serializeEntity, type IntegrationEntity } from './events'
+import { logSafeServerError } from '@/lib/serverError'
 
 const TABLES: Record<IntegrationEntity, string> = {
   customer: 'customers',
@@ -37,7 +38,10 @@ export function listHandler(entity: IntegrationEntity, filters: string[] = []) {
       if (v) q = q.eq(f, v)
     }
     const { data, error } = await q
-    if (error) return apiError(500, error.message)
+    if (error) {
+      logSafeServerError(`api.v1.${entity}.list`, error)
+      return apiError(500, 'Could not load records.')
+    }
     const rows = ((data ?? []) as unknown as Record<string, unknown>[]).map((r) => serializeEntity(entity, r))
     return NextResponse.json(listEnvelope(rows, limit))
   }
@@ -52,7 +56,10 @@ export function itemHandler(entity: IntegrationEntity) {
     const { data, error } = await auth.sb.from(TABLES[entity])
       .select(SERIALIZED_FIELDS[entity].join(', '))
       .eq('user_id', auth.userId).eq('id', id).maybeSingle()
-    if (error) return apiError(500, error.message)
+    if (error) {
+      logSafeServerError(`api.v1.${entity}.item`, error)
+      return apiError(500, 'Could not load this record.')
+    }
     if (!data) return apiError(404, 'Not found.')
     return NextResponse.json({ data: serializeEntity(entity, data as unknown as Record<string, unknown>) })
   }

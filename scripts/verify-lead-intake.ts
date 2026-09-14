@@ -24,6 +24,7 @@ import {
 // The CRM's OWN read path — asserting against the exact function LeadSummary calls,
 // so "the CRM can see it" is proven rather than assumed.
 import { extractBookingPhotos } from '../src/lib/bookingPhotos'
+import { validateWebsiteLeadPayload } from '../src/lib/publicIntakeSecurity'
 
 let pass = 0
 let fail = 0
@@ -104,6 +105,29 @@ const URL2 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok
   check('1 photo → payload.photos becomes the URL array', stored.photos, [URL1])
   check('1 photo → no false failure flag', stored.photos_failed, undefined)
   check('1 photo → other fields untouched', stored.name, 'Pat')
+}
+
+// The public website route must accept the exact production form shape while
+// rejecting fields and lengths that could become stored injection or DB abuse.
+H('Public website schema boundary')
+{
+  const valid = validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
+    services_needed: ['Lawn Mowing & Edging'], marketing_consent: 'no',
+  })
+  ok('accepts the production form contract', valid.ok)
+  check('rejects unknown fields', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', admin: 'true',
+  }).ok, false)
+  check('rejects oversized notes', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', notes: 'x'.repeat(2001),
+  }).ok, false)
+  check('requires a reply channel', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St',
+  }).ok, false)
+  check('rejects malformed email', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', email: 'not-an-email',
+  }).ok, false)
 }
 
 // (2) MULTIPLE photos all preserved, in order.

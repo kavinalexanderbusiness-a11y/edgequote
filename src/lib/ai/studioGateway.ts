@@ -7,6 +7,7 @@
 // risking — the before-after gateway. Same conventions: raw `fetch` (no SDK),
 // DISABLED BY DEFAULT (no-ops to { ok:false, reason:'disabled' } until
 // ANTHROPIC_API_KEY is set), server-only — never import into a client component.
+import { logSafeServerError } from '@/lib/serverError'
 
 export const DEFAULT_AI_MODEL = 'claude-opus-4-8'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -65,11 +66,10 @@ export async function generateStructured<T>(opts: GenerateOpts): Promise<AiResul
       }),
     })
     if (!res.ok) {
-      const detail = await res.text().catch(() => '')
-      let msg = `Anthropic ${res.status}`
-      try { const j = JSON.parse(detail); if (j?.error?.message) msg = `Anthropic ${res.status}: ${j.error.message}` }
-      catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
-      return { ok: false, reason: 'error', error: msg }
+      // Provider response text can contain request details. Keep it out of both
+      // the browser response and server logs; status is enough to correlate.
+      logSafeServerError('ai.studio.generate_provider', null, { status: res.status })
+      return { ok: false, reason: 'error', error: 'Generation service is temporarily unavailable.' }
     }
     const data = await res.json()
     if (data?.stop_reason === 'refusal') {
@@ -83,7 +83,8 @@ export async function generateStructured<T>(opts: GenerateOpts): Promise<AiResul
     }
     return { ok: true, data: block.input as T, model }
   } catch (e) {
-    return { ok: false, reason: 'error', error: e instanceof Error ? e.message : 'generation failed' }
+    logSafeServerError('ai.studio.generate_request', e)
+    return { ok: false, reason: 'error', error: 'Generation service is temporarily unavailable.' }
   }
 }
 
@@ -118,11 +119,8 @@ export async function streamText(opts: StreamOpts, onDelta: (text: string) => vo
       }),
     })
     if (!res.ok || !res.body) {
-      const detail = await res.text().catch(() => '')
-      let msg = `Anthropic ${res.status}`
-      try { const j = JSON.parse(detail); if (j?.error?.message) msg = `Anthropic ${res.status}: ${j.error.message}` }
-      catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
-      return { ok: false, reason: 'error', error: msg }
+      logSafeServerError('ai.studio.stream_provider', null, { status: res.status })
+      return { ok: false, reason: 'error', error: 'Generation service is temporarily unavailable.' }
     }
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -147,7 +145,8 @@ export async function streamText(opts: StreamOpts, onDelta: (text: string) => vo
               full += evt.delta.text
               onDelta(evt.delta.text)
             } else if (evt.type === 'error') {
-              return { ok: false, reason: 'error', error: evt.error?.message || 'stream error' }
+              logSafeServerError('ai.studio.stream_event', evt.error)
+              return { ok: false, reason: 'error', error: 'Generation service is temporarily unavailable.' }
             }
           } catch { /* keep-alive / partial — ignore */ }
         }
@@ -155,6 +154,7 @@ export async function streamText(opts: StreamOpts, onDelta: (text: string) => vo
     }
     return { ok: true, data: full, model }
   } catch (e) {
-    return { ok: false, reason: 'error', error: e instanceof Error ? e.message : 'stream failed' }
+    logSafeServerError('ai.studio.stream_request', e)
+    return { ok: false, reason: 'error', error: 'Generation service is temporarily unavailable.' }
   }
 }

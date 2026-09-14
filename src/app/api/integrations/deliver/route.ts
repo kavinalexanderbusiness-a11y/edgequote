@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { processDueDeliveries } from '@/lib/integrations/deliver'
 import { safeEqual } from '@/lib/integrations/signing'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,8 +56,7 @@ export async function POST(req: NextRequest) {
     console.log('[integrations/deliver] run:', JSON.stringify({ scope: userScope ? 'user' : 'all', ...summary }))
     return NextResponse.json({ ok: true, ...summary })
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.error('[integrations/deliver] failed:', message)
-    return NextResponse.json({ error: message }, { status: 500 })
+    logSafeServerError('integrations.deliver.run', e, { scope: userScope ? 'user' : 'all' })
+    return NextResponse.json({ error: 'Integration delivery failed.' }, { status: 500 })
   }
 }

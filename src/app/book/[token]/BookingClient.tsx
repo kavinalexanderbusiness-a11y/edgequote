@@ -139,10 +139,12 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         // and leave uploadingPhotos stuck true. A spinner that never stops is itself a
         // silent failure; the finally below guarantees the state resets.
         try {
-          const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
-          const path = `${token}/${crypto.randomUUID()}-${safe}`
-          const { error: upErr } = await supabase.storage.from('booking-uploads').upload(path, f, { upsert: false })
-          if (!upErr) added.push(supabase.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
+          const body = new FormData()
+          body.set('token', token)
+          body.set('photo', f)
+          const response = await fetch('/api/public/booking/photos', { method: 'POST', body })
+          const result = await response.json().catch(() => null) as { url?: string } | null
+          if (response.ok && result?.url) added.push(result.url)
           else failed++
         } catch { failed++ }
       }

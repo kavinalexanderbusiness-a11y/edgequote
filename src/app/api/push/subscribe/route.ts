@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const runtime = 'nodejs'
 
@@ -29,6 +30,9 @@ export async function POST(req: NextRequest) {
     last_seen_at: new Date().toISOString(),
   }, { onConflict: 'user_id,endpoint' })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    logSafeServerError('push.subscribe.upsert', error)
+    return NextResponse.json({ error: 'Could not save this notification subscription.' }, { status: 500 })
+  }
   return NextResponse.json({ ok: true })
 }

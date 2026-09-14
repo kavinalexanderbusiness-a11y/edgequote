@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { aiEnabled, streamText } from '@/lib/ai/studioGateway'
 import { ndjsonResponse } from '@/lib/ai/stream'
 import { buildAssistInput, type AssistPayload, type AssistTask } from '@/lib/ai/assist'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const maxDuration = 60
 
@@ -38,7 +39,8 @@ export async function POST(req: NextRequest): Promise<Response> {
   try {
     input = await buildAssistInput(supabase, user.id, body as AssistPayload)
   } catch (e) {
-    return NextResponse.json({ ok: false, aiEnabled: true, error: e instanceof Error ? e.message : 'bad request' }, { status: 400 })
+    logSafeServerError('ai.assist.build_input', e)
+    return NextResponse.json({ ok: false, aiEnabled: true, error: 'Could not prepare this request.' }, { status: 400 })
   }
 
   return ndjsonResponse(async emit => {
