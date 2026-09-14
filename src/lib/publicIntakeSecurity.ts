@@ -7,6 +7,8 @@ const DEFAULT_ORIGINS = [
   'https://edgepropertyservicesyyc.ca',
   'https://www.edgepropertyservicesyyc.ca',
 ]
+const EDGE_PROPERTY_SERVICES_SITE_ID = 'edge-property-services-yyc'
+const EDGE_PROPERTY_SERVICES_OWNER_ID = 'a12a0549-7210-4b6c-829e-3ed9feb380b3'
 
 export interface WebsiteLeadSite {
   id: string
@@ -46,11 +48,35 @@ export function websiteLeadSite(siteId: string): WebsiteLeadSite | null {
 
   // Single-site configuration keeps Edge simple while the JSON map supports other
   // tenants. The token remains a server environment value and never ships in HTML.
-  if (id === 'edge-property-services-yyc') {
+  if (id === EDGE_PROPERTY_SERVICES_SITE_ID) {
     const token = (process.env.EDGE_WEBSITE_LEAD_TOKEN || '').trim()
     if (token) return { id, token, origins: DEFAULT_ORIGINS }
   }
   return null
+}
+
+/**
+ * Resolve the configured site without requiring the booking token in public
+ * website code. The environment mapping remains the first choice. The EPS
+ * fallback reads the already-existing token with the service-role client and a
+ * fixed tenant id, so a deployment can recover safely if the dedicated Vercel
+ * variable is absent. This lookup never returns the token to the browser.
+ */
+export async function resolveWebsiteLeadSite(siteId: string): Promise<WebsiteLeadSite | null> {
+  const configured = websiteLeadSite(siteId)
+  if (configured) return configured
+
+  const id = siteId.trim().toLowerCase()
+  if (id !== EDGE_PROPERTY_SERVICES_SITE_ID) return null
+  const admin = createAdminClient()
+  if (!admin) return null
+  const { data, error } = await admin.from('business_settings')
+    .select('booking_token, booking_enabled')
+    .eq('user_id', EDGE_PROPERTY_SERVICES_OWNER_ID)
+    .maybeSingle()
+  const token = typeof data?.booking_token === 'string' ? data.booking_token.trim() : ''
+  if (error || !data?.booking_enabled || !token) return null
+  return { id, token, origins: DEFAULT_ORIGINS }
 }
 
 export function requestOrigin(req: NextRequest): string | null {
@@ -99,9 +125,13 @@ export async function consumeTokenIntakeLimit(
   scope: string,
   limit: number,
 ): Promise<'allowed' | 'limited' | 'unavailable'> {
-  const salt = process.env.WEBSITE_LEAD_IP_SALT
+  const dedicatedSalt = (process.env.WEBSITE_LEAD_IP_SALT || '').trim()
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
   const admin = createAdminClient()
-  if (!salt || !admin) return 'unavailable'
+  if ((!dedicatedSalt && !serviceRoleKey) || !admin) return 'unavailable'
+  const salt = dedicatedSalt || createHmac('sha256', serviceRoleKey)
+    .update('edgehq-public-intake-ip-salt-v1')
+    .digest('hex')
   const ipHash = createHmac('sha256', salt).update(clientIp(req)).digest('hex')
   const { data, error } = await admin.rpc('consume_public_intake_rate_limit', {
     p_token: token,

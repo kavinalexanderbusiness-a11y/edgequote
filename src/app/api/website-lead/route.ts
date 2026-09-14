@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { submitLead } from '@/lib/intake'
 import {
   consumePublicIntakeLimit, corsHeaders, originAllowed, requestOrigin,
-  validateWebsiteLeadPayload, websiteLeadSite,
+  resolveWebsiteLeadSite, validateWebsiteLeadPayload,
 } from '@/lib/publicIntakeSecurity'
 import { logSafeServerError, logSecurityEvent } from '@/lib/serverError'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-export function OPTIONS(req: NextRequest) {
-  const site = websiteLeadSite(new URL(req.url).searchParams.get('site') || '')
+export async function OPTIONS(req: NextRequest) {
+  const site = await resolveWebsiteLeadSite(new URL(req.url).searchParams.get('site') || '')
   const origin = requestOrigin(req)
   const headers = corsHeaders(origin, site)
   if (!site || !originAllowed(origin, site)) {
@@ -22,7 +22,7 @@ export function OPTIONS(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const siteId = new URL(req.url).searchParams.get('site') || ''
-  const site = websiteLeadSite(siteId)
+  const site = await resolveWebsiteLeadSite(siteId)
   const origin = requestOrigin(req)
   const headers = corsHeaders(origin, site)
   if (!site || !originAllowed(origin, site)) {
