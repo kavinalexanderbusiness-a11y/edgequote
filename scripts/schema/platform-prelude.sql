@@ -129,6 +129,12 @@ begin
   return parts[array_length(parts, 1)];
 end $$;
 
+-- Hosted Supabase supplies this policy helper. PGlite needs an equivalent so
+-- storage extension allowlists are exercised during disposable rebuild tests.
+create or replace function storage.extension(name text) returns text
+  language sql immutable
+  as $$ select reverse(split_part(reverse(name), '.', 1)) $$;
+
 -- ── net (pg_net) ─────────────────────────────────────────────────────────────
 -- pg_net is an async HTTP queue and cannot exist off-platform. The stub records
 -- the call and returns a request id, so a trigger that fires it still commits.

@@ -90,6 +90,7 @@
     "change_order_guard_transition",
     "claim_beta_invite",
     "claim_webhook_deliveries",
+    "consume_public_intake_rate_limit",
     "clear_crew_lead_on_departure",
     "create_beta_invite",
     "crew_access_states",

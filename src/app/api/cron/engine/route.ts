@@ -4,6 +4,7 @@ import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { AUTOMATION_RULES } from '@/lib/automation/rules'
 import { decide } from '@/lib/automation/decide'
 import { localTodayISO } from '@/lib/utils'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const dynamic = 'force-dynamic'
 // 300, matching every other shipped cron.
@@ -135,10 +136,10 @@ async function handler(req: NextRequest) {
     // The note is for an operator, and the scheduler throws the body away — so the
     // remediation hint has to reach the log to be reachable at all.
     if (error) {
-      console.error('[cron/engine] reading automation_signals failed:', error.message, '— run RUN-2026-07-14-automation-signals.sql if the table is missing.')
+      logSafeServerError('cron.engine.read_signals', error)
       return finish({
         ok: false, owners: 0, signals: 0, evaluated: 0, written: 0, fired: 0,
-        error: error.message, note: 'Run RUN-2026-07-14-automation-signals.sql', status: 500,
+        error: 'Could not read automation signals.', status: 500,
       })
     }
     const batch = (data as SignalRow[] | null) || []
@@ -216,10 +217,10 @@ async function handler(req: NextRequest) {
     // A missing table IS a broken deploy. 200 here meant the run log could be
     // written nowhere, every night, behind a green cron check.
     if (wErr) {
-      console.error('[cron/engine] writing automation_runs failed:', wErr.message, '— run RUN-2026-07-15-automation-runs.sql if the table is missing.')
+      logSafeServerError('cron.engine.write_runs', wErr, { written })
       return finish({
         ok: false, owners: ownerCount, signals: signals.length, evaluated: runs.length, written, fired,
-        error: wErr.message, note: 'Run RUN-2026-07-15-automation-runs.sql', status: 500,
+        error: 'Could not record automation runs.', status: 500,
       })
     }
     written += chunk.length

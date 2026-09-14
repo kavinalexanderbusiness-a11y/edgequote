@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { logSafeServerError } from '@/lib/serverError'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
@@ -94,8 +95,8 @@ async function handler(req: NextRequest) {
     .order('send_at').limit(MAX_PER_RUN)
   if (dueErr) {
     // 42P01 = table missing (migration not run yet) — say so instead of a bare 500.
-    console.error('[cron/scheduled-messages] due query failed:', dueErr.message)
-    return NextResponse.json({ ok: false, error: dueErr.message, note: dueErr.code === '42P01' ? 'the scheduled_messages table is missing — rebuild from supabase/migrations (see docs/MIGRATIONS.md)' : undefined }, { status: 500 })
+    logSafeServerError('cron.scheduled_messages.due_query', dueErr)
+    return NextResponse.json({ ok: false, error: 'Could not load scheduled messages.' }, { status: 500 })
   }
   const due = (dueRows as ScheduledRow[]) || []
 
@@ -179,9 +180,10 @@ async function handler(req: NextRequest) {
       // Finalize the claim we own so it can't sit at 'sending' forever; the reaper
       // only rescues rows a crash left behind.
       await supabase.from('scheduled_messages').update({
-        status: 'failed', detail: `run error: ${(e as Error).message}`.slice(0, 300),
+        status: 'failed', detail: 'The scheduled message could not be processed.',
       }).eq('id', row.id).eq('status', 'sending')
-      notes.push(`Scheduled send failed — ${(e as Error).message}`)
+      logSafeServerError('cron.scheduled_messages.process', e)
+      notes.push('A scheduled message could not be processed.')
     }
   }
 

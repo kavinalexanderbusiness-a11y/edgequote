@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
+import { logSafeServerError } from '@/lib/serverError'
 import { renderMessage, isCommercialMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
@@ -139,7 +140,8 @@ async function handler(req: NextRequest) {
       // resolveAudience now throws rather than resolving to an empty audience.
       // Say so and move to the next campaign — one broken query must not look
       // like "nobody matched", and must not stop the other campaigns.
-      notes.push(`Campaign "${camp.name}": could not resolve its audience — ${(e as Error).message}`)
+      logSafeServerError('cron.campaigns.resolve_audience', e)
+      notes.push(`Campaign "${camp.name}": could not resolve its audience.`)
       continue
     }
     if (capped) notes.push(`Campaign "${camp.name}" matched >${MAX_AUDIENCE} customers — only the first ${MAX_AUDIENCE} were processed this run.`)
@@ -185,7 +187,8 @@ async function handler(req: NextRequest) {
         // looked identical to a run with nothing to do.
         if (claimErr.code !== '23505') {
           claimFailures++
-          notes.push(`Campaign "${camp.name}": could not claim a send for a customer — ${claimErr.message}`)
+          logSafeServerError('cron.campaigns.claim_send', claimErr)
+          notes.push(`Campaign "${camp.name}": could not claim a send for a customer.`)
         }
         continue
       }
@@ -225,9 +228,10 @@ async function handler(req: NextRequest) {
         // The reaper above only rescues rows a crash left behind; this closes the
         // ones we can still see.
         await supabase.from('crm_campaign_log').update({
-          status: 'failed', detail: `run error: ${(e as Error).message}`.slice(0, 300),
+          status: 'failed', detail: 'The campaign message could not be processed.',
         }).eq('campaign_id', camp.id).eq('customer_id', c.id).eq('period_key', periodKey)
-        notes.push(`Campaign "${camp.name}": a send failed — ${(e as Error).message}`)
+        logSafeServerError('cron.campaigns.process_send', e)
+        notes.push(`Campaign "${camp.name}": a send failed.`)
       }
     }
 

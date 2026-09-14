@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { logSafeServerError } from '@/lib/serverError'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { loadTenantZones, todayForTenant } from '@/lib/tenantTimeServer'
 import { loadAccountingData } from '@/lib/accounting/data'
@@ -54,7 +55,10 @@ async function handler(req: NextRequest) {
     .select('id, user_id, kind, recipient, last_period_to')
     .eq('enabled', true)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    logSafeServerError('cron.reports.schedule_query', error)
+    return NextResponse.json({ error: 'Could not load report schedules.' }, { status: 500 })
+  }
   const rows = (data ?? []) as ScheduleRow[]
 
   // ── ⭐⭐ ONE DATE PER TENANT, NOT ONE PER RUN (Session 121) ────────────────
@@ -148,7 +152,8 @@ async function handler(req: NextRequest) {
       if (!res.sent) {
         const why = res.reason === 'disabled'
           ? 'Email is switched off in Settings, so this report was not sent.'
-          : (res.error ?? 'Send failed')
+          : 'The report email could not be sent.'
+        if (res.error) logSafeServerError('cron.reports.send', res.error)
         if (res.reason === 'disabled') skipped++; else failed++
         notes.push(`${row.kind}: ${why}`)
         await release(why)
@@ -163,7 +168,8 @@ async function handler(req: NextRequest) {
     } catch (e) {
       // One owner's bad data must not stop every other owner's report.
       failed++
-      const msg = e instanceof Error ? e.message : 'Unknown error'
+      logSafeServerError('cron.reports.process', e)
+      const msg = 'The report could not be processed.'
       notes.push(`${row.kind}: ${msg}`)
       // A throw AFTER the email went out must keep the period claimed — releasing it
       // would mail the owner the same report again tomorrow, the very thing claiming

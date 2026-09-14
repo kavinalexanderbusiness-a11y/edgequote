@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { commsEnabled, sendSms, sendEmail } from '@/lib/comms/send'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOriginReport } from '@/lib/appOrigin'
+import { logSafeServerError } from '@/lib/serverError'
 
 // Communications self-test. Owner-only. NEVER touches customers — the POST sends
 // ONLY to the number/email typed into the Settings test page.
@@ -60,12 +61,14 @@ export async function GET() {
         twilioCreds = { valid: true, detail: `Account "${j.friendly_name ?? sid}" — status ${j.status ?? 'active'}` }
       } else {
         const t = await res.text().catch(() => '')
-        let msg = `${res.status}`
-        try { const j = JSON.parse(t); if (j?.message) msg = `${res.status} (code ${j.code ?? '?'}): ${j.message}` } catch { if (t) msg += `: ${t.slice(0, 200)}` }
-        twilioCreds = { valid: false, detail: `Twilio rejected the credentials — ${msg}` }
+        let code: string | null = null
+        try { const j = JSON.parse(t); if (j?.code != null) code = String(j.code).slice(0, 32) } catch { /* provider text is never returned */ }
+        logSafeServerError('comms.test.twilio_credentials', { code }, { status: res.status })
+        twilioCreds = { valid: false, detail: `Twilio rejected the credentials (HTTP ${res.status}${code ? `, code ${code}` : ''}).` }
       }
     } catch (e) {
-      twilioCreds = { valid: false, detail: e instanceof Error ? e.message : 'request failed' }
+      logSafeServerError('comms.test.twilio_request', e)
+      twilioCreds = { valid: false, detail: 'Twilio credential check failed.' }
     }
   }
 
@@ -84,10 +87,12 @@ export async function GET() {
       } else if (j?.name === 'restricted_api_key') {
         resendCreds = { valid: true, detail: 'Key valid (sending-only key — cannot list domains, which is fine).' }
       } else {
-        resendCreds = { valid: false, detail: `Resend rejected the key — ${res.status}${j?.message ? `: ${j.message}` : ''}` }
+        logSafeServerError('comms.test.resend_credentials', { code: j?.name }, { status: res.status })
+        resendCreds = { valid: false, detail: `Resend rejected the key (HTTP ${res.status}).` }
       }
     } catch (e) {
-      resendCreds = { valid: false, detail: e instanceof Error ? e.message : 'request failed' }
+      logSafeServerError('comms.test.resend_request', e)
+      resendCreds = { valid: false, detail: 'Resend credential check failed.' }
     }
   }
 
@@ -109,7 +114,7 @@ export async function GET() {
   const recentSends = logErr
     // Say it plainly rather than reporting an empty log — "nothing sent" and "we
     // couldn't look" are the two answers this endpoint exists to tell apart.
-    ? { windowHours: WINDOW_HOURS, error: logErr.message }
+    ? { windowHours: WINDOW_HOURS, error: 'Could not load recent delivery activity.' }
     : {
         windowHours: WINDOW_HOURS,
         total: rows.length,
@@ -118,6 +123,7 @@ export async function GET() {
         lastSendAt: rows[0]?.created_at ?? null,
         truncated: rows.length >= MAX_LOG_ROWS,
       }
+  if (logErr) logSafeServerError('comms.test.recent_sends', logErr)
 
   const appOrigin = appOriginReport()
   return NextResponse.json({
@@ -174,5 +180,15 @@ export async function POST(req: NextRequest) {
     ? await sendSms(to, `✅ EdgeHQ test SMS (${stamp}). Your Twilio setup is working.`)
     : await sendEmail(to, 'EdgeHQ test email ✅', '<p>✅ Your Resend setup is working.</p>', '✅ Your Resend setup is working.')
 
+  if (!result.sent && result.error) {
+    logSafeServerError(`comms.test.${channel}_send`, result.error, { retryable: result.retryable ?? false })
+    return NextResponse.json({
+      channel,
+      sent: false,
+      reason: result.reason,
+      retryable: result.retryable,
+      error: 'Test message could not be sent.',
+    })
+  }
   return NextResponse.json({ channel, ...result })
 }

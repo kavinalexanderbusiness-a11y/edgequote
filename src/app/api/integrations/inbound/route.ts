@@ -2,6 +2,7 @@
 // server-side). Toggle/rename/delete are client-side RLS.
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { logSafeServerError } from '@/lib/serverError'
 import { generateInboundToken } from '@/lib/integrations/keys'
 
 export const dynamic = 'force-dynamic'
@@ -18,6 +19,9 @@ export async function POST(req: NextRequest) {
   const { data, error } = await supabase.from('inbound_webhooks').insert({
     user_id: user.id, name, action, token: generateInboundToken(),
   }).select('*').single()
-  if (error || !data) return NextResponse.json({ error: error?.message ?? 'insert failed' }, { status: 500 })
+  if (error || !data) {
+    logSafeServerError('integrations.inbound.insert', error)
+    return NextResponse.json({ error: 'Could not create the inbound webhook.' }, { status: 500 })
+  }
   return NextResponse.json(data, { status: 201 })
 }

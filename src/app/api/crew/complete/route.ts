@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { logSafeServerError } from '@/lib/serverError'
 import { authorizeWorkerVisit, WORKER_DENIAL_MESSAGE, WORKER_DENIAL_STATUS } from '@/lib/workerAccess'
 import { createDraftInvoiceForCompletedJob, uncompleteJob } from '@/lib/invoicing'
 import { attemptAutoPayCharge } from '@/lib/payments/autopay'
@@ -144,7 +145,10 @@ export async function POST(req: NextRequest) {
     // 1 — status, through the SAME door as always (caller's session: the RPC
     // re-checks assignment and the optimistic version itself).
     const { data: rpcData, error: rpcErr } = await supabase.rpc('crew_set_visit_status', rpcParams(body?.next, 'completed'))
-    if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 502 })
+    if (rpcErr) {
+      logSafeServerError('crew.complete.status_rpc', rpcErr)
+      return NextResponse.json({ error: 'Could not update this visit.' }, { status: 502 })
+    }
     const rpc = rpcData as { ok?: boolean; updated_at?: string } | null
     if (!rpc?.ok) return NextResponse.json({ ok: false, stale: true }, { status: 409 })
 

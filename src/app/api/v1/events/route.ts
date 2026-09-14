@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { authenticateRequest, listParams, listEnvelope, apiError } from '@/lib/integrations/apiAuth'
 import { deliveryBody } from '@/lib/integrations/events'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,7 +21,10 @@ export async function GET(req: NextRequest) {
   const event = req.nextUrl.searchParams.get('event')
   if (event) q = q.eq('event', event)
   const { data, error } = await q
-  if (error) return apiError(500, error.message)
+  if (error) {
+    logSafeServerError('api.v1.events.list', error)
+    return apiError(500, 'Could not load events.')
+  }
   const rows = (data ?? []).map((r) => deliveryBody({
     id: r.id, event: r.event, createdAt: r.created_at, data: (r.payload ?? {}) as Record<string, unknown>,
   }))

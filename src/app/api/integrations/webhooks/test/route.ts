@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { logSafeServerError } from '@/lib/serverError'
 import { processDueDeliveries } from '@/lib/integrations/deliver'
 import { TEST_EVENT, TEST_SAMPLE } from '@/lib/integrations/events'
 
@@ -28,7 +29,10 @@ export async function POST(req: NextRequest) {
     user_id: user.id, endpoint_id: endpoint.id, event: TEST_EVENT,
     payload: { ...TEST_SAMPLE, endpoint_url: endpoint.url, requested_at: new Date().toISOString() },
   }).select('id').single()
-  if (error || !delivery) return NextResponse.json({ error: error?.message ?? 'could not queue test' }, { status: 500 })
+  if (error || !delivery) {
+    logSafeServerError('integrations.webhooks_test.queue', error)
+    return NextResponse.json({ error: 'Could not queue the webhook test.' }, { status: 500 })
+  }
 
   const admin = createAdminClient()
   if (!admin) {

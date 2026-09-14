@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { authenticateRequest, apiError } from '@/lib/integrations/apiAuth'
 import { validateEventSelection } from '@/lib/integrations/events'
 import { generateWebhookSecret } from '@/lib/integrations/keys'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,7 +18,10 @@ export async function GET(req: NextRequest) {
   const { data, error } = await auth.sb.from('webhook_endpoints')
     .select('id, url, description, events, source, active, created_at')
     .eq('user_id', auth.userId).order('created_at', { ascending: false })
-  if (error) return apiError(500, error.message)
+  if (error) {
+    logSafeServerError('api.v1.hooks.list', error)
+    return apiError(500, 'Could not load webhook subscriptions.')
+  }
   return NextResponse.json({ data: data ?? [] })
 }
 
@@ -47,6 +51,9 @@ export async function POST(req: NextRequest) {
     description: typeof body.description === 'string' ? body.description.slice(0, 200) : null,
     secret, source: 'api',
   }).select('id, url, events, source, active, created_at').single()
-  if (error || !data) return apiError(500, error?.message ?? 'Failed to create subscription.')
+  if (error || !data) {
+    logSafeServerError('api.v1.hooks.insert', error)
+    return apiError(500, 'Could not create the webhook subscription.')
+  }
   return NextResponse.json({ data: { ...data, secret } }, { status: 201 })
 }

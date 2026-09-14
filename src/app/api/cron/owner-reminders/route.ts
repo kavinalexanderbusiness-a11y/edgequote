@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { logSafeServerError } from '@/lib/serverError'
 import { addDaysISO, safeTimeZone, tenantMoment } from '@/lib/tenantTime'
 import {
   buildOwnerReminder, dueOwnerReminderSlots,
@@ -119,7 +120,10 @@ async function handler(req: NextRequest) {
   // Target only users who have explicitly enabled Web Push on at least one device.
   const { data: subs, error: subsError } = await sb.from('push_subscriptions')
     .select('user_id').order('user_id').limit(MAX_SUBSCRIPTIONS + 1)
-  if (subsError) return NextResponse.json({ ok: false, error: `subscriptions: ${subsError.message}` }, { status: 500 })
+  if (subsError) {
+    logSafeServerError('cron.owner_reminders.subscriptions_query', subsError)
+    return NextResponse.json({ ok: false, error: 'Could not load notification subscriptions.' }, { status: 500 })
+  }
   if ((subs?.length ?? 0) > MAX_SUBSCRIPTIONS) {
     return NextResponse.json({ ok: false, error: `more than ${MAX_SUBSCRIPTIONS} push subscriptions; refusing a partial sweep` }, { status: 503 })
   }
@@ -129,7 +133,10 @@ async function handler(req: NextRequest) {
   const { data: settingsData, error: settingsError } = await sb.from('business_settings')
     .select('user_id, timezone, work_start_time, daily_capacity_hours, gst_percent, notif_prefs')
     .in('user_id', userIds).order('user_id').limit(MAX_SUBSCRIPTIONS + 1)
-  if (settingsError) return NextResponse.json({ ok: false, error: `settings: ${settingsError.message}` }, { status: 500 })
+  if (settingsError) {
+    logSafeServerError('cron.owner_reminders.settings_query', settingsError)
+    return NextResponse.json({ ok: false, error: 'Could not load reminder settings.' }, { status: 500 })
+  }
 
   let due = 0, created = 0, duplicate = 0, errors = 0
   for (const row of (settingsData as SettingsRow[] | null) ?? []) {

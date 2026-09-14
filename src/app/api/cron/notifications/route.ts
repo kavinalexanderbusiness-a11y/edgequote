@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { logSafeServerError } from '@/lib/serverError'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { addDays, format } from 'date-fns'
 // MERGE (main ← guardian-2): both. guardian-2's loadOwnerContext replaces main's
@@ -206,8 +207,8 @@ async function handler(req: NextRequest) {
   if (remErr) {
     // A failed read is NOT a quiet night — say so, or an outage is indistinguishable
     // from having nothing to send.
-    console.error('[cron/notifications] reminder job query failed:', remErr.message)
-    return NextResponse.json({ ok: false, error: remErr.message, note: 'Could not read tomorrow\'s jobs — nothing was sent this run.' }, { status: 500 })
+    logSafeServerError('cron.notifications.reminder_query', remErr)
+    return NextResponse.json({ ok: false, error: 'Reminder query failed.', note: 'Could not read tomorrow\'s jobs — nothing was sent this run.' }, { status: 500 })
   }
   const remRows = (reminders as unknown as CronJob[]) || []
   const remTruncated = remRows.length > MAX_PER_RUN
@@ -218,8 +219,8 @@ async function handler(req: NextRequest) {
     .order('id', { ascending: true })
     .limit(MAX_PER_RUN + 1)
   if (revErr) {
-    console.error('[cron/notifications] review job query failed:', revErr.message)
-    return NextResponse.json({ ok: false, error: revErr.message, note: 'Could not read yesterday\'s jobs — reminders ran, review requests did not.', sent, skipped, errors }, { status: 500 })
+    logSafeServerError('cron.notifications.review_query', revErr)
+    return NextResponse.json({ ok: false, error: 'Review-request query failed.', note: 'Could not read yesterday\'s jobs — reminders ran, review requests did not.', sent, skipped, errors }, { status: 500 })
   }
   const revRows = (reviews as unknown as CronJob[]) || []
   const revTruncated = revRows.length > MAX_PER_RUN

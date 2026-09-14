@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
+import { logSafeServerError } from '@/lib/serverError'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { renderMessage, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
@@ -96,10 +97,10 @@ async function handler(req: NextRequest) {
     .order('due_date', { ascending: true })
     .limit(MAX_PER_RUN + 1)
   if (error) {
-    console.error('[cron/invoice-reminders] invoice query failed:', error.message)
+    logSafeServerError('cron.invoice_reminders.invoice_query', error)
     // Most likely the reminder columns aren't there yet — say so plainly instead
     // of failing as an opaque 500.
-    return NextResponse.json({ ok: false, error: error.message, note: 'The invoice-reminder columns are missing — rebuild from supabase/migrations (see docs/MIGRATIONS.md).' }, { status: 500 })
+    return NextResponse.json({ ok: false, error: 'Invoice reminder query failed.' }, { status: 500 })
   }
   const fetched = (rows as unknown as ReminderRow[]) || []
   const truncated = fetched.length > MAX_PER_RUN

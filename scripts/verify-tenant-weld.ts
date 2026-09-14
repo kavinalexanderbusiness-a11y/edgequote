@@ -86,6 +86,15 @@ ok('no SELECT policy over booking-uploads exists on the apply path',
 ok('booking-uploads is bounded by size and MIME on the apply path',
   /'booking-uploads'[\s\S]{0,120}?\b\d{6,}\b[\s\S]{0,200}?array\['image\//i.test(code)
   || /update storage\.buckets[\s\S]{0,400}file_size_limit\s*=\s*\d+[\s\S]{0,400}allowed_mime_types/i.test(code))
+const bookingPolicyCode = code.toLowerCase()
+const anonPolicyCreateAt = bookingPolicyCode.lastIndexOf('create policy "booking_uploads_public_insert"')
+const anonPolicyDropAt = bookingPolicyCode.lastIndexOf('drop policy if exists "booking_uploads_public_insert"')
+ok('anonymous clients cannot write directly to booking-uploads',
+  anonPolicyCreateAt < 0 || anonPolicyDropAt > anonPolicyCreateAt)
+const bookingUploadRoute = readFileSync(join(ROOT, 'src', 'app', 'api', 'public', 'booking', 'photos', 'route.ts'), 'utf8')
+ok('the public booking funnel uploads through the server-side admin route',
+  /createAdminClient\(\)/.test(bookingUploadRoute)
+  && /\.storage\.from\('booking-uploads'\)[\s\S]{0,180}?\.upload\(/.test(bookingUploadRoute))
 ok('the paid-total recompute is tenant-filtered on the apply path',
   /p\.user_id = v_inv\.user_id/.test(code))
 
@@ -226,13 +235,21 @@ ok('B3: booking uploads are MIME-restricted to images',
   Array.isArray(bucket.rows[0]?.allowed_mime_types) && bucket.rows[0].allowed_mime_types.length > 0
     && bucket.rows[0].allowed_mime_types.every((m: string) => m.startsWith('image/')),
   `allowed_mime_types = ${JSON.stringify(bucket.rows[0]?.allowed_mime_types)}`)
-// The public /book funnel depends on the anon INSERT. Removing it would be a
-// different outage, so the guard pins that it SURVIVED.
-const ins = await db.query(`
+// Public uploads now pass through the server route, which resolves the booking
+// token, applies a rate limit, validates the file, and uploads with the admin
+// client. The bucket itself must therefore reject direct anonymous INSERTs while
+// preserving the owner-scoped authenticated upload path.
+const anonIns = await db.query(`
   select count(*)::int as n from pg_policies
    where schemaname = 'storage' and tablename = 'objects'
-     and policyname = 'booking_uploads_public_insert'`)
-ok('B3: the public booking upload path is preserved (anon INSERT still exists)', ins.rows[0].n === 1)
+     and cmd = 'INSERT' and 'anon' = any(roles)`)
+ok('B3: direct anonymous booking uploads are disabled', anonIns.rows[0].n === 0)
+const ownerIns = await db.query(`
+  select count(*)::int as n from pg_policies
+   where schemaname = 'storage' and tablename = 'objects'
+     and policyname = 'booking_uploads_authenticated_insert'
+     and cmd = 'INSERT' and 'authenticated' = any(roles)`)
+ok('B3: the owner-scoped authenticated upload path is preserved', ownerIns.rows[0].n === 1)
 
 // -- B4 / B5: the inventory + equipment welds, proved by attack ---------------
 // Seeded here rather than at the top because nothing above needs them, and a

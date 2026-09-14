@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { sendEmail, commsEnabled } from '@/lib/comms/send'
 import { sanitizeSourceInput } from '@/lib/attribution'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { logSafeServerError } from '@/lib/serverError'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -176,7 +178,10 @@ export async function submitLead(opts: {
   let payload = opts.payload
   let photoReport: { received: number; stored: number; failed: number } | null = null
   if (inline.length > 0 || alreadyUrls.length > 0 || rejected > 0) {
-    const up = inline.length > 0 ? await uploadLeadPhotos(anon, token, inline) : { urls: [], failed: [] }
+    const uploader = createAdminClient()
+    const up = inline.length > 0 && uploader
+      ? await uploadLeadPhotos(uploader, token, inline)
+      : { urls: [], failed: inline }
     payload = applyPhotoResults(opts.payload, {
       urls: [...alreadyUrls, ...up.urls], failed: up.failed, rejected,
     })
@@ -218,7 +223,7 @@ export async function submitLead(opts: {
   })
 
   if (error) {
-    console.error('[intake] rpc error:', error.message)
+    logSafeServerError('intake.submit_website_lead', error)
     return { ok: false, status: 502, body: { error: 'Could not submit your request. Please try again.' } }
   }
   if (!data) return { ok: false, status: 404, body: { error: 'This form is not currently accepting submissions.' } }
@@ -250,7 +255,7 @@ export async function submitLead(opts: {
 // can never abort the batch or throw out of intake — it is reported as failed so the
 // caller preserves its bytes and says so.
 async function uploadLeadPhotos(
-  anon: SupabaseClient, token: string, photos: InlinePhoto[],
+  uploader: SupabaseClient, token: string, photos: InlinePhoto[],
 ): Promise<{ urls: string[]; failed: InlinePhoto[] }> {
   const urls: string[] = []
   const failed: InlinePhoto[] = []
@@ -260,11 +265,13 @@ async function uploadLeadPhotos(
       if (!decoded) { failed.push(p); continue }
       const safe = p.filename.replace(/[^a-zA-Z0-9.\-_]/g, '_').slice(-60) || 'photo'
       const base = safe.replace(/\.[a-z0-9]{2,5}$/i, '')
-      const path = `${token}/${crypto.randomUUID()}-${base}.${decoded.ext}`
-      const { error } = await anon.storage.from('booking-uploads')
+      // Never place the booking token in a public object URL. It is a credential
+      // for other public flows and must remain server-side.
+      const path = `website/${crypto.randomUUID()}-${base}.${decoded.ext}`
+      const { error } = await uploader.storage.from('booking-uploads')
         .upload(path, decoded.bytes, { contentType: decoded.contentType, upsert: false })
       if (error) { failed.push(p); continue }
-      urls.push(anon.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
+      urls.push(uploader.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
     } catch { failed.push(p) }
   }
   return { urls, failed }

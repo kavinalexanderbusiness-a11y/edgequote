@@ -6,6 +6,7 @@ import { authenticateRequest, apiError } from '@/lib/integrations/apiAuth'
 import { listHandler } from '@/lib/integrations/v1'
 import { serializeEntity, SERIALIZED_FIELDS } from '@/lib/integrations/events'
 import { findOrCreateCustomer } from '@/lib/integrations/inboundActions'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,7 +30,10 @@ export async function POST(req: NextRequest) {
     city: str('city'), province: str('province'), postal_code: str('postal_code'),
     notes: str('notes'), source: str('source') ?? 'api',
   })
-  if ('error' in found) return apiError(500, found.error)
+  if ('error' in found) {
+    logSafeServerError('api.v1.customers.find_or_create', null)
+    return apiError(500, 'Could not create the customer.')
+  }
 
   const { data } = await auth.sb.from('customers')
     .select(SERIALIZED_FIELDS.customer.join(', '))

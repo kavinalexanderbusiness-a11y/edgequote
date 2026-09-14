@@ -10,6 +10,7 @@ import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { processDueDeliveries, requeueStuckDeliveries, pruneIntegrationLogs } from '@/lib/integrations/deliver'
 import { STUCK_PROCESSING_MINUTES, RETENTION_DAYS } from '@/lib/integrations/retry'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,9 +37,8 @@ async function handler(req: NextRequest) {
     console.log('[cron/integrations] run:', JSON.stringify({ requeued, ...summary, ms: Date.now() - started }))
     return NextResponse.json({ ok: true, requeued, ...summary })
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.error('[cron/integrations] failed:', message)
-    return NextResponse.json({ ok: false, error: message }, { status: 500 })
+    logSafeServerError('cron.integrations.run', e)
+    return NextResponse.json({ ok: false, error: 'Integration delivery failed.' }, { status: 500 })
   }
 }
 

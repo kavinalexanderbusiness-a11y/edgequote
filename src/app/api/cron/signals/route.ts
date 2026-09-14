@@ -4,6 +4,7 @@ import { withCronSweep, counts } from '@/lib/cron/heartbeat'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { cadenceDays, churnRisk, daysBetween, isSeasonallyDormant, ranOut } from '@/lib/signals'
 import { localTodayISO } from '@/lib/utils'
+import { logSafeServerError } from '@/lib/serverError'
 
 export const dynamic = 'force-dynamic'
 // The only cron with an O(owners) sequential loop — each owner costs two paginated
@@ -165,8 +166,8 @@ async function handler(req: NextRequest) {
 
   const oRes = await fetchAllOwners(supabase)
   if (oRes.error) {
-    console.error('[cron/signals] owner list query failed:', oRes.error)
-    return finish({ ok: false, owners: 0, ownersFailed: 0, detected: 0, written: 0, error: oRes.error, status: 500 })
+    logSafeServerError('cron.signals.owner_list', oRes.error)
+    return finish({ ok: false, owners: 0, ownersFailed: 0, detected: 0, written: 0, error: 'Could not load businesses.', status: 500 })
   }
   const owners = oRes.rows
   if (!owners.length) return finish({ ok: true, owners: 0, ownersFailed: 0, detected: 0, written: 0 })
@@ -272,7 +273,7 @@ async function handler(req: NextRequest) {
       // error discarded the whole night's detection for EVERY owner, including the ones
       // already swept clean. Record them, skip them, sweep the rest.
       ownersFailed++
-      console.error(`[cron/signals] owner ${uid} was skipped:`, e instanceof Error ? e.message : e)
+      logSafeServerError('cron.signals.owner_skipped', e)
     }
   }
 
@@ -298,10 +299,10 @@ async function handler(req: NextRequest) {
     // nothing at all. Fail loudly. The note is for an operator, and the scheduler
     // throws the body away, so it has to go to the log to be reachable at all.
     if (error) {
-      console.error('[cron/signals] writing automation_signals failed:', error.message, '— run RUN-2026-07-14-automation-signals.sql if the table is missing.')
+      logSafeServerError('cron.signals.write', error, { written })
       return finish({
         ok: false, owners: owners.length, ownersFailed, detected: rows.length, written,
-        error: error.message, note: 'Run RUN-2026-07-14-automation-signals.sql', status: 500,
+        error: 'Could not record automation signals.', status: 500,
       })
     }
     written += chunk.length

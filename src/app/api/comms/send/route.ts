@@ -12,6 +12,7 @@ import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 import { tenantCapabilities } from '@/lib/capabilities'
 import { appOrigin, cleanOrigin } from '@/lib/appOrigin'
+import { logSafeServerError } from '@/lib/serverError'
 
 // Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
 // scheduler composer, Weather Ops notifications, quote/invoice send). Uses the
@@ -182,10 +183,12 @@ export async function POST(req: NextRequest) {
 
   if (channels.includes('sms') && !blocked.get('sms')) {
     const r = await sendSms(c.phone!, outText); results.sms = r
+    if (r.error) logSafeServerError('comms.send.sms', r.error, { retryable: r.retryable ?? false })
     attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'twilio' : null, providerId: r.id ?? null })
   }
   if (channels.includes('email') && !blocked.get('email')) {
     const r = await sendEmail(c.email!, rendered.subject, outHtml, outText); results.email = r
+    if (r.error) logSafeServerError('comms.send.email', r.error, { retryable: r.retryable ?? false })
     attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'resend' : null, providerId: r.id ?? null })
   }
   if (channels.includes('push')) {
@@ -222,6 +225,10 @@ export async function POST(req: NextRequest) {
   }
   await finalizeSend(supabase, user.id, clientMessageId, sentChannels.length ? 'sent' : 'skipped')
 
-  return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
+  const clientResults = Object.fromEntries(Object.entries(results).map(([channel, value]) => {
+    if (!value || typeof value !== 'object' || !('error' in value)) return [channel, value]
+    const { error: _providerError, ...safe } = value as Record<string, unknown>
+    return [channel, { ...safe, error: 'Message could not be sent.' }]
+  }))
+  return NextResponse.json({ enabled, results: clientResults, preview: outText, threaded: !!messageId })
 }
-
