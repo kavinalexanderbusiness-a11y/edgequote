@@ -21,7 +21,8 @@ import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from
 import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact'
 import { sumQuoteAmounts } from '@/lib/pricingState'
 import { settingsToSeasons } from '@/lib/seasons'
-import { loadTenantToday } from '@/lib/tenantTimeServer'
+import { loadTenantTimeZone } from '@/lib/tenantTimeServer'
+import { dashboardClock } from '@/lib/dashboard/clock'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
 import { computeDayPlan, type DayPlan, type PlanJob } from '@/lib/dashboard/dayPlan'
 import { pageAll } from '@/lib/supabase/pageAll'
@@ -135,7 +136,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   //
   // One serial read ahead of the batch — `today` is an input to almost every
   // query below, so it cannot come from a row fetched alongside them.
-  const today = await loadTenantToday(sb, userId)
+  const { timeZone } = await loadTenantTimeZone(sb, userId)
+  const now = new Date()
+  const clock = dashboardClock(timeZone, now)
+  const today = clock.today
 
   // Rolling 7 days INCLUDING today, not a calendar week: on a Monday a calendar
   // week would read $0 and look broken.
@@ -358,7 +362,6 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   })
 
   // ── The month view + pipeline ──
-  const now = new Date()
   const allJobsForKpi = jobs as unknown as { status: string; scheduled_date: string }[]
   const accepted = quotes.filter(q => q.status === 'accepted').length
   const decided = quotes.filter(q => q.status !== 'draft').length
@@ -380,7 +383,6 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     j.status === 'completed' && j.scheduled_date >= monthStartISO && j.scheduled_date <= today).length
   const jobsDoneLastMonth = allJobsForKpi.filter(j =>
     j.status === 'completed' && j.scheduled_date >= lastMonthStartISO && j.scheduled_date <= lastMonthSameDayISO).length
-  const hour = now.getHours()
 
   return {
     money: {
@@ -402,8 +404,8 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
       conversionRate: decided > 0 ? Math.round((accepted / decided) * 100) : null,
     },
     weather,
-    greeting: hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening',
-    dateLine: now.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' }),
+    greeting: clock.greeting,
+    dateLine: clock.dateLine,
     // Four full-history reads already in hand. Any ONE row of real work — even a
     // customer added and nothing else — means this business has begun, so the
     // first-run framing stands down permanently and can never re-appear later.

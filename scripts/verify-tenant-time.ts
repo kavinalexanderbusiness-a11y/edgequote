@@ -281,7 +281,7 @@ check('SCHEDULE — reads the shared clock, not the device',
   /useTenantTime\(\)/.test(schedule) && !/localTodayISO\(\)/.test(schedule))
 const dashData = code('src/lib/dashboard/data.ts')
 check('DASHBOARD — reads the tenant zone server-side, not the server\'s UTC',
-  /loadTenantToday\(sb, userId\)/.test(dashData) && !/localTodayISO/.test(dashData))
+  /loadTenantTimeZone\(sb, userId\)/.test(dashData) && /dashboardClock\(timeZone, now\)/.test(dashData) && /const today = clock.today/.test(dashData) && !/localTodayISO/.test(dashData))
 check('DASHBOARD PAGE — same', /loadTenantToday\(/.test(read('src/app/dashboard/page.tsx')))
 // ⭐ And the zone must ride along to the weather engine, or the dashboard's
 // preloaded settings would silently send it back to the fallback.
