@@ -354,7 +354,7 @@ ok('cronSecretOk fails closed when CRON_SECRET is unset', /if \(!expected\) retu
     src(routePath('autopay')).includes('attemptAutoPayCharge')
     && src('src/lib/payments/autopay.ts').includes("eq('stripe_session_id', `autopay:${invoiceId}`)"))
   ok('autopay sends a STABLE Stripe idempotency key on the automatic path',
-    /if \(!opts\.manual\) return `autopay:\$\{opts\.invoiceId\}`/.test(src('src/lib/stripe/config.ts')),
+    /return `card-attempt:\$\{opts\.attemptId\}`/.test(src('src/lib/stripe/config.ts')),
     `a per-attempt key on the cron path would let a retry raise a second charge`)
   ok('invoice-reminders claims on the exact reminder_count it read',
     /\.eq\('id', inv\.id\)\.eq\('reminder_count', seen\)/.test(src(routePath('invoice-reminders'))))

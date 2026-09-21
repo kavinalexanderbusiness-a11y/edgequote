@@ -96,6 +96,7 @@ function fixture(path: Path, failure: Failure) {
   return {
     rows, receipts, notifications,
     deliver: () => post({ text: async () => 'synthetic body', headers: { get: () => 'synthetic signature' }, nextUrl: { origin: 'https://example.invalid' } }),
+    setIntentId: (id: string) => { event.data.object.id = id },
     cashCount: () => [...rows.values()].filter(row => row.kind !== 'credit').length,
     creditCount: () => [...rows.values()].filter(row => row.kind === 'credit').length,
     dependentAttempts: () => dependentAttempts,
@@ -141,6 +142,14 @@ async function main() {
       assert.equal(cash.creditCount(), path === 'deposit' ? 1 : 0)
     })
   }
+  const two = fixture('autopay', 'none')
+  await two.deliver()
+  two.setIntentId('pi_second')
+  await two.deliver()
+  await two.deliver()
+  check('distinct successful intents for one invoice both recorded; replay still dedupes', () => {
+    assert.equal(two.cashCount(), 2); assert.equal(two.receipts.length, 2)
+  })
   // The repair must continue through the existing consent/capability-aware
   // sender; adding direct provider calls would escape the synthetic fixture.
   check('all three payment branches still call the existing receipt helper', () => {

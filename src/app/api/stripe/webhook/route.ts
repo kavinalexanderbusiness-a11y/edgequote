@@ -307,7 +307,7 @@ export async function POST(req: NextRequest) {
       const userId = pi.metadata.user_id
       const customerId = pi.metadata.customer_id ?? null
       if (invoiceId && userId) {
-        // Deterministic dedupe key 'autopay:<invoiceId>' — a re-delivered event is a
+        // Dedupe each PaymentIntent, including unexpected second charges. Replay is a
         // no-op and a one-time payment (cs_… session id) never collides with it.
         // .select() tells us whether THIS event inserted a NEW payment row. The
         // recompute_invoice_paid trigger now derives the invoice status from the ledger
@@ -316,7 +316,7 @@ export async function POST(req: NextRequest) {
         const payRes = await sb.from('payments').upsert({
           user_id: userId, customer_id: customerId, invoice_id: invoiceId,
           amount: (pi.amount ?? 0) / 100, currency: pi.currency ?? 'cad',
-          stripe_session_id: `autopay:${invoiceId}`, stripe_payment_intent: pi.id,
+          stripe_session_id: `autopay-pi:${pi.id}`, stripe_payment_intent: pi.id,
           status: 'paid', paid_at: now(),
         }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id')
         if (payRes.error) {

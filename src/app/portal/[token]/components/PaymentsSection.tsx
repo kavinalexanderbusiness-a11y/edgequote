@@ -318,6 +318,9 @@ function AutoPayCard({ token, card: cardProp, autopayEnabled, onChanged }: {
     if (!card && !autopay) { setErr('Add a card first to use AutoPay.'); return }
     if (busy) return
     const next = !autopay
+    if (next && !await confirmDialog({ title: 'Authorize recurring card payments?',
+      message: 'I authorize this business to charge my saved card for the outstanding balance of each recurring-service invoice after the completed visit, including applicable tax. This does not cover one-time jobs. I can stop future charges by turning AutoPay off before a charge starts. A charge already in progress may still complete.',
+      confirmLabel: 'I authorize AutoPay' })) return
     setAutopay(next); setErr(null); setBusy('autopay')   // optimistic
     // The ONE handler in this card that used to run its fetch bare. An HTTP error
     // was handled (the `d.ok` check rolls back) but a THROWN fetch — offline, a
@@ -328,7 +331,7 @@ function AutoPayCard({ token, card: cardProp, autopayEnabled, onChanged }: {
     // after the next recurring visit — while this very card promises "turn AutoPay
     // off … it takes effect right away". The rollback has to cover the throw too.
     try {
-      const res = await fetch('/api/portal/autopay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, enabled: next }) })
+      const res = await fetch('/api/portal/autopay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, enabled: next, termsVersion: next ? 'recurring-balance-v1' : undefined }) })
       const d = await res.json().catch(() => ({}))
       if (!d.ok) { setAutopay(!next); setErr('Could not update AutoPay — please check your connection and try again.'); return }
       onChanged()
@@ -355,7 +358,7 @@ function AutoPayCard({ token, card: cardProp, autopayEnabled, onChanged }: {
         <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> We charge only the invoice from each recurring visit — after that visit is done, for that visit&rsquo;s amount.</li>
         <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> One-off jobs and extra work are never charged automatically — we&rsquo;ll always ask you first.</li>
         <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> Every charge gets a receipt, and shows up in your payment history here.</li>
-        <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> Turn AutoPay off or remove your card any time — it takes effect right away.</li>
+        <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> Turn AutoPay off or remove your card to stop future charges. A charge already in progress may still complete.</li>
       </ul>
       {card ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">

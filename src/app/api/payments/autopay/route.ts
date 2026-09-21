@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}))
   const invoiceId = String(body.invoiceId || '')
-  const manual = body.manual === true   // owner-initiated → bypass autopay-enabled + anomaly hold
+  const manual = body.manual === true   // owner-initiated → may bypass anomaly hold only; customer authorization remains required
   if (!invoiceId) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!, svc = process.env.SUPABASE_SERVICE_ROLE_KEY

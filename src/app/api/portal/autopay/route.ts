@@ -28,8 +28,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
-  const { data, error } = await anon.rpc('portal_set_autopay', { p_token: token, p_enabled: enabled })
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !svc) return NextResponse.json({ error: 'Could not update AutoPay.' }, { status: 502 })
+  const admin = createClient(url, svc)
+  const { data, error } = await admin.rpc('record_card_charge_consent', { p_token: token, p_enabled: enabled, p_terms: body.termsVersion || '' })
   if (error) return NextResponse.json({ error: 'Could not update AutoPay.' }, { status: 502 })
   // false when enabling without a saved card on file.
   return NextResponse.json({ ok: data === true, enabled: data === true ? enabled : false })

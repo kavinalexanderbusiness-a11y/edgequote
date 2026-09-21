@@ -283,36 +283,9 @@ export interface OffSessionResult {
   declineCode?: string     // server-side detail (logged/returned to owner UI only)
 }
 
-// ── The off-session Idempotency-Key ──────────────────────────────────────────
-// Stripe caches the response for a key for ~24h and replays it — INCLUDING failures.
-// A single stable key per invoice therefore made a legitimate retry impossible: after
-// a decline, the owner's "Charge card" replayed the cached 402 (same card), or got a
-// 400 idempotency_error (new card — the params no longer match the first request).
-// The customer fixes their card, the owner retries, and it still says declined. For a
-// whole day.
-//
-// So the key now distinguishes the two callers, because they mean different things:
-//
-//   automatic  — the cron sweep and the on-completion fire-and-forget are the SAME
-//                attempt arriving twice. Collapsing them is the entire point, and a
-//                stable per-invoice key is exactly right. UNCHANGED.
-//
-//   manual     — the owner explicitly asking for a NEW attempt, normally because the
-//                last one failed and something has since changed. Keyed per card (so
-//                replacing the card retries instantly rather than 400ing) and per
-//                minute (so a double-click, or a second tab, still collapses into one
-//                charge).
-//
-// Residual, stated plainly: two manual clicks that straddle a minute boundary AND land
-// before the webhook records the first could both charge. That is a far smaller risk
-// than a retry path that was guaranteed broken, and the pre-charge DB dedupe in
-// attemptAutoPayCharge closes it as soon as the webhook lands.
-function offSessionIdempotencyKey(
-  opts: { invoiceId: string; paymentMethodId: string; manual?: boolean },
-): string {
-  if (!opts.manual) return `autopay:${opts.invoiceId}`
-  const minute = Math.floor(Date.now() / 60_000)
-  return `autopay:${opts.invoiceId}:${opts.paymentMethodId}:m${minute}`
+// Claimed invoices cannot obtain another attempt after Stripe cache expiry.
+function offSessionIdempotencyKey(opts: { attemptId: string }): string {
+  return `card-attempt:${opts.attemptId}`
 }
 
 // Charge a SAVED card off-session for a recurring invoice. confirm=true + off_session
@@ -323,8 +296,8 @@ export async function chargeSavedCardOffSession(
   opts: {
     stripeCustomerId: string; paymentMethodId: string; amountCents: number
     invoiceId: string; userId: string; customerId: string; currency?: string
-    /** Owner-initiated "Charge card" — see offSessionIdempotencyKey. */
-    manual?: boolean
+    /** Durable database claim; shared across owner and automatic entry points. */
+    attemptId: string
   },
 ): Promise<OffSessionResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
@@ -337,6 +310,7 @@ export async function chargeSavedCardOffSession(
   form.set('off_session', 'true')
   form.set('confirm', 'true')
   form.set('metadata[source]', 'autopay')
+  form.set('metadata[attempt_id]', opts.attemptId)
   form.set('metadata[invoice_id]', opts.invoiceId)
   form.set('metadata[user_id]', opts.userId)
   form.set('metadata[customer_id]', opts.customerId)

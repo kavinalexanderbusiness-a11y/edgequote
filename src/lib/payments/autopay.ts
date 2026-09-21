@@ -13,14 +13,10 @@ import { tenantCapabilities } from '@/lib/capabilities'
 // It ONLY initiates the charge; the existing Stripe webhook records the payment +
 // flips the invoice to paid (one writer of paid-state).
 //
-// Safe to call repeatedly. Two independent guards, and it's worth knowing which does
-// what:
-//   • the pre-charge DB dedupe below ('autopay:<invoiceId>' in payments) stops any
-//     retry once a charge has actually been RECORDED — the durable guarantee;
-//   • the Stripe Idempotency-Key collapses entry points racing before the webhook has
-//     landed (see offSessionIdempotencyKey — stable per invoice for the automatic
-//     path; per-attempt for a manual charge, because a stable key made retrying after
-//     a decline impossible for 24h).
+// The database claim is the durable single-attempt latch across ALL callers.
+// It is never released on timeout, decline or success; reconciliation is required
+// before any retry feature can be added. Stripe receives that claim's stable key.
+// The webhook records every distinct successful PaymentIntent, not just invoices.
 //
 // Result codes: 'charged' (PaymentIntent submitted), 'held' (anomaly — needs owner),
 // 'skipped' (+reason: ineligible/no-op), 'declined' (charge failed → owner notified,
@@ -77,9 +73,10 @@ export async function attemptAutoPayCharge(
   // Invoice — scoped to the owner. Must be unpaid + have a payable amount.
   // amount_paid/discount are selected because the charge is the BALANCE, not the
   // total — a partly-paid invoice must never be charged twice for the paid part.
-  const { data: invRow } = await sb.from('invoices')
+  const { data: invRow, error: invRowError } = await sb.from('invoices')
     .select('id, amount, amount_paid, discount_type, discount_value, status, job_id, customer_id, invoice_number, service_type, internal_notes')
     .eq('id', invoiceId).eq('user_id', userId).maybeSingle()
+  if (invRowError) return { result: 'held', reason: 'database-read-failed' }
   const invoice = invRow as InvoiceRow | null
   if (!invoice) return { result: 'skipped', reason: 'no-invoice' }
   if (invoice.status === 'paid') return { result: 'skipped', reason: 'already-paid' }
@@ -99,38 +96,46 @@ export async function attemptAutoPayCharge(
 
   // AutoPay charges ONLY recurring invoices (job_id → a job with a recurrence).
   if (!invoice.job_id) return { result: 'skipped', reason: 'not-recurring' }
-  const { data: jobRow } = await sb.from('jobs').select('recurrence_id').eq('id', invoice.job_id).maybeSingle()
+  const { data: jobRow, error: jobRowError } = await sb.from('jobs').select('recurrence_id').eq('id', invoice.job_id).maybeSingle()
+  if (jobRowError) return { result: 'held', reason: 'database-read-failed' }
   if (!(jobRow as { recurrence_id: string | null } | null)?.recurrence_id) {
     return { result: 'skipped', reason: 'not-recurring' }
   }
 
   // Customer AutoPay state + saved card.
-  const { data: custRow } = await sb.from('customers')
+  const { data: custRow, error: custRowError } = await sb.from('customers')
     .select('id, autopay_enabled, autopay_charge_mode, stripe_customer_id')
     .eq('id', invoice.customer_id).eq('user_id', userId).maybeSingle()
+  if (custRowError) return { result: 'held', reason: 'database-read-failed' }
   const customer = custRow as { id: string; autopay_enabled: boolean | null; autopay_charge_mode: string | null; stripe_customer_id: string | null } | null
   if (!customer) return { result: 'skipped', reason: 'no-customer' }
 
-  const { data: pmRow } = await sb.from('payment_methods')
+  const { data: pmRow, error: pmRowError } = await sb.from('payment_methods')
     .select('stripe_payment_method_id, stripe_customer_id').eq('customer_id', customer.id)
     .order('is_default', { ascending: false }).order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (pmRowError) return { result: 'held', reason: 'database-read-failed' }
   const pm = pmRow as { stripe_payment_method_id: string; stripe_customer_id: string | null } | null
   if (!pm) return { result: 'skipped', reason: 'no-card' }
   const stripeCustomerId = customer.stripe_customer_id || pm.stripe_customer_id
   if (!stripeCustomerId) return { result: 'skipped', reason: 'no-stripe-customer' }
 
+  if (!customer.autopay_enabled) return { result: 'skipped', reason: 'autopay-off' }
+
   // Automatic path: require AutoPay enabled + honour the effective charge mode.
   if (!manual) {
     if (!customer.autopay_enabled) return { result: 'skipped', reason: 'autopay-off' }
-    const { data: bizRow } = await sb.from('business_settings')
+    const { data: bizRow, error: bizRowError } = await sb.from('business_settings')
       .select('autopay_charge_mode, autopay_variance_pct').eq('user_id', userId).maybeSingle()
+    if (bizRowError) return { result: 'held', reason: 'database-read-failed' }
     const biz = bizRow as { autopay_charge_mode: string | null; autopay_variance_pct: number | null } | null
     const mode = customer.autopay_charge_mode || biz?.autopay_charge_mode || 'auto'
     if (mode === 'manual_review') return { result: 'skipped', reason: 'manual-review-mode' }
 
     // ── Anomaly safety check ──
     const variancePct = Number.isFinite(Number(biz?.autopay_variance_pct)) ? Number(biz!.autopay_variance_pct) : 40
-    const baseline = await usualRecurringAmount(sb, userId, customer.id, invoiceId)
+    let baseline: number | null
+    try { baseline = await usualRecurringAmount(sb, userId, customer.id, invoiceId) }
+    catch { return { result: 'held', reason: 'database-read-failed' } }
     if (baseline != null && baseline > 0) {
       const deviation = Math.abs(Number(invoice.amount) - baseline) / baseline
       if (deviation > variancePct / 100) {
@@ -141,7 +146,8 @@ export async function attemptAutoPayCharge(
   }
 
   // Already charged? (pre-charge dedupe — the deterministic key is one-per-invoice)
-  const { data: dup } = await sb.from('payments').select('id').eq('stripe_session_id', `autopay:${invoiceId}`).limit(1)
+  const { data: dup, error: dupError } = await sb.from('payments').select('id').eq('stripe_session_id', `autopay:${invoiceId}`).limit(1)
+  if (dupError) return { result: 'held', reason: 'database-read-failed' }
   if (dup && dup.length) return { result: 'skipped', reason: 'already-charged' }
 
   // The GST-inclusive BALANCE — the exact amount the manual Pay flow charges, via
@@ -152,7 +158,8 @@ export async function attemptAutoPayCharge(
   // already sent $30 of $65) was chargeable for the full $65. The one-charge-per-
   // invoice dedupe hid it for the cron path, but `manual: true` retries re-enter
   // here. Charging the balance is what every other charge path already does.
-  const { data: bizGst } = await sb.from('business_settings').select('gst_percent').eq('user_id', userId).maybeSingle()
+  const { data: bizGst, error: bizGstError } = await sb.from('business_settings').select('gst_percent').eq('user_id', userId).maybeSingle()
+  if (bizGstError) return { result: 'held', reason: 'database-read-failed' }
   const { balance } = invoiceBalance(
     {
       amount: invoice.amount,
@@ -165,13 +172,30 @@ export async function attemptAutoPayCharge(
   const cents = Math.round(balance * 100)
   if (!(cents > 0)) return { result: 'skipped', reason: 'no-amount' }
 
-  const charge = await chargeSavedCardOffSession({
+  const { data: attemptId, error: claimError } = await sb.rpc('claim_card_charge', {
+    p_invoice: invoiceId, p_user: userId, p_customer: customer.id,
+    p_method: pm.stripe_payment_method_id, p_stripe_customer: stripeCustomerId, p_cents: cents,
+  })
+  if (claimError || typeof attemptId !== 'string') {
+    return { result: 'held', reason: 'charge-authorization-or-reconciliation-required' }
+  }
+  // Never release this claim on exceptions, failures or ambiguous outcomes.
+  let charge: Awaited<ReturnType<typeof chargeSavedCardOffSession>>
+  try { charge = await chargeSavedCardOffSession({
     stripeCustomerId, paymentMethodId: pm.stripe_payment_method_id, amountCents: cents,
     invoiceId, userId, customerId: customer.id,
-    // Tells the Stripe layer this is a deliberate new attempt, not the cron and the
-    // fire-and-forget racing over the same one — see offSessionIdempotencyKey.
-    manual,
+    // The database claim is shared by manual and automatic callers.
+    attemptId,
+  }) } catch {
+    await sb.from('card_charge_attempt_events').insert({ attempt_id: attemptId, outcome: 'unknown' })
+    return { result: 'held', reason: 'charge-outcome-unknown-reconciliation-required' }
+  }
+  const { error: auditError } = await sb.from('card_charge_attempt_events').insert({
+    attempt_id: attemptId, outcome: charge.status || 'unknown',
+    stripe_payment_intent: charge.paymentIntentId || null,
   })
+  if (auditError) return { result: 'held', reason: 'charge-audit-write-failed-reconciliation-required' }
+
 
   // Success (incl. 'processing') → the webhook records payment + flips the invoice +
   // sends the receipt. We do NOT write paid-state here (one writer).
@@ -193,9 +217,10 @@ export async function attemptAutoPayCharge(
 async function usualRecurringAmount(
   sb: SupabaseClient, userId: string, customerId: string, excludeInvoiceId: string,
 ): Promise<number | null> {
-  const { data } = await sb.from('invoices')
+  const { data, error } = await sb.from('invoices')
     .select('id, amount').eq('user_id', userId).eq('customer_id', customerId).eq('status', 'paid')
     .not('job_id', 'is', null)
+  if (error) throw new Error('Could not verify recurring charge baseline')
   const amounts = ((data as { id: string; amount: number }[] | null) || [])
     .filter(r => r.id !== excludeInvoiceId).map(r => Number(r.amount)).filter(n => Number.isFinite(n) && n > 0)
     .sort((a, b) => a - b)
