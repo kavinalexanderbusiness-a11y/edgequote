@@ -404,6 +404,12 @@ grant execute on function public.claim_card_charge(uuid, uuid, uuid, text, text,
 
 -- No legacy boolean is sufficient evidence of authorization. Reset every legacy
 -- toggle so the customer must explicitly accept the versioned terms after release.
+-- The current schema publishes customers with REPLICA IDENTITY FULL and includes a
+-- stored generated phone_digits column. PostgreSQL 18 refuses every customer UPDATE
+-- in that shape because generated columns are not part of the publication. Use the
+-- stable customer primary key as its replica identity. No repository subscriber to
+-- the customers table depends on a full old-row payload.
+alter table public.customers replica identity default;
 update public.customers
    set autopay_enabled = false
  where autopay_enabled = true;

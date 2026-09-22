@@ -881,7 +881,7 @@ console.log('\nrecentPaymentLanded (post-checkout confirmation):')
   // Money owed, and the ability to pay it.
   check('Home still surfaces money owed and the way to pay it',
     homeSrc.includes('view.money.due > 0') && homeSrc.includes('Amount due')
-    && homeSrc.includes('actions.pay(oneInvoice.rawId)'))
+    && homeSrc.includes('actions.pay(oneInvoice.rawId, oneInvoice.payAmount)'))
   // Upcoming work.
   check('Home still surfaces the next visit',
     homeSrc.includes('NEXT SERVICE') || homeSrc.includes('Next service'))

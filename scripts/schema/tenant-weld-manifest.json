@@ -11,6 +11,9 @@
     "Regenerate deliberately. NEVER widen this file just to make a red guard green."
   ],
   "welds": [
+    "card_charge_attempts_customer_owner_fk",
+    "card_charge_attempts_invoice_owner_fk",
+    "card_charge_consents_customer_owner_fk",
     "change_orders_customer_same_owner",
     "change_orders_job_same_owner",
     "change_orders_quote_same_owner",
@@ -89,6 +92,7 @@
     "change_order_assign_number",
     "change_order_guard_transition",
     "claim_beta_invite",
+    "claim_card_charge",
     "claim_webhook_deliveries",
     "consume_public_intake_rate_limit",
     "clear_crew_lead_on_departure",
@@ -123,6 +127,7 @@
     "crm_sync_referral",
     "crm_touch_last_contacted",
     "current_app_role",
+    "enforce_customer_autopay_consent",
     "ensure_job_forms",
     "ensure_pricing_config_version",
     "fanout_integration_event",
@@ -191,6 +196,7 @@
     "recompute_invoice_paid_on_edit",
     "recompute_part_stock",
     "record_booking_measurement",
+    "record_card_charge_consent",
     "record_technician_crew_history",
     "resync_quote_on_job_recurring",
     "revoke_beta_invite",

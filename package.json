@@ -199,6 +199,9 @@
     "verify:self-service-registration": "tsx scripts/verify-self-service-registration.ts",
     "verify:self-service-signup": "tsx scripts/verify-self-service-signup.ts",
     "verify:theme": "tsx scripts/verify-theme.ts",
+    "verify:dashboard-clock": "tsx scripts/verify-dashboard-clock.ts",
+    "verify:card-charge-engine": "tsx scripts/verify-card-charge-engine.ts",
+    "verify:card-charge-safety": "tsx scripts/verify-card-charge-safety.ts",
     "verify:stripe-receipt-recovery": "tsx scripts/verify-stripe-receipt-recovery.ts",
     "verify:tips": "tsx scripts/verify-tips.ts"
   },

@@ -25,6 +25,8 @@ async function schemaDb(): Promise<PGlite> {
       user_id uuid not null,
       autopay_enabled boolean not null default false,
       stripe_customer_id text,
+      phone text,
+      phone_digits text generated always as (coalesce(phone, '')) stored,
       unique (user_id, id)
     );
     create table customer_portal_tokens (
@@ -77,6 +79,9 @@ async function schemaDb(): Promise<PGlite> {
     create function portal_set_autopay(p_token text, p_enabled boolean)
     returns boolean language sql security definer as $$ select true $$;
     grant execute on function portal_set_autopay(text, boolean) to public, anon, authenticated, service_role;
+    create publication supabase_realtime;
+    alter publication supabase_realtime add table customers;
+    alter table customers replica identity full;
   `)
   return db
 }
@@ -144,7 +149,7 @@ async function main(): Promise<void> {
   const otherOwner = '00000000-0000-0000-0000-000000000005'
   const otherCustomer = '00000000-0000-0000-0000-000000000006'
   await db.exec(`
-    insert into customers values
+    insert into customers(id,user_id,autopay_enabled,stripe_customer_id) values
       ('${customer}','${owner}',true,'cus_one'),
       ('${otherCustomer}','${otherOwner}',false,'cus_other');
     insert into customer_portal_tokens values ('token','${customer}','${owner}',false);
@@ -163,6 +168,8 @@ async function main(): Promise<void> {
   check('legacy AutoPay evidence is normalized to the webhook key', normalized.rows[0].stripe_session_id === 'autopay-pi:pi_legacy')
   const legacyFlag = await db.query<{ autopay_enabled: boolean }>('select autopay_enabled from customers where id=$1', [customer])
   check('legacy boolean authorization is reset', legacyFlag.rows[0].autopay_enabled === false)
+  const replicaIdentity = await db.query<{ identity: string }>("select relreplident as identity from pg_class where oid='customers'::regclass")
+  check('customer updates remain valid with its primary-key replica identity', replicaIdentity.rows[0].identity === 'd')
 
   await assert.rejects(() => db.exec(`update customers set autopay_enabled=true where id='${customer}'`))
   check('direct writes cannot revive AutoPay without active consent', true)
