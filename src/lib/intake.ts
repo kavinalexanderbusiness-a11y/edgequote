@@ -1,8 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { sendEmail, commsEnabled } from '@/lib/comms/send'
+import { logSend } from '@/lib/comms/log'
 import { sanitizeSourceInput } from '@/lib/attribution'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logSafeServerError } from '@/lib/serverError'
+import { WEBSITE_LEAD_OWNER_ALERT_TEMPLATE } from '@/lib/websiteLeadAlert'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -238,7 +240,17 @@ export async function submitLead(opts: {
   // requested SERVICE leads the subject and the field list, so the owner knows
   // what the customer wants before they even open the app. Note it gets the
   // REWRITTEN payload, so its photo links are the canonical stored URLs.
-  try { await emailOwnerAboutLead(anon, token, opts.source || 'Website', payload) } catch { /* never block intake */ }
+  try {
+    await emailOwnerAboutLead(anon, token, opts.source || 'Website', payload, {
+      leadId: result.lead_id ?? null,
+      customerId: result.customer_id ?? null,
+    })
+  } catch (error) {
+    // The lead is already durable, so owner-email observability may never turn a
+    // successful customer submission into a failure. Unexpected failures still
+    // reach privacy-safe server logs instead of disappearing behind an empty catch.
+    logSafeServerError('intake.owner_email_unexpected', error)
+  }
 
   // The lead is saved either way — never fail a real submission over a photo. But
   // the response states the photo outcome explicitly, so the caller can tell the
@@ -352,11 +364,73 @@ export function buildLeadEmail(source: string, p: Record<string, unknown>): { su
   }
 }
 
-async function emailOwnerAboutLead(anon: SupabaseClient, token: string, source: string, p: Record<string, unknown>): Promise<void> {
-  if (!commsEnabled().email) return
-  const { data } = await anon.rpc('get_booking_business', { p_token: token })
-  const biz = data as { email_primary?: string | null; company_name?: string | null } | null
-  if (!biz?.email_primary) return
-  const { subject, html, text } = buildLeadEmail(source, p)
-  await sendEmail(biz.email_primary, subject, html, text)
+async function emailOwnerAboutLead(
+  anon: SupabaseClient,
+  token: string,
+  source: string,
+  p: Record<string, unknown>,
+  ids: { leadId: string | null; customerId: string | null },
+): Promise<void> {
+  // notification_log is the canonical owner-visible delivery ledger. Website-lead
+  // alerts used to bypass it and discard sendEmail's { sent:false } result, making a
+  // provider rejection indistinguishable from a successful alert.
+  const admin = createAdminClient()
+  let userId: string | null = null
+  let emailPrimary: string | null = null
+
+  if (admin) {
+    const { data, error } = await admin.from('business_settings')
+      .select('user_id, email_primary')
+      .eq('booking_token', token)
+      .eq('booking_enabled', true)
+      .maybeSingle()
+    if (error) logSafeServerError('intake.owner_email_business_lookup', error)
+    const business = data as { user_id?: string | null; email_primary?: string | null } | null
+    userId = business?.user_id ?? null
+    emailPrimary = business?.email_primary?.trim() || null
+  }
+
+  // Preserve graceful operation in environments without a service-role client. The
+  // public RPC exposes only the booking-safe business projection. Sending may still
+  // work; the missing audit capability is reported safely below.
+  if (!emailPrimary) {
+    const { data, error } = await anon.rpc('get_booking_business', { p_token: token })
+    if (error) logSafeServerError('intake.owner_email_public_lookup', error)
+    const biz = data as { email_primary?: string | null } | null
+    emailPrimary = biz?.email_primary?.trim() || null
+  }
+
+  const leadRef = ids.leadId ? `lead:${ids.leadId}` : 'lead:unknown'
+  let status: 'sent' | 'error' | 'disabled' | 'skipped'
+  let detail = leadRef
+  let providerId: string | null = null
+
+  if (!commsEnabled().email) {
+    status = 'disabled'
+    detail += ' · email provider is not configured'
+  } else if (!emailPrimary) {
+    status = 'skipped'
+    detail += ' · primary business email is not configured'
+  } else {
+    const { subject, html, text } = buildLeadEmail(source, p)
+    const result = await sendEmail(emailPrimary, subject, html, text)
+    status = result.sent ? 'sent' : 'error'
+    providerId = result.sent ? (result.id ?? null) : null
+    if (!result.sent) detail += ` · ${result.error || result.reason}`
+  }
+
+  if (!admin || !userId) {
+    logSafeServerError('intake.owner_email_audit_unavailable', null, { status })
+    return
+  }
+  await logSend(admin, {
+    userId,
+    customerId: ids.customerId,
+    channel: 'email',
+    template: WEBSITE_LEAD_OWNER_ALERT_TEMPLATE,
+    status,
+    detail: detail.slice(0, 500),
+    provider: status === 'sent' ? 'resend' : null,
+    providerId,
+  })
 }
