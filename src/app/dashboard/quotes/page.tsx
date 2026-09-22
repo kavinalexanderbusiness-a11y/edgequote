@@ -2,23 +2,24 @@
 import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { ButtonLink } from '@/components/ui/Button'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { cacheLease, readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Quote } from '@/types'
 import type { ReachCustomer } from '@/lib/comms/reach'
+import { chaseBlockedReason, needsFollowUp } from '@/lib/followup'
 import { QuoteList } from '@/components/quotes/QuoteList'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { StatTile } from '@/components/ui/StatTile'
 import { formatCurrency } from '@/lib/utils'
-import { needsFollowUp } from '@/lib/followup'
 import { Plus, AlertTriangle } from 'lucide-react'
 
 export default function QuotesPage() {
+  const router = useRouter()
   const [quotes, setQuotes] = useState<Quote[]>([])
   // Reach fields per customer id — lets the follow-up queue distinguish "chase this"
   // from "you have no way to chase this". Empty until loaded, which reads as
@@ -93,16 +94,20 @@ export default function QuotesPage() {
 
   // Pipeline value at a glance — derived from the already-loaded list (no new fetch).
   const pipeline = useMemo(() => {
-    let open = 0, awaiting = 0, accepted = 0, followups = 0
+    let open = 0, awaiting = 0, accepted = 0, followupsReady = 0, followupsBlocked = 0
     for (const q of quotes) {
       const t = Number(q.total) || 0
       if (q.status !== 'declined' && q.status !== 'paid') open += t
       if (q.status === 'sent') awaiting += t
       if (q.status === 'accepted') accepted += t
-      if (needsFollowUp(q)) followups++
+      if (needsFollowUp(q)) {
+        const customer = q.customer_id ? reachById[q.customer_id] : undefined
+        if (customer && chaseBlockedReason(customer)) followupsBlocked++
+        else followupsReady++
+      }
     }
-    return { open, awaiting, accepted, followups }
-  }, [quotes])
+    return { open, awaiting, accepted, followupsReady, followupsBlocked }
+  }, [quotes, reachById])
 
   async function handleDelete(id: string) {
     const prev = quotes
@@ -142,8 +147,17 @@ export default function QuotesPage() {
           <StatTile label="Open value" value={formatCurrency(pipeline.open)} />
           <StatTile label="Awaiting reply" value={formatCurrency(pipeline.awaiting)} />
           <StatTile label="Accepted" value={formatCurrency(pipeline.accepted)} />
-          <StatTile label="Follow-ups due" value={pipeline.followups}
-            tone={pipeline.followups > 0 ? 'warn' : undefined} />
+          <StatTile
+            label="Follow-ups ready"
+            value={pipeline.followupsReady}
+            sub={pipeline.followupsBlocked > 0 ? `${pipeline.followupsBlocked} need contact permission or details` : undefined}
+            tone={pipeline.followupsReady > 0 ? 'warn' : undefined}
+            onClick={pipeline.followupsReady > 0
+              ? () => router.push('/dashboard/quotes?followup=1')
+              : pipeline.followupsBlocked > 0
+                ? () => router.push('/dashboard/data-quality')
+                : undefined}
+          />
         </div>
       )}
       {loading ? (

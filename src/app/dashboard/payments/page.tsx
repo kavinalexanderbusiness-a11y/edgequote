@@ -408,8 +408,17 @@ export default function PaymentsPage() {
                       <p className="text-[11px] text-ink-faint truncate">
                         {formatDate(r.paid_at || r.created_at)} · {isCredit ? (amt >= 0 ? 'Credit added' : 'Credit applied') : paymentMethodLabel(r.method || r.provider)}
                         <span className="font-mono"> · {receiptNumberFor(r.id)}</span>
-                        {r.notes ? ` · ${r.notes}` : ''}
                       </p>
+                      {r.notes && (
+                        <details className="mt-1 max-w-2xl group">
+                          <summary className="w-fit cursor-pointer select-none text-[11px] font-medium text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+                            Payment evidence
+                          </summary>
+                          <p className="mt-1 text-[11px] leading-relaxed text-ink-faint whitespace-pre-wrap break-words">
+                            {r.notes}
+                          </p>
+                        </details>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className={cn('text-sm font-bold tabular-nums',

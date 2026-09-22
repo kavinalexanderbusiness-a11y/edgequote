@@ -103,6 +103,7 @@
     "verify:customer-import": "tsx scripts/verify-customer-import.ts",
     "verify:portal": "tsx scripts/verify-portal.ts",
     "verify:payments-list-race": "tsx scripts/verify-payments-list-race.ts",
+    "verify:product-simplification": "tsx scripts/verify-product-simplification.ts",
     "verify:portal-rpc": "tsx scripts/verify-portal-rpc.ts",
     "verify:production-hygiene": "tsx scripts/verify-production-hygiene.ts",
     "verify:publication-cutover": "tsx scripts/verify-publication-cutover.ts",

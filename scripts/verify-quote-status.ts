@@ -157,6 +157,13 @@ check('every stored status explains what it MEANS', QUOTE_STATUSES_FOR_LABELS.ev
 check('exactly scheduled/completed/paid are system-advanced', SYSTEM_ADVANCED_QUOTE_STATUSES.slice().sort().join(','), 'completed,paid,scheduled')
 check('accepted is NOT system-advanced — a customer or the owner sets it', isSystemAdvancedQuoteStatus('accepted'), false)
 check('sent is NOT system-advanced — the owner sends', isSystemAdvancedQuoteStatus('sent'), false)
+{
+  const list = readFileSync('src/components/quotes/QuoteList.tsx', 'utf8')
+  check('the dense quote list renders a read-only status badge', list.includes('<StatusBadge status={q.status}'), true)
+  check('the dense quote list does not mount the lifecycle editor', list.includes('<QuoteStatusControl'), false)
+  check('the detail-page status repair control remains available',
+    readFileSync('src/app/dashboard/quotes/[id]/page.tsx', 'utf8').includes('<QuoteStatusControl'), true)
+}
 // Capability guard: grouping the picker must never quietly become filtering it.
 {
   const control = readFileSync('src/components/quotes/QuoteStatusControl.tsx', 'utf8')

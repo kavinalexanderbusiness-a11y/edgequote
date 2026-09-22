@@ -12,7 +12,7 @@ import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { describeSkip } from '@/lib/comms/skipReasons'
 import { isQuoteExpired, markSentPatch, canSendQuote, sendBlockedReason, sendBlockedLabel } from '@/lib/quoteStatus'
-import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
+import { StatusBadge } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -528,13 +528,15 @@ export function QuoteList({ quotes, onDelete, reachById, onNotesSaved, termsText
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>
-                    {/* The send/expiry stamps go with the row so the shared patch can
-                        leave an existing one alone, and the total so a status flip to
-                        Accepted snapshots what was bought rather than nothing. */}
-                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
-                      <QuoteStatusControl quoteId={q.id} status={q.status}
-                        sentAt={q.sent_at} validUntil={q.valid_until}
-                        customerName={q.customer_name} />
+                    {/* Dense lists are for scanning, not lifecycle overrides. Keeping
+                        the status read-only here prevents a scroll/tap from asserting
+                        Sent, Completed or Paid without the quote's supporting context.
+                        The detail page retains the deliberate, confirmation-gated
+                        repair control. */}
+                    <td className="px-3 sm:px-5 py-3.5">
+                      <span title="Open the quote to review or change its status">
+                        <StatusBadge status={q.status} />
+                      </span>
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell whitespace-nowrap">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
