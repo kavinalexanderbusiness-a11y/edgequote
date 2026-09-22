@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -36,16 +36,42 @@ const PREFS = [
   { key: 'change_order', label: 'Changes answered', hint: 'A customer approves or declines extra work', Icon: FileSignature },
 ] as const
 
+interface PushReadiness {
+  ready: boolean
+  config: {
+    publicVapid: boolean
+    privateVapid: boolean
+    sendSecret: boolean
+    endpointConfigured: boolean
+    endpointValid: boolean
+    dispatchSecretConfigured: boolean
+    dispatchSecretMatches: boolean
+    dispatchReadable: boolean
+  }
+  subscriptionCount: number | null
+}
+
 export function PushNotificationSettings() {
   const [supabase] = useState(() => createClient())
   const [state, setState] = useState<PushState>('default')
   const [busy, setBusy] = useState(false)
   const [reason, setReason] = useState<string | null>(null)
   const [prefs, setPrefs] = useState<Record<string, boolean>>({})
+  const [readiness, setReadiness] = useState<PushReadiness | null>(null)
   const [loaded, setLoaded] = useState(false)
 
   // ON unless explicitly false — so a brand-new owner gets everything.
   const isOn = (key: string) => prefs[key] !== false
+
+  const loadReadiness = useCallback(async () => {
+    try {
+      const res = await fetch('/api/push/status', { cache: 'no-store' })
+      if (!res.ok) { setReadiness(null); return }
+      setReadiness(await res.json() as PushReadiness)
+    } catch {
+      setReadiness(null)
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -60,9 +86,10 @@ export function PushNotificationSettings() {
         if (active) setPrefs(((data as { notif_prefs?: Record<string, boolean> } | null)?.notif_prefs) || {})
       }
       if (active) setLoaded(true)
+      if (active) await loadReadiness()
     })()
     return () => { active = false }
-  }, [supabase])
+  }, [supabase, loadReadiness])
 
   async function toggle() {
     setBusy(true); setReason(null)
@@ -80,6 +107,7 @@ export function PushNotificationSettings() {
       setState(r.state)
       if (!r.ok) setReason(r.reason || 'Could not enable notifications.')
     }
+    await loadReadiness()
     setBusy(false)
   }
 
@@ -114,8 +142,24 @@ export function PushNotificationSettings() {
             Get alerts on this device — even when EdgeHQ is closed. Delivered through your existing notifications, so nothing is doubled up.
           </p>
         </div>
+
       </CardHeader>
       <CardBody className="space-y-5">
+        <div className="rounded-xl border border-border divide-y divide-border text-xs">
+          <PushCheck
+            ok={enabled}
+            label="This browser subscription"
+            detail={enabled ? 'Present' : 'Not present'} />
+          <PushCheck
+            ok={readiness?.ready ?? null}
+            label="Server delivery"
+            detail={pushReadinessDetail(readiness)} />
+          <PushCheck
+            ok={readiness?.subscriptionCount != null ? readiness.subscriptionCount > 0 : null}
+            label="Saved devices"
+            detail={readiness?.subscriptionCount == null ? 'Could not verify' : String(readiness.subscriptionCount)} />
+        </div>
+
         {/* Master enable/disable */}
         <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
           <div className="flex items-start gap-3 min-w-0">
@@ -198,4 +242,32 @@ export function PushNotificationSettings() {
       </CardBody>
     </Card>
   )
+}
+
+function PushCheck({ ok, label, detail }: { ok: boolean | null; label: string; detail: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+      <span className="text-ink-muted">{label}</span>
+      <span className={cn('font-medium', ok === true ? 'text-emerald-400' : ok === false ? 'text-amber-400' : 'text-ink-faint')}>
+        {detail}
+      </span>
+    </div>
+  )
+}
+
+function pushReadinessDetail(status: PushReadiness | null): string {
+  if (!status) return 'Could not verify'
+  if (status.ready) return 'Ready'
+  const c = status.config
+  const missing: string[] = []
+  if (!c.publicVapid || !c.privateVapid) missing.push('VAPID keys')
+  if (!c.sendSecret) missing.push('send secret')
+  if (!c.dispatchReadable) missing.push('dispatch config access')
+  else {
+    if (!c.endpointConfigured) missing.push('dispatch endpoint')
+    else if (!c.endpointValid) missing.push('valid dispatch endpoint')
+    if (!c.dispatchSecretConfigured) missing.push('dispatch secret')
+    else if (!c.dispatchSecretMatches) missing.push('secret match')
+  }
+  return missing.length ? `Needs ${missing.join(', ')}` : 'Configuration needs attention'
 }

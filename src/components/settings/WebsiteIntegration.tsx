@@ -13,6 +13,7 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { cn } from '@/lib/utils'
 import { formatDistanceToNow } from 'date-fns'
 import { appOrigin } from '@/lib/appOrigin'
+import { WEBSITE_LEAD_OWNER_ALERT_TEMPLATE } from '@/lib/websiteLeadAlert'
 import {
   Globe, Copy, Check, ExternalLink, Code2, Send, Loader2, CheckCircle2, AlertTriangle, XCircle,
   ShieldCheck, Inbox, Link as LinkIcon, Server, Activity, RefreshCw, Terminal, MessageSquare, MinusCircle,
@@ -28,6 +29,7 @@ const STALE_DAYS = 10            // no lead in this many days → "your form may
 const LAST_TEST_KEY = 'eq-wi-last-test'
 
 interface LastLead { id: string; created_at: string; contact_name: string | null; requested_services: string | null; status: string | null }
+interface OwnerEmailLog { created_at: string; status: string; detail: string | null }
 interface LastTest { ok: boolean; at: string; error?: string }
 type Reach = 'checking' | 'ok' | 'down'
 type TestState =
@@ -44,6 +46,7 @@ export function WebsiteIntegration() {
   const [token, setToken] = useState<string | null>(null)
   const [hourlyLimit, setHourlyLimit] = useState(30)
   const [lastLead, setLastLead] = useState<LastLead | null>(null)
+  const [lastOwnerEmail, setLastOwnerEmail] = useState<OwnerEmailLog | null>(null)
   const [lastTest, setLastTest] = useState<LastTest | null>(null)
   const [appBase, setAppBase] = useState('')
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
@@ -55,14 +58,22 @@ export function WebsiteIntegration() {
     try { const raw = localStorage.getItem(LAST_TEST_KEY); if (raw) setLastTest(JSON.parse(raw)) } catch { /* ignore */ }
   }, [])
 
-  const loadLastLead = useCallback(async () => {
+  const loadWebsiteEvidence = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
     if (!user) return
-    const { data } = await supabase.from('website_leads')
-      .select('id, created_at, contact_name, requested_services, status')
-      .eq('user_id', user.id).order('created_at', { ascending: false }).limit(1).maybeSingle()
-    setLastLead((data as LastLead | null) ?? null)
+    const [lead, email] = await Promise.all([
+      supabase.from('website_leads')
+        .select('id, created_at, contact_name, requested_services, status')
+        .eq('user_id', user.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('notification_log')
+        .select('created_at, status, detail')
+        .eq('user_id', user.id)
+        .eq('template', WEBSITE_LEAD_OWNER_ALERT_TEMPLATE)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    ])
+    setLastLead((lead.data as LastLead | null) ?? null)
+    setLastOwnerEmail((email.data as OwnerEmailLog | null) ?? null)
   }, [supabase])
 
   // Liveness probe — OPTIONS hits the route's CORS handler (no DB write, no error
@@ -86,11 +97,11 @@ export function WebsiteIntegration() {
       setToken(s?.booking_token ?? null)
       setHourlyLimit(s?.website_lead_hourly_limit ?? 30)
       setLoaded(true)
-      loadLastLead()
+      loadWebsiteEvidence()
       probe()
     })()
     return () => { active = false }
-  }, [supabase, loadLastLead, probe])
+  }, [supabase, loadWebsiteEvidence, probe])
 
   async function toggleBooking(v: boolean) {
     setBusy(true); setEnabled(v)
@@ -157,7 +168,7 @@ export function WebsiteIntegration() {
         const checks = await verifyCreation(body.lead_id, body.customer_id)
         setTest({ status: 'ok', leadId: body.lead_id, customerId: body.customer_id, checks })
         rememberTest({ ok: true, at: new Date().toISOString() })
-        loadLastLead()
+        loadWebsiteEvidence()
         if (reach !== 'ok') setReach('ok')
       } else {
         const debug = JSON.stringify({ endpoint: `${appBase}/api/website-lead`, httpStatus: res.status, request: { ...payload, token: '••• (your token)' }, response: body }, null, 2)
@@ -205,7 +216,7 @@ export function WebsiteIntegration() {
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Activity className="w-4 h-4 text-accent-text" /> Website Health</h2>
-            <Button size="sm" variant="ghost" onClick={() => { probe(); loadLastLead() }} disabled={reach === 'checking'}>
+            <Button size="sm" variant="ghost" onClick={() => { probe(); loadWebsiteEvidence() }} disabled={reach === 'checking'}>
               <RefreshCw className={cn('w-3.5 h-3.5', reach === 'checking' && 'animate-spin')} /> Recheck
             </Button>
           </div>
@@ -218,6 +229,8 @@ export function WebsiteIntegration() {
             <CheckRow ok={reach === 'ok' ? true : reach === 'down' ? false : 'checking'} label="Endpoint responding" detail={reach === 'ok' ? '/api/website-lead is live' : reach === 'down' ? 'No response — check the deployment' : 'Checking…'} />
             <CheckRow ok={lastLead ? (stale ? 'warn' : true) : 'none'} label="Last successful submission"
               detail={lastLead ? `${formatDistanceToNow(new Date(lastLead.created_at), { addSuffix: true })}${lastLead.contact_name ? ` — ${lastLead.contact_name}` : ''}` : 'None received yet'} />
+            <CheckRow ok={ownerEmailCheck(lastOwnerEmail)} label="Last owner alert email"
+              detail={ownerEmailDetail(lastOwnerEmail)} />
             <CheckRow ok={lastTest ? (lastTest.ok ? true : false) : 'none'} label="Last failed test"
               detail={!lastTest ? 'None' : lastTest.ok ? `None since last success (${formatDistanceToNow(new Date(lastTest.at), { addSuffix: true })})` : `${lastTest.error} · ${formatDistanceToNow(new Date(lastTest.at), { addSuffix: true })}`} />
           </div>
@@ -339,6 +352,25 @@ export function WebsiteIntegration() {
       </Card>
     </div>
   )
+}
+
+function ownerEmailCheck(log: OwnerEmailLog | null): boolean | 'warn' | 'none' {
+  if (!log) return 'none'
+  if (['sent', 'delivered', 'opened', 'clicked'].includes(log.status)) return true
+  if (['error', 'failed', 'bounced', 'spam', 'undelivered'].includes(log.status)) return false
+  return 'warn'
+}
+
+function ownerEmailDetail(log: OwnerEmailLog | null): string {
+  if (!log) return 'No recorded attempt yet'
+  const when = formatDistanceToNow(new Date(log.created_at), { addSuffix: true })
+  const label: Record<string, string> = {
+    sent: 'Accepted by email provider', delivered: 'Delivered', opened: 'Opened', clicked: 'Link clicked',
+    error: 'Provider rejected or could not send', failed: 'Delivery failed', bounced: 'Bounced',
+    spam: 'Marked as spam', undelivered: 'Undelivered', disabled: 'Email provider disabled',
+    skipped: 'No primary business email',
+  }
+  return `${label[log.status] || log.status} · ${when}`
 }
 
 // ── Sub-components ──
