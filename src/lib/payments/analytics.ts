@@ -31,10 +31,11 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 // amount) calls it a payment and counts the customer's deposit as revenue twice.
 export type LedgerRowType =
   | 'Payment' | 'Refund' | 'Settled from credit' | 'Overpayment to credit'
-  | 'Credit issued' | 'Credit applied'
+  | 'Credit issued' | 'Credit applied' | 'Tip'
 
 export function ledgerRowType(r: { kind?: string | null; provider?: string | null; amount?: number | null }): LedgerRowType {
   const amt = Number(r.amount) || 0
+  if (r.kind === 'tip') return 'Tip'
   // The credit LEDGER — the liability side. Never cash.
   if (r.kind === 'credit') return amt >= 0 ? 'Credit issued' : 'Credit applied'
   // A payment row settled FROM credit: real settlement, but the cash arrived
@@ -69,6 +70,9 @@ export interface TxnSummary {
   count: number
   /** Refund event count. */
   refundCount: number
+  /** Voluntary gratuities collected, deliberately outside job revenue. */
+  tips: number
+  tipCount: number
   byMethod: MethodSlice[]
 }
 
@@ -78,9 +82,14 @@ export interface TxnSummary {
  * $200 of credit to an invoice never reads as $200 of new money.
  */
 export function summarizeTransactions(rows: Payment[]): TxnSummary {
-  let collected = 0, refunded = 0, count = 0, refundCount = 0
+  let collected = 0, refunded = 0, count = 0, refundCount = 0, tips = 0, tipCount = 0
   const methods = new Map<string, MethodSlice>()
   for (const r of rows) {
+    if (r.kind === 'tip' && r.status === 'paid') {
+      tips += Number(r.amount) || 0
+      if ((Number(r.amount) || 0) > 0) tipCount++
+      continue
+    }
     if (!isCashRow(r)) continue
     const amt = Number(r.amount) || 0
     if (amt >= 0) {
@@ -103,6 +112,8 @@ export function summarizeTransactions(rows: Payment[]): TxnSummary {
     net: round2(collected - refunded),
     count,
     refundCount,
+    tips: round2(tips),
+    tipCount,
     byMethod: [...methods.values()]
       .map(s => ({ ...s, total: round2(s.total) }))
       .sort((a, b) => b.total - a.total),

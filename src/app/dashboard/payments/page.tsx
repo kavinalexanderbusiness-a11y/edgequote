@@ -31,7 +31,7 @@ import { Wallet, FileDown, Search, AlertTriangle, Gift, Plus, X, Receipt } from 
 // Read-only over the ledger except for one write (take a deposit), which goes through
 // the ledger engine like everything else. No new money rules live here.
 
-type Kind = 'all' | 'payments' | 'refunds' | 'credits'
+type Kind = 'all' | 'payments' | 'refunds' | 'credits' | 'tips'
 type Range = '30' | '90' | '365' | 'all'
 
 const RANGE_LABEL: Record<Range, string> = { '30': 'Last 30 days', '90': 'Last 90 days', '365': 'Last year', all: 'All time' }
@@ -75,6 +75,7 @@ function filterRows(rows: Row[], q: string, kind: Kind): Row[] {
     if (kind === 'payments' && !(r.kind === 'payment' && amt >= 0)) return false
     if (kind === 'refunds' && !(r.kind === 'payment' && amt < 0)) return false
     if (kind === 'credits' && r.kind !== 'credit') return false
+    if (kind === 'tips' && r.kind !== 'tip') return false
     if (!needle) return true
     const hay = [
       r.customers?.name, r.invoices?.invoice_number, r.notes,
@@ -106,6 +107,7 @@ const CSV_COLUMNS: CsvColumn<Row>[] = [
   // when the truth is "this row is not cash at all".
   { label: 'Cash Amount', value: r => cashAmountOf(r) || '' },
   { label: 'Credit Amount', value: r => (r.kind === 'credit' ? Number(r.amount) || 0 : '') },
+  { label: 'Tip Amount', value: r => (r.kind === 'tip' ? Number(r.amount) || 0 : '') },
   { label: 'Currency', value: r => (r.currency || 'cad').toUpperCase() },
   { label: 'Note', value: r => r.notes || '' },
 ]
@@ -205,7 +207,11 @@ export default function PaymentsPage() {
       const [{ renderReceiptBlob }, { downloadBlob }] = await Promise.all([
         import('@/components/payments/ReceiptPDF'), import('@/lib/portalPdf'),
       ])
-      downloadBlob(await renderReceiptBlob(r, r.invoices as unknown as Invoice, settings), `${receiptNumberFor(r.id)}.pdf`)
+      const tip = r.kind === 'payment' && r.stripe_payment_intent
+        ? rows.filter(row => row.kind === 'tip' && row.stripe_payment_intent === r.stripe_payment_intent)
+          .reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
+        : 0
+      downloadBlob(await renderReceiptBlob(r, r.invoices as unknown as Invoice, settings, Math.max(0, tip)), `${receiptNumberFor(r.id)}.pdf`)
     } catch { toast.error('Could not generate the receipt PDF.') }
     setReceiptId(null)
   }
@@ -330,11 +336,12 @@ export default function PaymentsPage() {
       {/* Money over the CURRENT filters — the report and the numbers can't disagree
           because they're the same rows. */}
       {!loading && !loadError && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
           <StatTile label="Collected" value={formatCurrency(summary.collected)} tone="accent" />
           <StatTile label="Refunded" value={summary.refunded > 0 ? `−${formatCurrency(summary.refunded)}` : formatCurrency(0)} />
           <StatTile label="Net" value={formatCurrency(summary.net)} />
           <StatTile label="Payments" value={String(summary.count)} />
+          <StatTile label="Tips" value={formatCurrency(summary.tips)} />
         </div>
       )}
 
@@ -343,7 +350,7 @@ export default function PaymentsPage() {
         <Input aria-label="Search payments" fieldSize="sm" value={q} onChange={e => setQ(e.target.value)}
           placeholder="Search by customer, invoice, receipt #, method, note or amount…" />
         <div className="flex items-center gap-2 flex-wrap">
-          {(['all', 'payments', 'refunds', 'credits'] as Kind[]).map(k => (
+          {(['all', 'payments', 'refunds', 'credits', 'tips'] as Kind[]).map(k => (
             <FilterPill key={k} active={kind === k} onClick={() => setKind(k)}>
               {k === 'all' ? 'All' : k.charAt(0).toUpperCase() + k.slice(1)}
             </FilterPill>
@@ -397,6 +404,7 @@ export default function PaymentsPage() {
               {visible.map(r => {
                 const amt = Number(r.amount) || 0
                 const isCredit = r.kind === 'credit'
+                const isTip = r.kind === 'tip'
                 const isRefund = !isCredit && amt < 0
                 return (
                   <div key={r.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
@@ -406,7 +414,7 @@ export default function PaymentsPage() {
                         {r.invoices?.invoice_number && <span className="text-ink-faint"> · {r.invoices.invoice_number}</span>}
                       </p>
                       <p className="text-[11px] text-ink-faint truncate">
-                        {formatDate(r.paid_at || r.created_at)} · {isCredit ? (amt >= 0 ? 'Credit added' : 'Credit applied') : paymentMethodLabel(r.method || r.provider)}
+                        {formatDate(r.paid_at || r.created_at)} · {isTip ? (amt >= 0 ? 'Tip' : 'Tip refund') : isCredit ? (amt >= 0 ? 'Credit added' : 'Credit applied') : paymentMethodLabel(r.method || r.provider)}
                         <span className="font-mono"> · {receiptNumberFor(r.id)}</span>
                       </p>
                       {r.notes && (

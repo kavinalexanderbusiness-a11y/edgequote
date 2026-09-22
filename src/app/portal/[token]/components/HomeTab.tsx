@@ -169,7 +169,7 @@ export function HomeTab({ view, actions, suppressApproved }: TabProps & { suppre
       </button>
       {canPayInline && oneInvoice && (
         <div className="px-4 pb-4">
-          <Button className="w-full" onClick={() => actions.pay(oneInvoice.rawId)} loading={actions.payingId === oneInvoice.rawId}>
+          <Button className="w-full" onClick={() => actions.pay(oneInvoice.rawId, oneInvoice.payAmount)} loading={actions.payingId === oneInvoice.rawId}>
             {/* payAmount, never balance — the engine's answer, identical to what the
                 checkout will actually ask for (BillingTab's button says the same). */}
             <CreditCard className="w-4 h-4" /> Pay {formatCurrency(oneInvoice.payAmount)}{oneInvoice.payIsDeposit ? ' deposit' : ''}

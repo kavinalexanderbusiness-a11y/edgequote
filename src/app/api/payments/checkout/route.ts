@@ -5,6 +5,7 @@ import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { depositChargeAmount } from '@/lib/payments/deposit'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
+import { validateTipRequest } from '@/lib/payments/tips'
 
 export const dynamic = 'force-dynamic'
 
@@ -76,6 +77,9 @@ export async function POST(req: NextRequest) {
     bs as { gst_percent?: number | null } | null,
   )
   if (!(charge.amount > 0)) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
+  let tip
+  try { tip = validateTipRequest(body.tip, Math.round(charge.amount * 100)) }
+  catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'Invalid tip.' }, { status: 400 }) }
 
   // A card can only be offered for saving if Stripe has a Customer to attach it
   // to. Best-effort: if this fails the invoice must still be payable, so we fall
@@ -101,6 +105,8 @@ export async function POST(req: NextRequest) {
     stripeCustomerId,
     // Only offer the save when we know who to save it against.
     offerSaveCard: !!stripeCustomerId,
+    tipCents: tip.cents,
+    tipSelection: tip.selection,
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })

@@ -29,6 +29,8 @@ import { VisitsTab } from './components/VisitsTab'
 import { BillingTab } from './components/BillingTab'
 import { MessagesTab } from './components/MessagesTab'
 import { RequestsTab } from './components/RequestsTab'
+import { TipChooserDialog } from '@/components/payments/TipChooserDialog'
+import type { TipRequest } from '@/lib/payments/tips'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────
 // Public, no-login, scoped to the token's customer via get_portal_data — still
@@ -83,6 +85,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const [decidingChangeId, setDecidingChangeId] = useState<string | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
+  const [tipTarget, setTipTarget] = useState<{ invoiceId: string; amount: number } | null>(null)
   // 'confirming' = the customer came back from Stripe but our ledger hasn't recorded
   // it yet; 'confirmed' = a new payment row actually landed. Never conflate the two.
   const [justPaid, setJustPaid] = useState<'confirming' | 'confirmed' | null>(null)
@@ -679,14 +682,14 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return true
   }
 
-  async function pay(invoiceId: string) {
+  async function pay(invoiceId: string, tip: TipRequest) {
     if (payingId) return // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
     markInvoiceViewed(invoiceId)
     try {
       const res = await fetch('/api/portal/pay', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, invoiceId }),
+        body: JSON.stringify({ token, invoiceId, tip }),
       })
       const d = await res.json().catch(() => ({}))
       if (res.ok && d.url) { window.location.href = d.url; return } // redirecting to Stripe — stay disabled
@@ -738,7 +741,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   const biz = data.business
   const actions: PortalActions = {
-    token, accept, accepting, pay, payingId, paymentsEnabled,
+    token, accept, accepting,
+    pay: (invoiceId, baseAmount) => setTipTarget({ invoiceId, amount: baseAmount }),
+    payingId, paymentsEnabled,
     payQuoteDeposit, payingQuoteId, savePreference,
     paymentPending: justPaid === 'confirming',
     request: (message: string) => request(message),
@@ -973,6 +978,14 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       </div>
       {/* Styled confirmation dialogs (card removal, quote approval…). */}
       <ConfirmHost />
+      <TipChooserDialog open={!!tipTarget} baseAmount={tipTarget?.amount ?? 0} busy={!!payingId}
+        onClose={() => { if (!payingId) setTipTarget(null) }}
+        onConfirm={tip => {
+          const target = tipTarget
+          if (!target) return
+          setTipTarget(null)
+          void pay(target.invoiceId, tip)
+        }} />
     </div>
   )
 }

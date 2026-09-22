@@ -896,7 +896,7 @@ export interface Payment {
   amount: number
   currency: string
   provider: string
-  kind: 'payment' | 'credit'
+  kind: 'payment' | 'credit' | 'tip'
   method: string | null
   notes: string | null
   status: string

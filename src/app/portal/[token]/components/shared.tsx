@@ -31,7 +31,7 @@ export interface PortalActions {
   accept: (quoteId: string, optionId?: string, termsAck?: boolean) => void
   accepting: string | null
   /** Start Stripe checkout for one invoice (POST /api/portal/pay). */
-  pay: (invoiceId: string) => void
+  pay: (invoiceId: string, baseAmount: number) => void
   payingId: string | null
   /** Start Stripe checkout for a quote's SCHEDULING DEPOSIT
    *  (POST /api/portal/quote-deposit — the amount is derived server-side). */

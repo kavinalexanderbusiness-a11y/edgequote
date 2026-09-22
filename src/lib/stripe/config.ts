@@ -53,6 +53,9 @@ export async function createInvoiceCheckoutSession(
     // the checkout page is the one surface where our own copy can't add context.
     // Cosmetic by design: the amount stays chargeCents, server-derived.
     chargeLabel?: string | null
+    /** Server-validated optional gratuity. Never used by AutoPay/off-session. */
+    tipCents?: number
+    tipSelection?: 'none' | '10' | '15' | '20' | 'custom'
   },
 ): Promise<CheckoutResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
@@ -60,6 +63,8 @@ export async function createInvoiceCheckoutSession(
   // otherwise charge the invoice amount as-is.
   const cents = opts.chargeCents != null ? Math.round(opts.chargeCents) : Math.round(Number(invoice.amount) * 100)
   if (!Number.isFinite(cents) || cents <= 0) return { ok: false, error: 'This invoice has no payable amount.' }
+  const tipCents = Math.round(opts.tipCents ?? 0)
+  if (!Number.isSafeInteger(tipCents) || tipCents < 0) return { ok: false, error: GENERIC_PAYMENT_ERROR }
 
   const form = new URLSearchParams()
   form.set('mode', 'payment')
@@ -71,6 +76,12 @@ export async function createInvoiceCheckoutSession(
   form.set('line_items[0][price_data][unit_amount]', String(cents))
   form.set('line_items[0][price_data][product_data][name]', opts.chargeLabel || `Invoice ${invoice.invoice_number}`)
   if (invoice.service_type) form.set('line_items[0][price_data][product_data][description]', invoice.service_type.slice(0, 200))
+  if (tipCents > 0) {
+    form.set('line_items[1][quantity]', '1')
+    form.set('line_items[1][price_data][currency]', 'cad')
+    form.set('line_items[1][price_data][unit_amount]', String(tipCents))
+    form.set('line_items[1][price_data][product_data][name]', 'Tip')
+  }
   // `customer` and `customer_email` are mutually exclusive — sending both is a
   // Stripe 400. Prefer the Customer: it's the only shape a card can be saved to,
   // and Stripe shows the address/email it already knows.
@@ -99,7 +110,12 @@ export async function createInvoiceCheckoutSession(
   form.set('metadata[user_id]', invoice.user_id)
   if (invoice.customer_id) form.set('metadata[customer_id]', invoice.customer_id)
   form.set('metadata[invoice_number]', invoice.invoice_number)
+  form.set('metadata[base_amount_cents]', String(cents))
+  form.set('metadata[tip_amount_cents]', String(tipCents))
+  form.set('metadata[tip_selection]', opts.tipSelection ?? 'none')
   form.set('payment_intent_data[metadata][invoice_id]', invoice.id)
+  form.set('payment_intent_data[metadata][base_amount_cents]', String(cents))
+  form.set('payment_intent_data[metadata][tip_amount_cents]', String(tipCents))
 
   // Read + TRIM the secret here. A stray newline/space in the env var makes fetch
   // throw a TypeError whose message embeds the header value (the key) — which is

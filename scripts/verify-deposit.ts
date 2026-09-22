@@ -290,9 +290,10 @@ console.log('\nThe charge paths all ask the engine, and the webhook cannot doubl
   check(`every webhook money write dedupes on stripe_session_id (found ${upserts.length}, need ≥3)`,
     upserts.length >= 3,
     'checkout, autopay and refund branches must all upsert with onConflict stripe_session_id + ignoreDuplicates')
-  check('the webhook records the amount CHARGED, never the invoice total',
-    /amount:\s*\(s\.amount_total\s*\?\?\s*0\)\s*\/\s*100/.test(webhook),
-    'a deposit charge must land in the ledger as the charged amount_total — recording the invoice total would close the invoice on a deposit')
+  check('the webhook records the BASE amount charged, never invoice total or tip',
+    /amount:\s*baseCents\s*\/\s*100/.test(webhook)
+      && /baseCents \+ tipCents !== totalCents/.test(webhook),
+    'the server-authored base amount must settle the invoice; an optional tip is a separate ledger row')
   check('the webhook never writes invoice status directly',
     !/from\('invoices'\)\.update\(\{[^}]*status/.test(webhook),
     'the recompute trigger owns status; the webhook only stamps payment_method')

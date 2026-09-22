@@ -29,7 +29,7 @@ function formatAmount(n: number): string {
 // s.6(6)(b)) — but states it in the gate instead of achieving it by omission.
 export async function sendPaymentReceipt(
   sb: SupabaseClient,
-  opts: { userId: string; customerId: string | null; amount: number; origin: string },
+  opts: { userId: string; customerId: string | null; amount: number; tip?: number; origin: string },
 ): Promise<void> {
   try {
     if (!opts.customerId) return
@@ -44,13 +44,20 @@ export async function sendPaymentReceipt(
     const biz = bizRow as { company_name: string | null; review_url: string | null; message_templates: Record<string, string> | null } | null
 
     const token = await ensurePortalToken(sb, opts.userId, opts.customerId)
-    const rendered = renderMessage('receipt', biz?.message_templates, {
+    const baseRendered = renderMessage('receipt', biz?.message_templates, {
       firstName: c.name,
       businessName: biz?.company_name || 'Your service provider',
       amount: formatAmount(opts.amount),
       portalLink: token ? portalUrl(token, opts.origin) : undefined,
       reviewLink: biz?.review_url || undefined,
     })
+    const tipLine = (opts.tip ?? 0) > 0 ? ` Includes a ${formatAmount(opts.tip!)} tip. Thank you.` : ''
+    const rendered = tipLine ? {
+      ...baseRendered,
+      sms: `${baseRendered.sms}${tipLine}`,
+      text: `${baseRendered.text}\n\n${tipLine.trim()}`,
+      html: `${baseRendered.html}<p>${tipLine.trim()}</p>`,
+    } : baseRendered
 
     // The ONE send path: gate → send → thread the bubble → per-channel attempts.
     // It keeps each channel's provider id, so a receipt that bounces can say so
@@ -69,4 +76,3 @@ export async function sendPaymentReceipt(
     console.error('[receipt] send failed:', e)
   }
 }
-

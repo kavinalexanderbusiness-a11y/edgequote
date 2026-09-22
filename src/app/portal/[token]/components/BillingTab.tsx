@@ -715,7 +715,7 @@ function DocRow({ d, actions, termsText, focus }: { d: DocItem; actions: PortalA
                   construction. While a deposit is outstanding it says so
                   ("Pay $2,000 deposit"), and the sub-line finishes the story:
                   what remains, and that it isn't being charged today. */}
-              <Button className="w-full sm:w-auto" onClick={() => actions.pay(d.rawId)} loading={actions.payingId === d.rawId}>
+              <Button className="w-full sm:w-auto" onClick={() => actions.pay(d.rawId, d.payAmount)} loading={actions.payingId === d.rawId}>
                 <CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.payAmount)}{d.payIsDeposit ? ' deposit' : ''}
               </Button>
               {depAsk && (

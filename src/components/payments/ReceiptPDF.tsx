@@ -76,9 +76,10 @@ export interface ReceiptPDFProps {
   payment: Payment
   invoice: Invoice
   settings: BusinessSettings | null
+  tipAmount?: number
 }
 
-export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps) {
+export function ReceiptDocument({ payment, invoice, settings, tipAmount = 0 }: ReceiptPDFProps) {
   const company = settings?.company_name || 'Your service provider'
   const contactLines = [settings?.phone, settings?.email_secondary || settings?.email_primary, settings?.website].filter(Boolean) as string[]
   const totals = invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value })
@@ -101,7 +102,10 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
   // by the rate instead would compute tax ON a tax-inclusive amount and overstate
   // the GST by a factor of (1 + rate) — inflating the operator's net-tax claim.
   // The rate comes from the ONE invoiceTotals engine, never a local constant.
-  const refundTotal = Math.abs(Number(payment.amount) || 0)
+  const basePaid = Math.abs(Number(payment.amount) || 0)
+  const isTipReceipt = payment.kind === 'tip'
+  const shownTip = isTipReceipt ? basePaid : Math.max(0, Number(tipAmount) || 0)
+  const refundTotal = isRefund || isTipReceipt ? basePaid : basePaid + shownTip
   const refundGst = totals.gstPercent > 0
     ? Math.round((refundTotal - refundTotal / (1 + totals.gstPercent / 100)) * 100) / 100
     : 0
@@ -163,6 +167,14 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
           <Text style={{ ...styles.paidAmount, ...(isRefund ? { color: '#B4232F' } : {}) }}>{isRefund ? '-' : ''}{money(refundTotal)}</Text>
           <Text style={styles.paidLabel}>{isRefund ? 'Refund issued' : `Payment received — ${paymentMethodLabel(payment.method || payment.provider)}`}</Text>
         </View>
+
+        {!isRefund && shownTip > 0 ? (
+          <View style={{ marginBottom: 16 }} wrap={false}>
+            {!isTipReceipt ? <View style={styles.row}><Text style={styles.rowLabel}>Invoice payment</Text><Text style={styles.rowValue}>{money(basePaid)}</Text></View> : null}
+            <View style={styles.row}><Text style={styles.rowLabel}>Tip</Text><Text style={styles.rowValue}>{money(shownTip)}</Text></View>
+            <Text style={[styles.muted, { marginTop: 5 }]}>The tip is separate from the invoice total and tax.</Text>
+          </View>
+        ) : null}
 
         <View style={styles.twoCol}>
           <View style={styles.col}>
@@ -272,6 +284,6 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
 
 // Render the receipt to a PDF blob (dynamic import at call sites — @react-pdf only
 // loads when a receipt is actually generated).
-export async function renderReceiptBlob(payment: Payment, invoice: Invoice, settings: BusinessSettings | null): Promise<Blob> {
-  return pdf(<ReceiptDocument payment={payment} invoice={invoice} settings={settings} />).toBlob()
+export async function renderReceiptBlob(payment: Payment, invoice: Invoice, settings: BusinessSettings | null, tipAmount = 0): Promise<Blob> {
+  return pdf(<ReceiptDocument payment={payment} invoice={invoice} settings={settings} tipAmount={tipAmount} />).toBlob()
 }

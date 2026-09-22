@@ -6,6 +6,7 @@ import { depositChargeAmount } from '@/lib/payments/deposit'
 import { tenantCapabilities, CAPABILITY_MESSAGE } from '@/lib/capabilities'
 import { appOrigin } from '@/lib/appOrigin'
 import { portalUrl } from '@/lib/portal'
+import { validateTipRequest } from '@/lib/payments/tips'
 
 export const dynamic = 'force-dynamic'
 
@@ -100,6 +101,9 @@ export async function POST(req: NextRequest) {
     { gst_percent: gst },
   )
   if (!(charge.amount > 0)) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
+  let tip
+  try { tip = validateTipRequest(body.tip, Math.round(charge.amount * 100)) }
+  catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'Invalid tip.' }, { status: 400 }) }
 
   // The customer paying their own invoice is the ONE moment they already have the
   // card out — so it's the only moment worth offering to keep it. Needs a Stripe
@@ -132,6 +136,8 @@ export async function POST(req: NextRequest) {
     chargeLabel: charge.isDeposit ? `Deposit — Invoice ${invoice.invoice_number}` : null,
     stripeCustomerId,
     offerSaveCard: !!stripeCustomerId,
+    tipCents: tip.cents,
+    tipSelection: tip.selection,
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })

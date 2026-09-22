@@ -30,6 +30,8 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { FileText, Check, Trash2, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, ChevronRight, ArrowLeft, Plus } from 'lucide-react'
 import { NewInvoiceDialog } from '@/components/payments/NewInvoiceDialog'
+import { TipChooserDialog } from '@/components/payments/TipChooserDialog'
+import type { TipRequest } from '@/lib/payments/tips'
 
 const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: '', label: 'All' },
@@ -142,6 +144,7 @@ export default function InvoicesPage() {
   const [depositMsg, setDepositMsg] = useState<{ invoice: Invoice; amount: number } | null>(null)
   const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
   const [payingId, setPayingId] = useState<string | null>(null)
+  const [tipInvoice, setTipInvoice] = useState<{ invoice: Invoice; amount: number } | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
   const [uid, setUid] = useState<string | null>(null)
@@ -279,12 +282,12 @@ export default function InvoicesPage() {
 
   // Create a hosted Stripe payment link for this invoice — open it (take a card
   // now) and copy it (text it to the customer).
-  async function payNow(inv: Invoice) {
+  async function payNow(inv: Invoice, tip: TipRequest) {
     setPayingId(inv.id)
     try {
       const res = await fetch('/api/payments/checkout', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceId: inv.id }),
+        body: JSON.stringify({ invoiceId: inv.id, tip }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || !d.url) { notify(d.error || 'Could not start payment.'); return }
@@ -321,7 +324,8 @@ export default function InvoicesPage() {
   // door uses (renderReceiptBlob off a ledger row); nothing is stored, and no
   // balance is projected.
   async function downloadLatestReceipt(inv: Invoice) {
-    const rows = (paymentsByInvoice[inv.id] || []).filter(p => Number(p.amount) > 0)
+    const allRows = paymentsByInvoice[inv.id] || []
+    const rows = allRows.filter(p => p.kind === 'payment' && Number(p.amount) > 0)
     const p = rows[rows.length - 1]      // the fetch orders paid_at ascending
     if (!p) { notify.error('This invoice has no recorded payment to receipt yet.'); return }
     setOpeningId(inv.id)
@@ -329,7 +333,9 @@ export default function InvoicesPage() {
       const [{ renderReceiptBlob }, { downloadBlob }] = await Promise.all([
         import('@/components/payments/ReceiptPDF'), import('@/lib/portalPdf'),
       ])
-      downloadBlob(await renderReceiptBlob(p, inv, settings), `${receiptNumberFor(p.id)}.pdf`)
+      const tip = allRows.filter(row => row.kind === 'tip' && row.stripe_payment_intent && row.stripe_payment_intent === p.stripe_payment_intent)
+        .reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
+      downloadBlob(await renderReceiptBlob(p, inv, settings, Math.max(0, tip)), `${receiptNumberFor(p.id)}.pdf`)
     } catch {
       notify.error('Could not generate the receipt PDF. Please try again.')
     } finally {
@@ -809,7 +815,11 @@ export default function InvoicesPage() {
               onToggleEditor={() => setEditId(editId === inv.id ? null : inv.id)}
               onDownloadPdf={() => openInvoicePdf(inv)}
               onDownloadReceipt={() => downloadLatestReceipt(inv)}
-              onCardLink={() => payNow(inv)}
+              onCardLink={() => {
+                const charge = depositChargeAmount(inv, settings)
+                if (!(charge.amount > 0)) { notify('This invoice is already paid.'); return }
+                setTipInvoice({ invoice: inv, amount: charge.amount })
+              }}
               onChargeCard={() => confirmChargeSavedCard(inv)}
               onSend={() => sendInvoice(inv)}
               onSendDepositRequest={(invoice, amount) => setDepositMsg({ invoice, amount })}
@@ -957,6 +967,14 @@ export default function InvoicesPage() {
             fetchInvoices()
           }} />
       )}
+      <TipChooserDialog open={!!tipInvoice} baseAmount={tipInvoice?.amount ?? 0} busy={!!payingId}
+        onClose={() => { if (!payingId) setTipInvoice(null) }}
+        onConfirm={tip => {
+          const target = tipInvoice
+          if (!target) return
+          setTipInvoice(null)
+          void payNow(target.invoice, tip)
+        }} />
     </div>
   )
 }

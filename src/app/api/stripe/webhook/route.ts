@@ -4,6 +4,7 @@ import { constructWebhookEvent, fetchSetupIntentCard, fetchPaymentIntentCard } f
 import { saveCardForCustomer } from '@/lib/payments/cards'
 import { sendPaymentReceipt } from '@/lib/comms/receipt'
 import { appOrigin, cleanOrigin } from '@/lib/appOrigin'
+import { splitRefundCents } from '@/lib/payments/tips'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -59,9 +60,9 @@ export async function POST(req: NextRequest) {
     // of a quote deposit carry the same intent id, and the credit leg is not the
     // money-in row this lookup exists to find.
     const { data } = await sb.from('payments')
-      .select('id, invoice_id, quote_id, user_id, customer_id, invoices(invoice_number)')
+      .select('id, invoice_id, quote_id, user_id, customer_id, amount, invoices(invoice_number)')
       .eq('stripe_payment_intent', piId).eq('kind', 'payment').gt('amount', 0).limit(1).maybeSingle()
-    const p = data as { id: string; invoice_id: string | null; quote_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
+    const p = data as { id: string; invoice_id: string | null; quote_id: string | null; user_id: string; customer_id: string | null; amount: number; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
     if (!p) return null
     const inv = Array.isArray(p.invoices) ? p.invoices[0] : p.invoices
     return { ...p, invoiceNumber: inv?.invoice_number ?? null }
@@ -149,14 +150,31 @@ export async function POST(req: NextRequest) {
       const invoiceId = s.metadata?.invoice_id
       const userId = s.metadata?.user_id
       if (invoiceId && userId) {
+        const totalCents = Number(s.amount_total ?? 0)
+        // Sessions created before tip support have neither split key. They are
+        // ordinary no-tip checkouts and remain replayable during Stripe's retry
+        // window. Once either split key exists, require the complete exact pair.
+        const hasAmountSplit = s.metadata?.base_amount_cents != null || s.metadata?.tip_amount_cents != null
+        const baseCents = hasAmountSplit ? Number(s.metadata?.base_amount_cents) : totalCents
+        const tipCents = hasAmountSplit ? Number(s.metadata?.tip_amount_cents) : 0
+        // Metadata is written by our server when the session is created. Refuse a
+        // malformed or mismatched event rather than allowing a tip to settle an
+        // invoice or a truncated base amount to be recorded as paid.
+        if (!Number.isSafeInteger(baseCents) || baseCents <= 0 ||
+            !Number.isSafeInteger(tipCents) || tipCents < 0 ||
+            baseCents + tipCents !== totalCents) {
+          console.error('[stripe] checkout amount metadata mismatch', { session: s.id, baseCents, tipCents, totalCents })
+          return NextResponse.json({ error: 'invalid checkout amounts' }, { status: 500 })
+        }
         // One payment row per session (unique stripe_session_id) — duplicate
         // deliveries are ignored rather than double-counted.
         const payRes = await sb.from('payments').upsert({
           user_id: userId,
           customer_id: s.metadata?.customer_id ?? null,
           invoice_id: invoiceId,
-          amount: (s.amount_total ?? 0) / 100,
+          amount: baseCents / 100,
           currency: s.currency ?? 'cad',
+          kind: 'payment', provider: 'stripe', method: 'stripe',
           stripe_session_id: s.id,
           stripe_payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null,
           status: 'paid',
@@ -170,6 +188,21 @@ export async function POST(req: NextRequest) {
           console.error('[stripe] payment upsert failed:', payRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
+        const tipRes = tipCents > 0 ? await sb.from('payments').upsert({
+          user_id: userId,
+          customer_id: s.metadata?.customer_id ?? null,
+          invoice_id: invoiceId,
+          amount: tipCents / 100,
+          currency: s.currency ?? 'cad',
+          kind: 'tip', provider: 'stripe', method: 'stripe',
+          stripe_session_id: `tip:${s.id}`,
+          stripe_payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null,
+          status: 'paid', paid_at: now(), notes: 'Customer tip',
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id') : { data: [], error: null }
+        if (tipRes.error) {
+          console.error('[stripe] tip upsert failed:', tipRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
         // The recompute_invoice_paid trigger derives status + paid_at from the ledger
         // the moment the payment row lands; here we only stamp the method for display.
         // Scoped to the owner from metadata (never touches someone else's invoice).
@@ -180,9 +213,9 @@ export async function POST(req: NextRequest) {
         // ignores the duplicate → no second receipt); best-effort + time-boxed so
         // a slow provider never stalls the webhook 200.
         const receiptCustomer = s.metadata?.customer_id ?? null
-        if ((payRes.data?.length ?? 0) > 0 && receiptCustomer) {
+        if (((payRes.data?.length ?? 0) > 0 || (tipRes.data?.length ?? 0) > 0) && receiptCustomer) {
           await Promise.race([
-            sendPaymentReceipt(sb, { userId, customerId: receiptCustomer, amount: (s.amount_total ?? 0) / 100, origin }),
+            sendPaymentReceipt(sb, { userId, customerId: receiptCustomer, amount: totalCents / 100, tip: tipCents / 100, origin }),
             new Promise<void>(resolve => setTimeout(resolve, 6000)),
           ])
         }
@@ -436,22 +469,47 @@ export async function POST(req: NextRequest) {
             `${cad(refunded)} of the scheduling deposit refunded — the booking is no longer secured by it.`, p.customer_id, 'quote')
         }
         if (p.invoice_id && refunded > 0) {
+          const { data: originalTipRows } = await sb.from('payments').select('amount')
+            .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('stripe_payment_intent', piId)
+            .eq('kind', 'tip').gt('amount', 0)
+          const originalTipCents = Math.round(((originalTipRows as { amount: number }[] | null) || [])
+            .reduce((sum, row) => sum + (Number(row.amount) || 0), 0) * 100)
+          const originalBaseCents = Math.round((Number(p.amount) || 0) * 100)
+          const desired = splitRefundCents(Math.round(refunded * 100), originalBaseCents, originalTipCents)
           const { data: prior } = await sb.from('payments').select('amount')
             .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('kind', 'payment')
             .lt('amount', 0).like('stripe_session_id', `refund:${ch.id}:%`)
           const already = ((prior as { amount: number }[] | null) || []).reduce((s, r) => s + Math.abs(Number(r.amount) || 0), 0)
-          const delta = Math.round((refunded - already) * 100) / 100
+          const delta = Math.round((desired.baseCents / 100 - already) * 100) / 100
           if (delta > 0.005) {
             const refRes = await sb.from('payments').upsert({
               user_id: p.user_id, customer_id: p.customer_id, invoice_id: p.invoice_id,
               amount: -delta, currency: 'cad', provider: 'stripe', kind: 'payment', method: 'refund',
               status: 'paid', paid_at: now(),
-              stripe_session_id: `refund:${ch.id}:${Math.round(refunded * 100)}`,
+              stripe_session_id: `refund:${ch.id}:base:${Math.round(refunded * 100)}`,
               stripe_payment_intent: piId,
               notes: full ? 'Full refund (Stripe)' : 'Partial refund (Stripe)',
             }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
             if (refRes.error) {
               console.error('[stripe] refund ledger write failed:', refRes.error.message)
+              return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+            }
+          }
+          const { data: priorTips } = await sb.from('payments').select('amount')
+            .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('kind', 'tip')
+            .lt('amount', 0).like('stripe_session_id', `refund-tip:${ch.id}:%`)
+          const alreadyTips = ((priorTips as { amount: number }[] | null) || []).reduce((sum, row) => sum + Math.abs(Number(row.amount) || 0), 0)
+          const tipDelta = Math.round((desired.tipCents / 100 - alreadyTips) * 100) / 100
+          if (tipDelta > 0.005) {
+            const tipRef = await sb.from('payments').upsert({
+              user_id: p.user_id, customer_id: p.customer_id, invoice_id: p.invoice_id,
+              amount: -tipDelta, currency: 'cad', provider: 'stripe', kind: 'tip', method: 'refund',
+              status: 'paid', paid_at: now(), stripe_payment_intent: piId,
+              stripe_session_id: `refund-tip:${ch.id}:${Math.round(refunded * 100)}`,
+              notes: full ? 'Tip refunded (Stripe)' : 'Tip partly refunded (Stripe)',
+            }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+            if (tipRef.error) {
+              console.error('[stripe] tip refund ledger write failed:', tipRef.error.message)
               return NextResponse.json({ error: 'db write failed' }, { status: 500 })
             }
           }
