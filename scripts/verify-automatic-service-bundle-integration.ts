@@ -44,6 +44,11 @@ const priced = publicWebsiteLeadResponse({ ok: true, body: {} }, {
 })
 assert.equal((priced.quote as Record<string, unknown>).state, 'priced')
 assert.equal((priced.quote as Record<string, unknown>).bundle_price, 160)
+assert.equal((priced.quote as Record<string, unknown>).bundle_discount, 10)
+assert.deepEqual(
+  ((priced.quote as Record<string, unknown>).lines as Array<Record<string, unknown>>).map(line => line.price),
+  [75, 95],
+)
 assert.equal(JSON.stringify(priced).includes('must_not_leak'), false)
 
 const handoff = publicWebsiteLeadResponse({ ok: true, body: {} }, {
@@ -56,6 +61,15 @@ const handoff = publicWebsiteLeadResponse({ ok: true, body: {} }, {
 })
 assert.equal((handoff.quote as Record<string, unknown>).state, 'written_quote_handoff')
 assert.equal((handoff.quote as Record<string, unknown>).bundle_price, null)
+assert.equal('bundle_discount' in (handoff.quote as Record<string, unknown>), false)
+assert.equal(
+  ((handoff.quote as Record<string, unknown>).lines as Array<Record<string, unknown>>)[0].price,
+  75,
+)
+assert.equal(
+  ((handoff.quote as Record<string, unknown>).lines as Array<Record<string, unknown>>)[1].price,
+  null,
+)
 
 const tampered = publicWebsiteLeadResponse({ ok: true, body: {} }, {
   state: 'priced', estimate_status: 'written_estimate', quote_number: 'EPS-X',

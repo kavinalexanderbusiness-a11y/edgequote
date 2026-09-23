@@ -119,10 +119,15 @@ async function main() {
       (select count(*)::int from public.jobs) jobs,
       (select count(*)::int from public.payments) payments,
       (select count(*)::int from public.invoices) invoices,
+      (select sum(unit_price)::numeric from public.quote_services) gross_lines,
+      (select sum(coalesce(discount_value,0))::numeric from public.quote_services) bundle_savings,
       (select status from public.website_leads where id=$1) lead_status`,[LEAD]) as {rows:Array<Record<string,number|string>>}
     const row = evidence.rows[0]
     if (row.quotes !== 1 || row.lines !== 2 || row.jobs !== 0 || row.payments !== 0 || row.invoices !== 0 || row.lead_status !== 'quoted') {
       throw new Error(`writer side effects invalid ${JSON.stringify(row)}`)
+    }
+    if (Number(row.gross_lines) !== 180 || Number(row.bundle_savings) !== 18) {
+      throw new Error(`itemized line prices or bundle savings invalid ${JSON.stringify(row)}`)
     }
     const tampered = structuredClone(decision)
     tampered.lines[0].decision.economics.profit = 999
