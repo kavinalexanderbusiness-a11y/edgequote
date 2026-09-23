@@ -140,6 +140,7 @@ if (releasePreflight) {
     '20260922200202_secure_public_quote_scheduling.sql',
     '20260922210000_auto_mowing_quote_rules.sql',
     '20260922220000_private_customer_uploads.sql',
+    '20260923083454_automatic_service_pricing_and_day_holds.sql',
   ]
   check('all estimator release migrations are present',
     requiredReleaseMigrations.every(name => migrationFiles.includes(name)))
@@ -157,6 +158,18 @@ if (releasePreflight) {
        where n.nspname = 'public' and c.relname = 'auto_mowing_quote_rule_versions'
          and c.relkind = 'r' and c.relrowsecurity
     ) as ok`))
+  check('immutable automatic service pricing table exists with RLS', await scalar(`
+    select exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = 'automatic_service_pricing_versions'
+         and c.relkind = 'r' and c.relrowsecurity
+    ) as ok`))
+  check('immutable automatic bundle pricing table exists with RLS', await scalar(`
+    select exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = 'automatic_bundle_pricing_versions'
+         and c.relkind = 'r' and c.relrowsecurity
+    ) as ok`))
 
   const requiredFunctions = [
     'public.consume_public_intake_rate_limit(text,text,text,integer,integer)',
@@ -168,6 +181,8 @@ if (releasePreflight) {
     'public.save_auto_mowing_quote_rules(jsonb)',
     'public.issue_auto_mowing_quote(text,uuid,uuid,uuid,jsonb,jsonb,jsonb)',
     'public.record_auto_mowing_review_reasons(text,uuid,uuid,jsonb)',
+    'public.save_automatic_service_pricing_version(text,jsonb)',
+    'public.save_automatic_bundle_pricing_version(jsonb)',
   ]
   for (const signature of requiredFunctions) {
     const literal = signature.replace(/'/g, "''")
@@ -192,6 +207,12 @@ if (releasePreflight) {
   check('owner rule save is authenticated-only', await scalar(`
     select has_function_privilege('authenticated', 'public.save_auto_mowing_quote_rules(jsonb)', 'execute')
        and not has_function_privilege('anon', 'public.save_auto_mowing_quote_rules(jsonb)', 'execute') as ok`))
+  check('owner automatic-service price save is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.save_automatic_service_pricing_version(text,jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.save_automatic_service_pricing_version(text,jsonb)', 'execute') as ok`))
+  check('owner automatic-bundle price save is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.save_automatic_bundle_pricing_version(jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.save_automatic_bundle_pricing_version(jsonb)', 'execute') as ok`))
   check('owner schedule configuration is authenticated-only', await scalar(`
     select has_function_privilege('authenticated', 'public.configure_public_quote_scheduling(boolean,integer,integer,integer,integer)', 'execute')
        and not has_function_privilege('anon', 'public.configure_public_quote_scheduling(boolean,integer,integer,integer,integer)', 'execute') as ok`))
