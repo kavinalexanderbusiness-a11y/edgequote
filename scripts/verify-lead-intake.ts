@@ -134,6 +134,10 @@ H('Public website schema boundary')
   const measured = validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
     services_needed: ['Lawn Mowing & Edging'], lawn_area_sqft: '2450',
+    address_source: 'google_places', address_place_id: 'ChIJ-test',
+    address_city: 'Calgary', address_province: 'AB', address_country: 'CA',
+    address_quadrant: 'SE', address_latitude: '50.9', address_longitude: '-114.0',
+    address_checked_at: '2026-09-23T20:08:03.743Z', route_review_status: 'required',
     lawn_polygon: JSON.stringify([{ section: 'other', ring: [
       { lat: 51, lng: -114 }, { lat: 51.0001, lng: -114 }, { lat: 51.0001, lng: -114.0001 },
     ] }]),
@@ -150,6 +154,12 @@ H('Public website schema boundary')
   }).ok, false)
   check('rejects a negative measured lawn area', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', lawn_area_sqft: '-10',
+  }).ok, false)
+  check('rejects an invalid coordinate', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', address_latitude: '910',
+  }).ok, false)
+  check('rejects an unknown address provider', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', address_source: 'customer_html',
   }).ok, false)
   check('rejects unknown fields', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', admin: 'true',

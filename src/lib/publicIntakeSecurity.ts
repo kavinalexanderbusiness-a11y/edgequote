@@ -151,6 +151,10 @@ const TEXT_LIMITS: Record<string, number> = {
   lawn_area_sqft: 30, driveway_area_sqft: 30, lawn_polygon: 30_000,
   map_link: 1_000, travel_distance_km: 30, travel_fee: 30,
   marketing_consent: 8, estimate_shown: 1_000, photos_meta: 300,
+  address_source: 30, address_place_id: 200, address_city: 100,
+  address_province: 80, address_country: 80, address_quadrant: 8,
+  address_latitude: 30, address_longitude: 30, address_checked_at: 40,
+  route_review_status: 30,
   estimated_quote: 30, mowing_frequency: 30, booking_intent: 30,
   measurement_attestation: 8_000, measurement_confirmation: 30,
   consent_version: 60, consent_utc: 40,
@@ -162,6 +166,10 @@ const NUMERIC_TEXT_RANGES: Record<string, readonly [number, number]> = {
   travel_distance_km: [0, 5_000],
   travel_fee: [0, 1_000_000],
   estimated_quote: [0, 1_000_000],
+}
+const COORDINATE_RANGES: Record<string, readonly [number, number]> = {
+  address_latitude: [-90, 90],
+  address_longitude: [-180, 180],
 }
 
 export function validateWebsiteLeadPayload(input: Record<string, unknown>):
@@ -216,17 +224,19 @@ export function validateWebsiteLeadPayload(input: Record<string, unknown>):
       }
       continue
     }
-    if (key in NUMERIC_TEXT_RANGES) {
+    if (key in NUMERIC_TEXT_RANGES || key in COORDINATE_RANGES) {
       if (typeof value !== 'string' || value.length > (TEXT_LIMITS[key] || 0)) {
         return { ok: false, error: 'invalid field' }
       }
       const clean = value.trim()
       if (!clean) continue
-      if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(clean)) {
+      const signed = key in COORDINATE_RANGES
+      const pattern = signed ? /^-?(?:\d+(?:\.\d*)?|\.\d+)$/ : /^(?:\d+(?:\.\d*)?|\.\d+)$/
+      if (!pattern.test(clean)) {
         return { ok: false, error: 'invalid field' }
       }
       const numeric = Number(clean)
-      const [min, max] = NUMERIC_TEXT_RANGES[key]
+      const [min, max] = COORDINATE_RANGES[key] || NUMERIC_TEXT_RANGES[key]
       if (!Number.isFinite(numeric) || numeric < min || numeric > max) {
         return { ok: false, error: 'invalid field' }
       }
@@ -249,6 +259,18 @@ export function validateWebsiteLeadPayload(input: Record<string, unknown>):
   }
   if (out.booking_intent && out.booking_intent !== 'ready_to_book') {
     return { ok: false, error: 'invalid booking intent' }
+  }
+  if (out.address_source && !['manual', 'google_places', 'city_of_calgary'].includes(String(out.address_source))) {
+    return { ok: false, error: 'invalid address source' }
+  }
+  if (out.address_quadrant && !['NW', 'NE', 'SW', 'SE'].includes(String(out.address_quadrant))) {
+    return { ok: false, error: 'invalid address quadrant' }
+  }
+  if (out.route_review_status && !['required', 'review_required', 'eligible', 'outside_route'].includes(String(out.route_review_status))) {
+    return { ok: false, error: 'invalid route review status' }
+  }
+  if (out.address_checked_at && !Number.isFinite(Date.parse(String(out.address_checked_at)))) {
+    return { ok: false, error: 'invalid address checked time' }
   }
   if (out.mowing_frequency && !['weekly', 'biweekly', 'once'].includes(String(out.mowing_frequency))) {
     return { ok: false, error: 'invalid mowing frequency' }
