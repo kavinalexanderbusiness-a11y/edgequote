@@ -1665,6 +1665,12 @@ export interface BusinessSettings {
   work_start_time: string | null
   // Soft daily cap (drive + on-site hours) for overload / room-for-more signals.
   daily_capacity_hours: number | null
+  /** Default workers available on a work day; day_statuses may override it. */
+  default_crew_size?: number | null
+  /** Per-module and bounded feature configuration. Unknown keys are preserved. */
+  module_meta?: Record<string, unknown> | null
+  /** IANA timezone used for local schedule dates. */
+  timezone?: string | null
   // ── Payroll: overtime rules + pay period ───────────────────────────────────
   // Consumed ONLY by lib/payroll (the one payroll engine). Overtime law is
   // jurisdictional, so both thresholds default to null = "that rule doesn't

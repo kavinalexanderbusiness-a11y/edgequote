@@ -83,9 +83,9 @@ ok('the payment->customer weld is on the apply path',
 // and it is the one that matters, because a re-added policy would reopen it.
 ok('no SELECT policy over booking-uploads exists on the apply path',
   !/create policy "booking-uploads: read own"/i.test(code))
-ok('booking-uploads is bounded by size and MIME on the apply path',
-  /'booking-uploads'[\s\S]{0,120}?\b\d{6,}\b[\s\S]{0,200}?array\['image\//i.test(code)
-  || /update storage\.buckets[\s\S]{0,400}file_size_limit\s*=\s*\d+[\s\S]{0,400}allowed_mime_types/i.test(code))
+ok('booking-uploads remains size-bounded and is image-write-locked after cutover',
+  /'booking-uploads'[\s\S]{0,120}?\b\d{6,}\b/i.test(code)
+  && /allowed_mime_types\s*=\s*array\['application\/x-edgehq-read-only-legacy'\]/i.test(code))
 const bookingPolicyCode = code.toLowerCase()
 const anonPolicyCreateAt = bookingPolicyCode.lastIndexOf('create policy "booking_uploads_public_insert"')
 const anonPolicyDropAt = bookingPolicyCode.lastIndexOf('drop policy if exists "booking_uploads_public_insert"')
@@ -94,7 +94,11 @@ ok('anonymous clients cannot write directly to booking-uploads',
 const bookingUploadRoute = readFileSync(join(ROOT, 'src', 'app', 'api', 'public', 'booking', 'photos', 'route.ts'), 'utf8')
 ok('the public booking funnel uploads through the server-side admin route',
   /createAdminClient\(\)/.test(bookingUploadRoute)
-  && /\.storage\.from\('booking-uploads'\)[\s\S]{0,180}?\.upload\(/.test(bookingUploadRoute))
+  && /selectCustomerUploadTarget\(buckets, file\.type\)/.test(bookingUploadRoute)
+  && /\.storage\.from\(target\.bucket\)[\s\S]{0,180}?\.upload\(/.test(bookingUploadRoute))
+ok('future customer uploads use an explicitly private bucket with no client policies',
+  /'customer-uploads'[\s\S]{0,100}false/.test(code)
+  && !/create policy[^;]*customer[_-]uploads/i.test(code))
 ok('the paid-total recompute is tenant-filtered on the apply path',
   /p\.user_id = v_inv\.user_id/.test(code))
 
@@ -231,14 +235,13 @@ ok('B3: no SELECT policy exposes the booking-uploads bucket', pol.rows[0].n === 
 const bucket = await db.query(`select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'booking-uploads'`)
 ok('B3: booking uploads are size-bounded', Number(bucket.rows[0]?.file_size_limit) > 0,
   `file_size_limit = ${bucket.rows[0]?.file_size_limit}`)
-ok('B3: booking uploads are MIME-restricted to images',
-  Array.isArray(bucket.rows[0]?.allowed_mime_types) && bucket.rows[0].allowed_mime_types.length > 0
-    && bucket.rows[0].allowed_mime_types.every((m: string) => m.startsWith('image/')),
+ok('B3: the historical public bucket refuses new image MIME types',
+  JSON.stringify(bucket.rows[0]?.allowed_mime_types) === JSON.stringify(['application/x-edgehq-read-only-legacy']),
   `allowed_mime_types = ${JSON.stringify(bucket.rows[0]?.allowed_mime_types)}`)
 // Public uploads now pass through the server route, which resolves the booking
 // token, applies a rate limit, validates the file, and uploads with the admin
-// client. The bucket itself must therefore reject direct anonymous INSERTs while
-// preserving the owner-scoped authenticated upload path.
+// client. After the private-bucket cutover, the historical bucket rejects every
+// browser INSERT; owner/customer reads continue through existing public URLs.
 const anonIns = await db.query(`
   select count(*)::int as n from pg_policies
    where schemaname = 'storage' and tablename = 'objects'
@@ -249,7 +252,7 @@ const ownerIns = await db.query(`
    where schemaname = 'storage' and tablename = 'objects'
      and policyname = 'booking_uploads_authenticated_insert'
      and cmd = 'INSERT' and 'authenticated' = any(roles)`)
-ok('B3: the owner-scoped authenticated upload path is preserved', ownerIns.rows[0].n === 1)
+ok('B3: authenticated clients cannot add images to legacy public storage', ownerIns.rows[0].n === 0)
 
 // -- B4 / B5: the inventory + equipment welds, proved by attack ---------------
 // Seeded here rather than at the top because nothing above needs them, and a

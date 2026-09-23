@@ -450,6 +450,23 @@ check('the card sets no fixed pixel width', /\bw-\[\d+px\]|\bmin-w-\[\d{3,}px\]/
 check('the chosen option is announced via aria-pressed',
   /aria-pressed="true"/.test(render({ preferred_channel: 'email' })), true)
 
+// Commercial email needs more than a channel opt-in: the rendered message must
+// identify the sender with its mailing address and carry a working unsubscribe.
+// Pin every execution door so a future refactor cannot bypass one silently.
+H('11. Commercial email fails closed without sender address + unsubscribe')
+const manualSend = readFileSync(join(__dirname, '../src/app/api/comms/send/route.ts'), 'utf8')
+const campaignSend = readFileSync(join(__dirname, '../src/app/api/cron/campaigns/route.ts'), 'utf8')
+const scheduledSend = readFileSync(join(__dirname, '../src/app/api/cron/scheduled-messages/route.ts'), 'utf8')
+check('manual sends load the mailing address', manualSend.includes("base_address, message_templates"), true)
+check('manual commercial email checks address and portal link before send',
+  /isCommercialMessage\(template\)[\s\S]{0,180}!msgVars\.mailingAddress[\s\S]{0,80}!msgVars\.portalLink/.test(manualSend), true)
+check('owner-edited manual text preserves its commercial template category',
+  manualSend.includes('renderBody(bodyOverride, msgVars, rendered.subject, template)'), true)
+check('campaign email removes a commercial email channel when compliance data is unavailable',
+  /deliveryChannels[\s\S]{0,220}biz\.mailingAddress && portalLink/.test(campaignSend), true)
+check('scheduled email applies the same fail-closed gate',
+  /deliveryChannels[\s\S]{0,220}msgVars\.mailingAddress && msgVars\.portalLink/.test(scheduledSend), true)
+
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
 if (fail > 0) process.exit(1)

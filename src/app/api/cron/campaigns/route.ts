@@ -199,6 +199,11 @@ async function handler(req: NextRequest) {
       // killed every campaign later in the loop for that day.
       try {
         const portalLink = needsPortal ? (await ensurePortalToken(supabase, camp.user_id, c.id).then(t => t ? portalUrl(t) : undefined)) : undefined
+        const deliveryChannels = channels.filter(ch => ch !== 'email' || !isCommercialMessage(templateKey)
+          || Boolean(biz.mailingAddress && portalLink))
+        if (channels.includes('email') && !deliveryChannels.includes('email')) {
+          notes.push(`Campaign "${camp.name}": commercial email skipped because the sender address or unsubscribe link is unavailable.`)
+        }
         // The owner's subject wins when they wrote one; renderMessage falls back to
         // the template's stock subject otherwise (so existing campaigns are
         // untouched, rather than every broadcast emailing "A quick hello").
@@ -210,7 +215,7 @@ async function handler(req: NextRequest) {
         const res = await dispatchToCustomer(supabase, {
           userId: camp.user_id,
           customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
-          channels, smsText: rendered.sms, emailSubject: rendered.subject, emailHtml: rendered.html, emailText: rendered.text,
+          channels: deliveryChannels, smsText: rendered.sms, emailSubject: rendered.subject, emailHtml: rendered.html, emailText: rendered.text,
           template: templateKey, meta: { campaign_id: camp.id, campaign_kind: camp.kind },
         })
 

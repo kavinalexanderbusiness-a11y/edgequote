@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { logSafeServerError } from '@/lib/serverError'
 import { withCronSweep, counts } from '@/lib/cron/heartbeat'
-import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
+import { renderMessage, renderBody, isCommercialMessage, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { logDispatch } from '@/lib/comms/log'
@@ -159,11 +159,17 @@ async function handler(req: NextRequest) {
       // Owner-edited text is the message; a fresh template render otherwise —
       // the same bodyOverride semantics as /api/comms/send.
       const out = row.body && row.body.trim() ? renderBody(row.body, msgVars, rendered.subject, template) : rendered
+      const requestedChannels = row.channels?.length ? row.channels : ['sms', 'email']
+      const deliveryChannels = requestedChannels.filter(ch => ch !== 'email' || !isCommercialMessage(template)
+        || Boolean(msgVars.mailingAddress && msgVars.portalLink))
+      if (requestedChannels.includes('email') && !deliveryChannels.includes('email')) {
+        notes.push(`Scheduled message ${row.id}: commercial email skipped because the sender address or unsubscribe link is unavailable.`)
+      }
 
       const res = await dispatchToCustomer(supabase, {
         userId: row.user_id,
         customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
-        channels: row.channels?.length ? row.channels : ['sms', 'email'],
+        channels: deliveryChannels,
         smsText: out.sms, emailSubject: out.subject, emailHtml: out.html, emailText: out.text,
         template, meta: { scheduled_id: row.id, scheduled_for: row.send_at },
       })

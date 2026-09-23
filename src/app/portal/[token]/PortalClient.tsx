@@ -24,6 +24,7 @@ import {
 } from './model'
 import type { PortalActions } from './components/shared'
 import { HomeTab, ReviewCard, ConsentCard, ContactMethodCard } from './components/HomeTab'
+import { QuoteSchedulingCard } from './components/QuoteSchedulingCard'
 import { PropertyTab } from './components/PropertyTab'
 import { VisitsTab } from './components/VisitsTab'
 import { BillingTab } from './components/BillingTab'
@@ -34,9 +35,10 @@ import { RequestsTab } from './components/RequestsTab'
 // Public, no-login, scoped to the token's customer via get_portal_data — still
 // THE only data source. One story across five surfaces
 // (Home · Visits · Billing · Property · Contact) with all derivation in
-// ./model.ts and all presentation in ./components/*. Every customer action
-// remains a REQUEST that threads into the owner's ONE Messages hub — the portal
-// never mutates the schedule or a plan on its own.
+// ./model.ts and all presentation in ./components/*. Ordinary customer changes
+// remain REQUESTS that thread into the owner's ONE Messages hub. The one narrow
+// exception is an accepted, deposit-cleared quote whose owner-approved route,
+// duration and crew may create its first visit through the guarded scheduling RPC.
 
 // THE tab alias, in one place because two call sites set the tab: goTab (pills,
 // in-app navigation) and the deep-link effect, which calls setTab DIRECTLY.
@@ -929,6 +931,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               banners above stay outside it (they aren't tab content). */}
           <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${activeTab}`} tabIndex={-1} className="focus-visible:outline-none">
             {activeTab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
+            {activeTab === 'home' && data.quotes.filter(q => q.status === 'accepted'
+              || (q.status === 'scheduled' && data.jobs.some(j => j.quote_id === q.id && ['scheduled', 'in_progress'].includes(j.status)))).map(q => (
+              <QuoteSchedulingCard key={q.id} token={token} quoteId={q.id} quoteNumber={q.quote_number} onScheduled={load} />
+            ))}
             {/* Reachability outranks the review ask: a missing phone or email is
                 why a visit can't be confirmed or an invoice sent. Renders nothing
                 at all when the file is complete — and nothing when the payload is

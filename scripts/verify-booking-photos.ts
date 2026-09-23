@@ -105,6 +105,14 @@ check('the durable ref parses back to the same path', customerUploadPath(REF), `
 check('a path containing a token-like top folder is refused', customerUploadRef(`token/booking/${PHOTO}.jpg`), null)
 check('legacy validator allows only booking-uploads', !!safeLegacyCustomerPhotoUrl(LEGACY), true)
 check('private display uses the authenticated reader', customerPhotoDisplayUrl(REF).startsWith('/api/customer-photos/file?ref='), true)
+const migration = readFileSync('supabase/migrations/20260922220000_private_customer_uploads.sql', 'utf8')
+check('customer upload bucket is explicitly private', /'customer-uploads'[\s\S]*?false/.test(migration), true)
+check('the private bucket has no anon/authenticated policies', !/create policy/i.test(migration), true)
+check('the cutover removes every known browser write policy from legacy public storage',
+  /drop policy if exists "booking_uploads_public_insert"/.test(migration)
+    && /drop policy if exists "booking_uploads_authenticated_insert"/.test(migration), true)
+check('the cutover makes legacy storage reject image writes even from a stale service route',
+  /allowed_mime_types\s*=\s*array\['application\/x-edgehq-read-only-legacy'\]/.test(migration), true)
 const uploadRoute = readFileSync('src/app/api/public/booking/photos/route.ts', 'utf8')
 check('booking upload selects from the committed bucket catalog before writing',
   uploadRoute.includes('inspectCustomerUploadBuckets(admin)')

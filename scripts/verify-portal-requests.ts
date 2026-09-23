@@ -169,6 +169,8 @@ check('a phone that reports no MIME type still works from the name',
     /portal_request_photos_ok[\s\S]{0,400}array_length\(p, 1\), 0\) <= 6/i.test(sql))
   check('the SQL validator pins the same portal/<uuid>/<uuid>.<ext> shape',
     /\^portal\/\[0-9a-f\]\{8\}/.test(sql) && /\\\.\(jpg\|jpeg\|png\|webp\|heic\|heif\)\$/.test(sql))
+  check('the SQL validator also accepts the private customer-upload portal ref',
+    /\^customer-upload:\[0-9a-f\]\{8\}[\s\S]{0,500}\/portal\//.test(sql))
   check('the media column stores paths, never URLs (no https in the shape)',
     !/portal_request_photos_ok[\s\S]{0,400}https/i.test(sql))
 

@@ -25,6 +25,9 @@ import {
 // so "the CRM can see it" is proven rather than assumed.
 import { extractBookingPhotos } from '../src/lib/bookingPhotos'
 import { validateWebsiteLeadPayload } from '../src/lib/publicIntakeSecurity'
+import { websiteLeadSite } from '../src/lib/publicIntakeSecurity'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 let pass = 0
 let fail = 0
@@ -122,9 +125,32 @@ H('Public website schema boundary')
 {
   const valid = validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
-    services_needed: ['Lawn Mowing & Edging'], marketing_consent: 'no',
+    services_needed: 'Lawn Mowing & Edging, Lawn Fertilization', marketing_consent: 'no',
+    lawn_polygon: '', estimated_quote: '', mowing_frequency: '', booking_intent: '',
   })
   ok('accepts the production form contract', valid.ok)
+  check('keeps requested services as clean lead text',
+    valid.ok && valid.payload.services_needed, 'Lawn Mowing & Edging, Lawn Fertilization')
+  const measured = validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
+    services_needed: ['Lawn Mowing & Edging'], lawn_area_sqft: '2450',
+    lawn_polygon: JSON.stringify([{ section: 'other', ring: [
+      { lat: 51, lng: -114 }, { lat: 51.0001, lng: -114 }, { lat: 51.0001, lng: -114.0001 },
+    ] }]),
+    estimated_quote: '65', mowing_frequency: 'weekly', booking_intent: 'ready_to_book',
+  })
+  ok('accepts a measured ready-to-book estimate', measured.ok)
+  check('parses the lawn outline into canonical JSON',
+    measured.ok && typeof measured.payload.lawn_polygon === 'object', true)
+  check('rejects an unknown booking-intent value', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', booking_intent: 'auto_schedule',
+  }).ok, false)
+  check('rejects a non-numeric website estimate before the database cast', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', estimated_quote: 'not-a-number',
+  }).ok, false)
+  check('rejects a negative measured lawn area', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', lawn_area_sqft: '-10',
+  }).ok, false)
   check('rejects unknown fields', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', admin: 'true',
   }).ok, false)
@@ -137,6 +163,34 @@ H('Public website schema boundary')
   check('rejects malformed email', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', email: 'not-an-email',
   }).ok, false)
+}
+
+// The marketing site intentionally sends a non-secret site id. EdgeHQ must map
+// that id to the submit-only booking token on the server and the route must use
+// the resolved token. This pins both halves of the integration contract without
+// ever placing a production token in a browser fixture.
+H('Public site-id to private intake-token contract')
+{
+  const prior = process.env.EDGE_WEBSITE_LEAD_TOKEN
+  process.env.EDGE_WEBSITE_LEAD_TOKEN = 'server-only-booking-token'
+  const resolved = websiteLeadSite('edge-property-services-yyc')
+  check('known EPS site id resolves to the server-only token', resolved?.token, 'server-only-booking-token')
+  ok('known EPS site id permits the two production origins',
+    resolved?.origins.includes('https://edgepropertyservicesyyc.ca') === true
+      && resolved?.origins.includes('https://www.edgepropertyservicesyyc.ca') === true)
+  check('an unknown site id fails closed', websiteLeadSite('unknown-site'), null)
+  if (prior === undefined) delete process.env.EDGE_WEBSITE_LEAD_TOKEN
+  else process.env.EDGE_WEBSITE_LEAD_TOKEN = prior
+
+  const route = readFileSync(resolve(process.cwd(), 'src/app/api/website-lead/route.ts'), 'utf8')
+  ok('website lead route resolves the site query before accepting the request',
+    /resolveWebsiteLeadSite\(siteId\)/.test(route)
+      && /searchParams\.get\('site'\)/.test(route))
+  ok('website lead route submits with the resolved private token',
+    /submitLead\(\{ token: site\.token/.test(route))
+  ok('website lead route binds automatic pricing and marketing consent to the same tenant token',
+    /bookingToken: site\.token/.test(route)
+      && /p_token: site\.token/.test(route))
 }
 
 // (2) MULTIPLE photos all preserved, in order.

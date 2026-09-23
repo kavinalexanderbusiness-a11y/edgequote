@@ -11,6 +11,7 @@ import {
   sortedOptions,
 } from '@/lib/quoteOptions'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
+import { PublicSchedulingApproval } from '@/components/quotes/PublicSchedulingApproval'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { HistoryPanel } from '@/components/audit/HistoryPanel'
 import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
@@ -1811,6 +1812,8 @@ export default function QuoteDetailPage() {
               </div>
             )}
           </div>
+
+          <PublicSchedulingApproval quote={quote} services={services} />
 
           {/* ⭐ THE TWO NOTES, NEVER IN ONE BOX. This is the owner's preview of a
               document the customer receives, so the field that WILL be on it and
