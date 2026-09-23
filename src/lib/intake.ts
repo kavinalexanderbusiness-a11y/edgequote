@@ -5,6 +5,15 @@ import { sanitizeSourceInput } from '@/lib/attribution'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logSafeServerError } from '@/lib/serverError'
 import { WEBSITE_LEAD_OWNER_ALERT_TEMPLATE } from '@/lib/websiteLeadAlert'
+import {
+  CUSTOMER_UPLOAD_BUCKET,
+  LEGACY_CUSTOMER_UPLOAD_BUCKET,
+  customerPhotoReference,
+  customerUploadRef,
+  inspectCustomerUploadBuckets,
+  selectCustomerUploadTarget,
+  signedCustomerPhotoUrls,
+} from '@/lib/customerUploadPhotos'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -24,18 +33,17 @@ export interface IntakeResult {
 // ── Customer photos attached to a website lead ───────────────────────────────
 // THE marketing site posts its photos INLINE as base64 objects
 // (`photos: [{ base64, contentType, filename }]`) — it does not upload them
-// anywhere itself. That payload was persisted verbatim into
+// anywhere itself. Older code persisted that payload verbatim into
 // `website_leads.raw_submission`, so the bytes were technically kept, in a form
 // NOTHING reads: every photo surface in the app looks for the canonical contract
-// the BOOKING door already established — `photos: string[]` of public URLs
+// the booking door established — `photos: string[]` of durable references
 // (quotes.lead_meta.photos → lib/bookingPhotos.extractBookingPhotos → JobPhotos).
 // That mismatch is why 17 real customer photos across 9 leads were invisible in
 // the CRM and absent from the owner email, while raw_submission grew to 4 MB.
 //
-// So: decode → upload to the SAME `booking-uploads` bucket the booking door uses
-// → rewrite `payload.photos` to the URL array BEFORE the RPC writes
-// raw_submission. No new bucket, no new column, no second gallery, no migration —
-// the existing canonical representation, reached from the second door.
+// So: decode → upload to the private `customer-uploads` bucket → rewrite
+// `payload.photos` to private object references BEFORE the RPC writes
+// raw_submission. Owner views and email then mint short-lived signed URLs.
 export interface InlinePhoto { base64: string; contentType: string; filename: string }
 
 // Matches the booking door's cap (BookingClient allows 6); the site's own "up to
@@ -52,7 +60,7 @@ const EXT_BY_TYPE: Record<string, string> = {
 
 /**
  * Split a submission's `photos` into the inline base64 items we must upload and
- * the entries that are ALREADY canonical URLs (a future site version, or a
+ * entries that are ALREADY durable refs (or compatible historical URLs) which
  * re-submission) which pass through untouched. Anything malformed is COUNTED, never
  * silently dropped — a lost photo the owner never hears about is the bug this fixes.
  */
@@ -65,9 +73,11 @@ export function extractInlinePhotos(payload: Record<string, unknown>): {
   const alreadyUrls: string[] = []
   let rejected = 0
   for (const item of raw) {
-    // Already canonical — leave it exactly as it is.
+    // Already canonical — normalize private refs and allow only the historical
+    // Supabase booking bucket, never an arbitrary remote tracking URL.
     if (typeof item === 'string') {
-      if (/^https?:\/\//i.test(item.trim())) alreadyUrls.push(item.trim())
+      const ref = customerPhotoReference(item)
+      if (ref) alreadyUrls.push(ref)
       else rejected++
       continue
     }
@@ -115,7 +125,7 @@ export function decodeInlinePhoto(p: InlinePhoto): { bytes: Buffer; contentType:
 /**
  * Fold upload results back into the payload the RPC will persist.
  *
- * Success → `photos` becomes the canonical URL array, so every existing reader
+ * Success → `photos` becomes the canonical reference array, so every existing reader
  * (LeadSummary, the owner email, JobPhotos) finds it without knowing this door
  * exists. Failure → the ORIGINAL base64 is preserved under `photos_unprocessed`
  * and counted in `photos_failed`, so a network blip can never be mistaken for
@@ -171,11 +181,10 @@ export async function submitLead(opts: {
 
   const anon = createClient(url, key)
 
-  // Materialize inline photos into the canonical URL contract BEFORE the RPC runs —
+  // Materialize inline photos into the canonical reference contract BEFORE the RPC runs —
   // the RPC is the only writer of website_leads.raw_submission (anon cannot UPDATE
   // it afterwards), so this is the one point where the payload can still be fixed.
-  // Uploads use the SAME anon client and the SAME public `booking-uploads` bucket as
-  // the booking door, whose INSERT policy already covers {anon, authenticated}.
+  // Uploads use the server-only service client and the private customer bucket.
   const { inline, alreadyUrls, rejected } = extractInlinePhotos(opts.payload)
   let payload = opts.payload
   let photoReport: { received: number; stored: number; failed: number } | null = null
@@ -262,8 +271,7 @@ export async function submitLead(opts: {
   return { ok: true, status: 200, body: { ok: true, ...result, ...photos } }
 }
 
-// Upload decoded photos to the booking-uploads bucket, mirroring the booking door's
-// path convention (`<token>/<uuid>-<safe-name>`). Per-photo try/catch: one bad file
+// Upload decoded photos to the private customer-uploads bucket. Per-photo try/catch: one bad file
 // can never abort the batch or throw out of intake — it is reported as failed so the
 // caller preserves its bytes and says so.
 async function uploadLeadPhotos(
@@ -271,19 +279,35 @@ async function uploadLeadPhotos(
 ): Promise<{ urls: string[]; failed: InlinePhoto[] }> {
   const urls: string[] = []
   const failed: InlinePhoto[] = []
+  const { data: settings, error: settingsError } = await uploader.from('business_settings')
+    .select('user_id').eq('booking_token', token).eq('booking_enabled', true).maybeSingle()
+  const userId = !settingsError && typeof settings?.user_id === 'string' ? settings.user_id : ''
+  if (!userId) return { urls, failed: [...photos] }
+  const buckets = await inspectCustomerUploadBuckets(uploader)
+  if (!buckets) return { urls, failed: [...photos] }
   for (const p of photos) {
     try {
       const decoded = decodeInlinePhoto(p)
       if (!decoded) { failed.push(p); continue }
-      const safe = p.filename.replace(/[^a-zA-Z0-9.\-_]/g, '_').slice(-60) || 'photo'
-      const base = safe.replace(/\.[a-z0-9]{2,5}$/i, '')
-      // Never place the booking token in a public object URL. It is a credential
-      // for other public flows and must remain server-side.
-      const path = `website/${crypto.randomUUID()}-${base}.${decoded.ext}`
-      const { error } = await uploader.storage.from('booking-uploads')
+      const target = selectCustomerUploadTarget(buckets, decoded.contentType)
+      if (!target) { failed.push(p); continue }
+      const path = target.mode === 'private'
+        ? `${userId}/website/${crypto.randomUUID()}.${decoded.ext}`
+        : `website/${crypto.randomUUID()}.${decoded.ext}`
+      const { error } = await uploader.storage.from(target.bucket)
         .upload(path, decoded.bytes, { contentType: decoded.contentType, upsert: false })
       if (error) { failed.push(p); continue }
-      urls.push(uploader.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
+      if (target.mode === 'legacy') {
+        urls.push(uploader.storage.from(LEGACY_CUSTOMER_UPLOAD_BUCKET).getPublicUrl(path).data.publicUrl)
+        continue
+      }
+      const ref = customerUploadRef(path)
+      if (!ref) {
+        await uploader.storage.from(CUSTOMER_UPLOAD_BUCKET).remove([path])
+        failed.push(p)
+        continue
+      }
+      urls.push(ref)
     } catch { failed.push(p) }
   }
   return { urls, failed }
@@ -314,8 +338,8 @@ export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  * all, so a customer who attached four pictures of the job produced an email that
  * looked identical to one who attached none.
  *
- * Photos are rendered as the canonical public URLs (the same links the CRM gallery
- * opens) — an owner reading mail on a phone taps straight through to the picture.
+ * The caller resolves private refs to short-lived URLs before building this email;
+ * the durable storage path is never exposed as a permanent public link.
  */
 export function buildLeadEmail(source: string, p: Record<string, unknown>): { subject: string; html: string; text: string } {
   const service = leadField(p, ['requestedServices', 'services', 'service', 'serviceType', 'service_type'])
@@ -412,7 +436,12 @@ async function emailOwnerAboutLead(
     status = 'skipped'
     detail += ' · primary business email is not configured'
   } else {
-    const { subject, html, text } = buildLeadEmail(source, p)
+    // Email receives one-hour bearer URLs; the durable private refs stay in the
+    // database and are never disclosed outside authenticated EdgeHQ views.
+    const emailPayload = admin && userId
+      ? { ...p, photos: await signedCustomerPhotoUrls(admin, p.photos, userId, 60 * 60) }
+      : p
+    const { subject, html, text } = buildLeadEmail(source, emailPayload)
     const result = await sendEmail(emailPrimary, subject, html, text)
     status = result.sent ? 'sent' : 'error'
     providerId = result.sent ? (result.id ?? null) : null

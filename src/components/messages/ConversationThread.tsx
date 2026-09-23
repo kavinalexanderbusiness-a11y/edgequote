@@ -15,7 +15,7 @@ import { SmsCost } from '@/components/comms/SmsCost'
 import { AssistButton } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { thumbUrl } from '@/lib/photos'
-import { extractBookingPhotos } from '@/lib/bookingPhotos'
+import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
 import { Send, StickyNote, Clock, Mail, MessageSquare, Camera, ChevronUp, Loader2 } from 'lucide-react'
 import { format, isToday, isYesterday } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -85,7 +85,9 @@ export function ConversationThread({ customerId, onRead, autoFocus }: { customer
     ])
     const bookingPhotos: Photo[] = []
     for (const q of (qRes.data as { lead_meta?: unknown }[] || [])) {
-      for (const u of extractBookingPhotos(q.lead_meta)) bookingPhotos.push({ thumb: thumbUrl(u, 160, 160), full: u })
+      for (const p of bookingPhotoViews(extractBookingPhotos(q.lead_meta))) {
+        bookingPhotos.push({ thumb: thumbUrl(p.url, 160, 160), full: p.url })
+      }
     }
     // Mark THIS conversation read (you opened it) regardless of a later switch; only
     // the latest load is allowed to repaint the visible thread + refresh inbox counts.

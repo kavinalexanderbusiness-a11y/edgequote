@@ -23,7 +23,7 @@ create or replace function public.consume_public_intake_rate_limit(
 ) returns boolean
 language plpgsql
 security definer
-set search_path = public
+set search_path = 'public', 'pg_temp'
 as $function$
 declare
   v_user uuid;

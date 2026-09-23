@@ -77,6 +77,7 @@ function sqlFilesUnder(dir: string, out: string[] = [], includeArchive = false):
 const UUID_A = '11111111-2222-3333-4444-555555555555'
 const UUID_B = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 const GOOD_PATH = `portal/${UUID_A}/${UUID_B}.jpg`
+const PRIVATE_REF = 'customer-upload:11111111-1111-4111-8111-111111111111/portal/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333.jpg'
 
 // ═══════════════════════════════════════════════════════════════════════════
 H('1 · the engine — kinds and their words')
@@ -102,6 +103,7 @@ H('2 · media stays scoped — and the DATABASE is what enforces it')
 check('the bucket is the one customer-supplied photos already use',
   REQUEST_PHOTO_BUCKET === 'booking-uploads')
 check('a well-formed path is accepted', isRequestPhotoPath(GOOD_PATH))
+check('a well-formed private reference is accepted', isRequestPhotoPath(PRIVATE_REF))
 check('every accepted extension round-trips',
   ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'].every(e => isRequestPhotoPath(`portal/${UUID_A}/${UUID_B}.${e}`)))
 
@@ -124,8 +126,8 @@ for (const [label, v] of REJECT) check(`refused: ${label}`, !isRequestPhotoPath(
 check('a non-string is refused', !isRequestPhotoPath(null) && !isRequestPhotoPath(42) && !isRequestPhotoPath({}))
 
 check('a mixed array keeps only what is valid',
-  JSON.stringify(requestPhotoPaths([GOOD_PATH, 'https://evil.example.com/x.jpg', null, `job-photos/${UUID_A}/${UUID_B}.jpg`])) ===
-  JSON.stringify([GOOD_PATH]))
+  JSON.stringify(requestPhotoPaths([GOOD_PATH, PRIVATE_REF, 'https://evil.example.com/x.jpg', null, `job-photos/${UUID_A}/${UUID_B}.jpg`])) ===
+  JSON.stringify([GOOD_PATH, PRIVATE_REF]))
 check('a non-array reads as no photos',
   requestPhotoPaths(null).length === 0 && requestPhotoPaths('a string').length === 0 && requestPhotoPaths(undefined).length === 0)
 check(`render caps at ${MAX_REQUEST_PHOTOS} however many arrived`,
@@ -319,12 +321,12 @@ H('8 · the portal side — every customer action is still a REQUEST')
     /preferredDate: kind === 'reschedule' && date \? date : null/.test(tab))
   check('a visit id only travels with a schedule change',
     /jobId: kind === 'reschedule' && chosenJob \? chosenJob\.id : null/.test(tab))
-  check('the upload keeps the storage PATH and discards the customer’s filename',
-    /requestPhotoPath\(batch, crypto\.randomUUID\(\), ext\)/.test(client))
-  check('the portal token never becomes part of a public-bucket path',
-    !/requestPhotoPath\([^)]*token/.test(client))
+  check('the upload crosses the server-side private-photo route',
+    /fetch\('\/api\/public\/portal\/photos'/.test(client))
+  check('the portal token is sent in the request body, never put in an object path',
+    /body\.set\('token', token\)/.test(client) && !/requestPhotoPath\([^)]*token/.test(client))
   check('a failed upload is counted, never returned as a path',
-    /if \(error\) failed\+\+[\s\S]{0,60}else paths\.push\(path\)/.test(client))
+    /!response\.ok \|\| !result\?\.ref\) failed\+\+[\s\S]{0,60}else paths\.push\(result\.ref\)/.test(client))
 
   // The copy IS the feature. Both the pre-send helper and the confirmation must
   // say that nothing happened yet.
@@ -358,8 +360,8 @@ H('9 · the owner side — the card acts on an ask and closes it honestly')
     !/\.from\('jobs'\)[\s\S]{0,120}\.(insert|update|delete)\(/.test(card))
   check('photos are re-validated at render, not trusted from the row',
     /requestPhotoPaths\(r\.photos\)/.test(card))
-  check('the photo URL is built from the bucket named in code',
-    /storage\.from\(REQUEST_PHOTO_BUCKET\)\.getPublicUrl/.test(card))
+  check('private refs use the authenticated signing route and legacy paths keep their bucket',
+    /customerUploadPath\(p\)[\s\S]{0,100}customerPhotoDisplayUrl\(p\)[\s\S]{0,140}storage\.from\(REQUEST_PHOTO_BUCKET\)\.getPublicUrl/.test(card))
   check('the recommended action comes from the engine, not from this component',
     /recommendedAction\(r\)/.test(card) && !/dashboard\/quotes\/new\?customer=/.test(card))
   check('closing a request does not message the customer, and says so',

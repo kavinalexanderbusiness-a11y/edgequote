@@ -16,7 +16,7 @@ import { requiredDeposit } from '@/lib/payments/depositGate'
 import { paymentTiming, approvalTimingLine } from '@/lib/payments/paymentTiming'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
-import { REQUEST_PHOTO_BUCKET, requestPhotoExt, requestPhotoPath } from '@/lib/portalRequests'
+import { requestPhotoExt } from '@/lib/portalRequests'
 import {
   buildPortalView, contactGap, normalizePortal, parsePortalDeepLink, primaryPortalAction,
   recentPaymentLanded, tabNavTarget,
@@ -602,29 +602,22 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return true
   }
 
-  // Photos attached to a request. They go to the SAME public bucket the booking
-  // door and website intake already use — one anon-upload path for
-  // customer-supplied photos, not a second one — and what we keep is the storage
-  // PATH, never a URL: the bucket is named in code wherever these are rendered,
-  // so a stored value can't address another bucket or an outside host. The
-  // customer's own FILE NAME is discarded (the path is two UUIDs and an
-  // extension), and the portal token is deliberately absent from it, because a
-  // token in a public-bucket URL is a token anyone holding that URL now has.
+  // Photos attached to a request cross a rate-limited server route into private
+  // storage. The database keeps a durable ref; it never receives a public URL.
   //
   // Returns the paths that actually landed plus how many failed, so the caller
   // can say so. A photo that didn't upload must never be presented as attached.
   async function uploadRequestPhotos(files: File[]): Promise<{ paths: string[]; failed: number }> {
-    const batch = crypto.randomUUID()
     const paths: string[] = []
     let failed = 0
     for (const f of files) {
-      const ext = requestPhotoExt(f.name, f.type)
-      const path = ext ? requestPhotoPath(batch, crypto.randomUUID(), ext) : null
-      if (!path) { failed++; continue }
+      if (!requestPhotoExt(f.name, f.type)) { failed++; continue }
       try {
-        const { error } = await supabase.storage.from(REQUEST_PHOTO_BUCKET).upload(path, f, { upsert: false, contentType: f.type || undefined })
-        if (error) failed++
-        else paths.push(path)
+        const body = new FormData(); body.set('token', token); body.set('photo', f)
+        const response = await fetch('/api/public/portal/photos', { method: 'POST', body })
+        const result = await response.json().catch(() => null) as { ref?: string } | null
+        if (!response.ok || !result?.ref) failed++
+        else paths.push(result.ref)
       } catch { failed++ } // a thrown upload (offline, blocked) is one failed photo, never an aborted loop
     }
     return { paths, failed }

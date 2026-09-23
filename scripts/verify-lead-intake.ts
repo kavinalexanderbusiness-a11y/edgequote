@@ -94,6 +94,7 @@ const B64 = Buffer.from('fake-image-bytes').toString('base64')
 const inline = (n: string) => ({ base64: B64, contentType: 'image/jpeg', filename: n })
 const URL1 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok/a.jpg'
 const URL2 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok/b.jpg'
+const PRIVATE_REF = 'customer-upload:11111111-1111-4111-8111-111111111111/website/22222222-2222-4222-8222-222222222222.jpg'
 
 // (1) ONE photo survives as a reference the rest of the app can read.
 {
@@ -105,6 +106,14 @@ const URL2 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok
   check('1 photo → payload.photos becomes the URL array', stored.photos, [URL1])
   check('1 photo → no false failure flag', stored.photos_failed, undefined)
   check('1 photo → other fields untouched', stored.name, 'Pat')
+}
+
+// Future uploads persist a private object reference, not a permanent public URL.
+{
+  const payload = { name: 'Pat', photos: [inline('front.jpg')] }
+  const stored = applyPhotoResults(payload, { urls: [PRIVATE_REF], failed: [], rejected: 0 })
+  check('private upload → payload keeps the durable reference', stored.photos, [PRIVATE_REF])
+  check('CRM reads the private reference', extractBookingPhotos(stored), [PRIVATE_REF])
 }
 
 // The public website route must accept the exact production form shape while

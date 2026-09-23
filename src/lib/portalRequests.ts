@@ -54,9 +54,9 @@ export function requestKindCustomerLabel(kind: string): string {
 }
 
 // ── Media contract ───────────────────────────────────────────────────────────
-// Customer request photos ride the SAME public bucket the booking door and the
-// website-lead intake already use (lib/intake.ts, book/[token]) — one anon-upload
-// path for customer-supplied photos, not a second one. They are NOT job_photos:
+// New customer request photos use private customer-uploads references. Historical
+// request paths still point at booking-uploads until the object backfill. They are
+// NOT job_photos:
 // that table's rows are the business's own proof-of-work and are rendered to the
 // customer as evidence, which a photo the customer sent is not.
 export const REQUEST_PHOTO_BUCKET = 'booking-uploads'
@@ -74,9 +74,10 @@ export const MAX_REQUEST_PHOTOS = 6
 // enforcement would not have accepted, so a row written before the constraint
 // existed still cannot paint. The verify guard pins them to the same shape.
 const PHOTO_PATH = /^portal\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|heic|heif)$/
+const PRIVATE_PHOTO_REF = /^customer-upload:[0-9a-f-]{36}\/portal\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(jpg|jpeg|png|webp|heic|heif)$/i
 
 export function isRequestPhotoPath(p: unknown): p is string {
-  return typeof p === 'string' && PHOTO_PATH.test(p)
+  return typeof p === 'string' && (PHOTO_PATH.test(p) || PRIVATE_PHOTO_REF.test(p))
 }
 
 /** The photos of a request that are safe to render, capped. Anything else is dropped. */

@@ -13,7 +13,7 @@
 // ARBITRARY 1000 rows — worse than dropping a predictable slice, because the
 // numbers become non-reproducible.
 
-import type { PostgrestFilterBuilder } from '@supabase/postgrest-js'
+import type { PostgrestFilterBuilder } from '@supabase/supabase-js'
 
 const PAGE_ROWS = 1000
 

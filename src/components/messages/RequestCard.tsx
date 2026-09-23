@@ -9,6 +9,7 @@ import { Banner } from '@/components/ui/Banner'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { cn, formatDate } from '@/lib/utils'
 import { thumbUrl } from '@/lib/photos'
+import { customerPhotoDisplayUrl, customerUploadPath } from '@/lib/customerUploadPhotos'
 import {
   REQUEST_PHOTO_BUCKET, alternateActions, openRequests, recommendedAction,
   requestDetails, requestKindLabel, requestPhotoPaths, type PortalRequest,
@@ -129,7 +130,9 @@ export function RequestCard({ customerId, onResolved }: { customerId: string; on
     <div className="space-y-2 mb-3">
       {rows.map(r => (
         <RequestRow key={r.id} r={r} job={r.job_id ? jobs[r.job_id] ?? null : null}
-          busy={busy === r.id} onClose={close} supabaseUrlFor={p => supabase.storage.from(REQUEST_PHOTO_BUCKET).getPublicUrl(p).data.publicUrl} />
+          busy={busy === r.id} onClose={close} supabaseUrlFor={p => customerUploadPath(p)
+            ? customerPhotoDisplayUrl(p)
+            : supabase.storage.from(REQUEST_PHOTO_BUCKET).getPublicUrl(p).data.publicUrl} />
       ))}
     </div>
   )
