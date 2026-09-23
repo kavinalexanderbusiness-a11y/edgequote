@@ -119,6 +119,8 @@
     "verify:auto-mowing-quotes": "tsx scripts/verify-auto-mowing-quotes.ts",
     "verify:automatic-service-pricing": "tsx scripts/verify-automatic-service-pricing.ts",
     "verify:automatic-service-pricing-runtime": "tsx scripts/verify-automatic-service-pricing-runtime.ts",
+    "verify:automatic-service-bundle-integration": "tsx scripts/verify-automatic-service-bundle-integration.ts",
+    "verify:automatic-service-bundle-runtime": "tsx scripts/verify-automatic-service-bundle-runtime.ts",
     "verify:website-lead-reliability": "tsx scripts/verify-website-lead-reliability.ts",
     "verify:quote-status": "tsx scripts/verify-quote-status.ts",
     "verify:quote-builder": "tsx scripts/verify-quote-builder.ts",

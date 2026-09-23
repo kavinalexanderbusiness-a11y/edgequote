@@ -183,6 +183,7 @@ if (releasePreflight) {
     'public.record_auto_mowing_review_reasons(text,uuid,uuid,jsonb)',
     'public.save_automatic_service_pricing_version(text,jsonb)',
     'public.save_automatic_bundle_pricing_version(jsonb)',
+    'public.issue_automatic_service_bundle_quote(text,uuid,uuid,jsonb,jsonb,jsonb)',
   ]
   for (const signature of requiredFunctions) {
     const literal = signature.replace(/'/g, "''")
@@ -196,6 +197,7 @@ if (releasePreflight) {
     'public.portal_schedule_accepted_quote(text,uuid,date)',
     'public.issue_auto_mowing_quote(text,uuid,uuid,uuid,jsonb,jsonb,jsonb)',
     'public.record_auto_mowing_review_reasons(text,uuid,uuid,jsonb)',
+    'public.issue_automatic_service_bundle_quote(text,uuid,uuid,jsonb,jsonb,jsonb)',
   ]
   for (const signature of serverOnlyFunctions) {
     const literal = signature.replace(/'/g, "''")

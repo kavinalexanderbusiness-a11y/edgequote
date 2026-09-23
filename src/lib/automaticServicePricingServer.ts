@@ -154,6 +154,47 @@ function review(code: string, decision: string): AutomaticServicePricingDecision
   return { state: 'review_required', missing: [{ code, decision }] }
 }
 
+export type AutomaticServiceCapacityRequirement =
+  | { ok: true; routeRuleVersion: string; durationMinutes: number; crewSize: number }
+  | { ok: false; code: string; decision: string }
+
+/** Read only the immutable inputs needed before collecting route capacity. */
+export async function loadAutomaticServiceCapacityRequirement(input: {
+  admin: SupabaseClient
+  bookingToken: string
+  serviceKey: AutomaticServiceKey
+  measuredSqft: number
+}): Promise<AutomaticServiceCapacityRequirement> {
+  const { data: settings, error: settingsError } = await input.admin.from('business_settings')
+    .select('user_id').eq('booking_token', input.bookingToken).eq('booking_enabled', true).maybeSingle()
+  if (settingsError || !settings?.user_id) {
+    return { ok: false, code: 'site_settings_unavailable', decision: 'Review the request because business settings could not be verified.' }
+  }
+  const { data: row, error } = await input.admin.from('automatic_service_pricing_versions')
+    .select('id,user_id,service_key,version,enabled,engine_version,route_rule_version,rules')
+    .eq('user_id', settings.user_id).eq('service_key', input.serviceKey).eq('is_active', true).maybeSingle()
+  if (error || !row) {
+    return { ok: false, code: 'pricing_version_missing', decision: `Save an immutable ${input.serviceKey} pricing version.` }
+  }
+  const version = pricingVersion(row as RuleRow)
+  if (!version.enabled || !version.routeRuleVersion?.trim()) {
+    return { ok: false, code: 'automatic_pricing_disabled', decision: `Enable automatic ${input.serviceKey} pricing with a route rule version.` }
+  }
+  const sorted = [...version.durationCrewBands]
+    .sort((a, b) => (a.maximumSqft ?? Infinity) - (b.maximumSqft ?? Infinity))
+  const band = sorted.find(candidate => candidate.maximumSqft == null || input.measuredSqft <= candidate.maximumSqft)
+  if (!band || !Number.isFinite(band.minutes) || band.minutes <= 0
+    || !Number.isInteger(band.crewSize) || band.crewSize < 1) {
+    return { ok: false, code: 'duration_crew_mapping_missing', decision: 'Save a duration and crew band covering this property.' }
+  }
+  return {
+    ok: true,
+    routeRuleVersion: version.routeRuleVersion,
+    durationMinutes: Math.round(band.minutes),
+    crewSize: band.crewSize,
+  }
+}
+
 /**
  * Loads the one owner-authorized version and runs the pure fail-closed engine.
  * Canonical address, route and measurement evidence must be produced by the
@@ -256,6 +297,68 @@ export async function attemptAutomaticServiceBundleEstimate(input: {
     }
   }
   return decideAutomaticServiceBundle(lines, bundleRules)
+}
+
+export type AutomaticServiceBundleWriteResult =
+  | { state: 'quoted'; quote_number: string; replayed: boolean }
+  | { state: 'review_required'; code: string; decision: string }
+
+function routeForWrite(route: CanonicalRouteEvidence): Record<string, unknown> {
+  return {
+    verified_by_server: route.verifiedByServer,
+    provider: route.provider,
+    place_id: route.placeId,
+    checked_at: route.checkedAt,
+    city: route.city,
+    province: route.province,
+    country: route.country,
+    quadrant: route.quadrant,
+    lat: route.lat,
+    lng: route.lng,
+    base_distance_km: route.baseDistanceKm,
+    route_travel_km: route.routeTravelKm,
+    nearby_jobs: route.nearbyJobs,
+    eligible_route_days: route.eligibleRouteDays,
+    route_rule_version: route.routeRuleVersion,
+  }
+}
+
+/** Calls the transaction-owned writer only for a completely priced decision. */
+export async function issueAutomaticServiceBundleQuote(input: {
+  admin: SupabaseClient
+  bookingToken: string
+  customerId: string
+  leadId: string
+  decision: AutomaticServiceBundleDecision
+  measurement: Record<string, unknown>
+  routeByService: Partial<Record<AutomaticServiceKey, CanonicalRouteEvidence | null>>
+}): Promise<AutomaticServiceBundleWriteResult> {
+  if (input.decision.state !== 'priced') {
+    return { state: 'review_required', code: 'bundle_not_priced', decision: 'Create a written owner-review quote for the complete request.' }
+  }
+  const routePayload: Record<string, unknown> = {}
+  for (const line of input.decision.lines) {
+    const key = line.serviceKey as AutomaticServiceKey
+    const route = input.routeByService[key]
+    if (!route?.verifiedByServer) {
+      return { state: 'review_required', code: 'route_not_server_verified', decision: 'Refresh server route evidence before issuing the quote.' }
+    }
+    routePayload[key] = routeForWrite(route)
+  }
+  const { data, error } = await input.admin.rpc('issue_automatic_service_bundle_quote', {
+    p_token: input.bookingToken,
+    p_customer_id: input.customerId,
+    p_lead_id: input.leadId,
+    p_decision: input.decision,
+    p_measurement: input.measurement,
+    p_route_by_service: routePayload,
+  })
+  const result = data && typeof data === 'object' && !Array.isArray(data)
+    ? data as Record<string, unknown> : null
+  if (error || result?.state !== 'quoted' || typeof result.quote_number !== 'string') {
+    return { state: 'review_required', code: 'quote_write_failed', decision: 'Review the request because the itemized quote could not be created atomically.' }
+  }
+  return { state: 'quoted', quote_number: result.quote_number, replayed: result.replayed === true }
 }
 
 /** Public response contains the supported price, never the internal cost model. */
