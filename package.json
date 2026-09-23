@@ -6,6 +6,8 @@
   },
   "private": true,
   "scripts": {
+    "contacts:reconcile": "tsx scripts/reconcile-native-contact.ts",
+    "verify:native-contact-reconciliation": "tsx scripts/verify-native-contact-reconciliation.ts",
     "dev": "next dev",
     "beta:invite": "tsx scripts/beta-invite.ts",
     "verify": "tsx scripts/verify-all.ts",
