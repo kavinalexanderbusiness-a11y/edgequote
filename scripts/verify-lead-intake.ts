@@ -138,6 +138,10 @@ H('Public website schema boundary')
     address_city: 'Calgary', address_province: 'AB', address_country: 'CA',
     address_quadrant: 'SE', address_latitude: '50.9', address_longitude: '-114.0',
     address_checked_at: '2026-09-23T20:08:03.743Z', route_review_status: 'required',
+    service_selections: [
+      { key: 'mowing', label: 'Lawn Mowing & Edging', cadence: 'weekly' },
+      { key: 'tree_pruning', label: 'Tree Pruning', cadence: null },
+    ],
     lawn_polygon: JSON.stringify([{ section: 'other', ring: [
       { lat: 51, lng: -114 }, { lat: 51.0001, lng: -114 }, { lat: 51.0001, lng: -114.0001 },
     ] }]),
@@ -146,6 +150,9 @@ H('Public website schema boundary')
   ok('accepts a measured ready-to-book estimate', measured.ok)
   check('parses the lawn outline into canonical JSON',
     measured.ok && typeof measured.payload.lawn_polygon === 'object', true)
+  check('keeps bounded multi-service selections',
+    measured.ok && Array.isArray(measured.payload.service_selections)
+      ? measured.payload.service_selections.length : 0, 2)
   check('rejects an unknown booking-intent value', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', booking_intent: 'auto_schedule',
   }).ok, false)
@@ -160,6 +167,17 @@ H('Public website schema boundary')
   }).ok, false)
   check('rejects an unknown address provider', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', address_source: 'customer_html',
+  }).ok, false)
+  check('rejects duplicate multi-service selections', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1',
+    service_selections: [
+      { key: 'mowing', label: 'Mowing', cadence: 'weekly' },
+      { key: 'mowing', label: 'Mowing again', cadence: 'weekly' },
+    ],
+  }).ok, false)
+  check('rejects unbounded selection fields', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1',
+    service_selections: [{ key: 'mowing', label: 'Mowing', cadence: 'weekly', price: 1 }],
   }).ok, false)
   check('rejects unknown fields', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', admin: 'true',

@@ -159,7 +159,7 @@ const TEXT_LIMITS: Record<string, number> = {
   measurement_attestation: 8_000, measurement_confirmation: 30,
   consent_version: 60, consent_utc: 40,
 }
-const ALLOWED = new Set([...Object.keys(TEXT_LIMITS), 'services_needed', 'photos'])
+const ALLOWED = new Set([...Object.keys(TEXT_LIMITS), 'services_needed', 'service_selections', 'photos'])
 const NUMERIC_TEXT_RANGES: Record<string, readonly [number, number]> = {
   lawn_area_sqft: [0, 10_000_000],
   driveway_area_sqft: [0, 10_000_000],
@@ -190,6 +190,35 @@ export function validateWebsiteLeadPayload(input: Record<string, unknown>):
       // submit_website_lead reads this with ->>, so persist plain service text
       // rather than a JSON-formatted array string in the lead and quote builder.
       out[key] = values.map(v => String(v).trim()).filter(Boolean).join(', ')
+      continue
+    }
+    if (key === 'service_selections') {
+      if (!Array.isArray(value) || value.length < 1 || value.length > 12) {
+        return { ok: false, error: 'invalid service selections' }
+      }
+      const seen = new Set<string>()
+      const selections: Array<{ key: string; label: string; cadence: string | null }> = []
+      for (const raw of value) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          return { ok: false, error: 'invalid service selections' }
+        }
+        const item = raw as Record<string, unknown>
+        if (Object.keys(item).some(field => !['key', 'label', 'cadence'].includes(field))) {
+          return { ok: false, error: 'invalid service selections' }
+        }
+        const serviceKey = typeof item.key === 'string' ? item.key.trim().toLowerCase() : ''
+        const label = typeof item.label === 'string' ? item.label.trim() : ''
+        const cadence = item.cadence == null ? null : String(item.cadence).trim().toLowerCase()
+        if (!/^[a-z][a-z0-9_]{0,39}$/.test(serviceKey) || !label || label.length > 100
+          || (cadence != null && !['one_time', 'weekly', 'biweekly', 'monthly', 'seasonal'].includes(cadence))) {
+          return { ok: false, error: 'invalid service selections' }
+        }
+        const identity = `${serviceKey}|${cadence || ''}`
+        if (seen.has(identity)) return { ok: false, error: 'duplicate service selection' }
+        seen.add(identity)
+        selections.push({ key: serviceKey, label, cadence })
+      }
+      out[key] = selections
       continue
     }
     if (key === 'lawn_polygon') {
