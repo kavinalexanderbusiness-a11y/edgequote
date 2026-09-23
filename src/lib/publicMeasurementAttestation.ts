@@ -54,8 +54,8 @@ export function verifyPublicMeasurementAttestation(input: {
   nowMs?: number
   secret?: string
 }): MeasurementVerification {
-  if (input.confirmation !== 'looks_right') {
-    return fail('measurement_not_confirmed_unchanged', 'Only an unchanged automatic outline confirmed with “Looks right” can be priced automatically.')
+  if (!['looks_right', 'automatic_applied'].includes(String(input.confirmation || ''))) {
+    return fail('measurement_not_confirmed_unchanged', 'Only an unchanged server-issued automatic outline can be priced automatically.')
   }
   const secret = String(input.secret ?? process.env.EDGE_ESTIMATOR_MEASUREMENT_SECRET ?? '').trim()
   if (secret.length < 32) return fail('measurement_verifier_unavailable', 'Review the lead because server measurement verification is not configured.')

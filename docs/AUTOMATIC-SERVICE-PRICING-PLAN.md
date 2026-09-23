@@ -75,6 +75,28 @@ or required margin price exceeds an owner-confirmed automatic limit.
 - `out_of_route`: the verified route economics exceed the owner-approved
   automatic limits. This is not based on quadrant.
 
+### Multi-service request contract
+
+The marketing form sends one bounded `service_selections` array while retaining
+the human-readable `services_needed` field for CRM history. Each selection has
+only `key`, `label`, and `cadence`. EdgeHQ prices each measurable service against
+its own immutable owner-confirmed version and returns one public line per
+selection.
+
+When every line is priced, EdgeHQ loads a separate immutable owner-confirmed
+bundle-pricing version. That version may explicitly authorize no discount, a
+percentage discount, or a fixed discount, capped by a saved maximum and a
+bundle margin floor. With no active bundle version, the request fails closed to
+written review. There is no implicit discount or guessed shared-cost adjustment.
+When any selected line is custom, not measurable, out of route, or missing a
+complete pricing version, the whole request becomes a `written_quote_handoff`.
+Supported line estimates may remain visible for review, but no final bundle
+price or booking state is returned. Measurement alone is never completion.
+
+The server input carries measurement and route evidence by service key. Lawn
+services may share one server-attested lawn measurement. Snow requires its own
+driveway/service-area evidence and must never reuse lawn square footage.
+
 The decision requires:
 
 1. a published service and active immutable owner pricing version;

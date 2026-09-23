@@ -3,11 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   decideAutomaticServicePrice,
+  decideAutomaticServiceBundle,
   OWNER_APPROVED_MOWING_BASES_2026_09_23,
   type AutomaticServicePricingInput,
   type AutomaticServicePricingVersion,
+  type AutomaticBundlePricingVersion,
 } from '../src/lib/automaticServicePricing'
-import { publicAutomaticServiceEstimate } from '../src/lib/automaticServicePricingServer'
+import { publicAutomaticServiceBundleEstimate, publicAutomaticServiceEstimate } from '../src/lib/automaticServicePricingServer'
 
 const now = Date.parse('2026-09-23T18:00:00.000Z')
 const rules: AutomaticServicePricingVersion = {
@@ -149,9 +151,91 @@ assert.equal(publicResponse.booking_status, 'not_booked')
 assert.equal('economics' in publicResponse, false)
 assert.equal('payment' in publicResponse, false)
 
+const fertilizationPriced = decideAutomaticServicePrice(fixture({
+  serviceKey: 'fertilization',
+  cadence: 'one_time',
+  rules: {
+    ...rules,
+    id: '10000000-0000-4000-8000-000000000004',
+    serviceKey: 'fertilization',
+    permittedCadences: ['one_time'],
+    basePrices: { one_time: 95 },
+    materialsCostBasisConfirmed: true,
+    materials: [{
+      key: 'fertilizer', packageCost: 35, packageQuantity: 10,
+      applicationQuantityPer1000Sqft: 2, wastePercent: 5, minimumPackages: 1,
+    }],
+  },
+}))
+assert.equal(fertilizationPriced.state, 'priced')
+const bundleRules: AutomaticBundlePricingVersion = {
+  id: '10000000-0000-4000-8000-000000000009',
+  userId: rules.userId,
+  version: 1,
+  enabled: true,
+  minimumServices: 2,
+  discountKind: 'percentage',
+  discountValue: 10,
+  maximumDiscount: 25,
+  minimumMarginPercent: 15,
+  pricingEngineVersion: 'automatic-bundle-v1',
+}
+const bundle = decideAutomaticServiceBundle([
+  { serviceKey: 'mowing', label: 'Lawn mowing', cadence: 'weekly', decision: weekly },
+  { serviceKey: 'fertilization', label: 'Lawn fertilization', cadence: 'one_time', decision: fertilizationPriced },
+], bundleRules)
+assert.equal(bundle.state, 'priced')
+assert.ok(bundle.state === 'priced')
+assert.equal(bundle.lines.length, 2)
+assert.equal(bundle.subtotal, bundle.lines.reduce((sum, line) => sum + Number(line.price), 0))
+assert.equal(bundle.discount, 21)
+assert.equal(bundle.bundlePrice, 189)
+const publicBundle = publicAutomaticServiceBundleEstimate(bundle)
+assert.equal(publicBundle.state, 'priced')
+assert.equal(publicBundle.bundle_price, bundle.bundlePrice)
+assert.equal(publicBundle.bundle_discount, bundle.discount)
+assert.equal(JSON.stringify(publicBundle).includes('economics'), false)
+
+const noBundleConfig = decideAutomaticServiceBundle([
+  { serviceKey: 'mowing', label: 'Lawn mowing', cadence: 'weekly', decision: weekly },
+  { serviceKey: 'fertilization', label: 'Lawn fertilization', cadence: 'one_time', decision: fertilizationPriced },
+])
+assert.equal(noBundleConfig.state, 'written_quote_handoff')
+assert.ok(noBundleConfig.state === 'written_quote_handoff')
+assert.equal(noBundleConfig.reason, 'bundle_pricing_not_configured')
+assert.equal(noBundleConfig.bundlePrice, null)
+
+const customHandoff = decideAutomaticServiceBundle([
+  { serviceKey: 'mowing', label: 'Lawn mowing', cadence: 'weekly', decision: weekly },
+  { serviceKey: 'tree_pruning', label: 'Tree pruning', cadence: null, decision: null },
+])
+assert.equal(customHandoff.state, 'written_quote_handoff')
+assert.ok(customHandoff.state === 'written_quote_handoff')
+assert.equal(customHandoff.bundlePrice, null)
+assert.equal(customHandoff.pricedSubtotal, weekly.state === 'priced' ? weekly.price : 0)
+assert.equal(customHandoff.lines[1].price, null)
+const publicHandoff = publicAutomaticServiceBundleEstimate(customHandoff)
+assert.equal(publicHandoff.state, 'written_quote_handoff')
+assert.equal(publicHandoff.bundle_price, null)
+assert.equal(decideAutomaticServiceBundle([]).state, 'written_quote_handoff')
+
+// Route premiums are server decisions within each line. The bundle calculator
+// sums those final line prices and has no input for a browser-supplied price.
+assert.ok(weekly.state === 'priced' && weekly.components.routePremium > 0)
+const serverSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/automaticServicePricingServer.ts'), 'utf8')
+const bundleSignature = serverSource.slice(
+  serverSource.indexOf('export async function attemptAutomaticServiceBundleEstimate'),
+  serverSource.indexOf('/** Public response contains', serverSource.indexOf('export async function attemptAutomaticServiceBundleEstimate')),
+)
+assert.doesNotMatch(bundleSignature, /clientPrice|estimated_quote|price:\s*input/i)
+
 const migration = fs.readFileSync(path.join(process.cwd(),
   'supabase/migrations/20260923083454_automatic_service_pricing_and_day_holds.sql'), 'utf8')
 assert.match(migration, /automatic service pricing versions are immutable/)
+assert.match(migration, /create table if not exists public\.automatic_bundle_pricing_versions/)
+assert.match(migration, /create or replace function public\.save_automatic_bundle_pricing_version/)
+assert.match(migration, /automatic bundle pricing: select own/)
+assert.doesNotMatch(migration, /insert into public\.automatic_bundle_pricing_versions[\s\S]*?values\s*\(\s*['"]automatic/i)
 assert.match(migration, /full_cost_basis_confirmed/)
 assert.match(migration, /snow_owner_authorized/)
 assert.match(migration, /public_quote_schedule_availability\(p_token, p_quote_id, 60\)/)

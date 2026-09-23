@@ -68,6 +68,10 @@ async function main() {
 
     await db.query(`insert into auth.users(id) values ($1)`, [OWNER])
     await db.query(`select set_config('request.jwt.claim.sub',$1,false)`, [OWNER])
+    const initialBundleVersions = await db.query(
+      `select count(*)::int n from public.automatic_bundle_pricing_versions`,
+    ) as { rows: Array<{ n: number }> }
+    if (initialBundleVersions.rows[0].n !== 0) throw new Error('migration silently seeded bundle pricing')
     const rules = {
       enabled: true,
       engine_version: 'automatic-service-v1', route_rule_version: 'route-v1',
@@ -93,6 +97,23 @@ async function main() {
     const versionId = saved.rows[0].result.id
     const rulesHash = saved.rows[0].result.rules_hash
     if (saved.rows[0].result.state !== 'saved' || !versionId) throw new Error('version was not saved')
+
+    const bundleSaved = await db.query(
+      `select public.save_automatic_bundle_pricing_version($1::jsonb) result`,
+      [JSON.stringify({
+        enabled: true, engine_version: 'automatic-bundle-v1', minimum_services: 2,
+        discount_kind: 'percentage', discount_value: 10, maximum_discount: 25,
+        minimum_margin_percent: 15,
+      })],
+    ) as { rows: Array<{ result: { state: string; id: string; rules_hash: string } }> }
+    if (bundleSaved.rows[0].result.state !== 'saved' || !bundleSaved.rows[0].result.id) {
+      throw new Error('bundle version was not saved')
+    }
+    const activeBundle = await db.query(
+      `select count(*)::int n from public.automatic_bundle_pricing_versions where user_id=$1 and is_active`,
+      [OWNER],
+    ) as { rows: Array<{ n: number }> }
+    if (activeBundle.rows[0].n !== 1) throw new Error('bundle version did not become uniquely active')
 
     await db.query(`insert into public.customers(id,user_id,name) values ($1,$2,'Customer')`,[CUSTOMER,OWNER])
     await db.query(`insert into public.properties(id,user_id,customer_id) values ($1,$2,$3)`,[PROPERTY,OWNER,CUSTOMER])

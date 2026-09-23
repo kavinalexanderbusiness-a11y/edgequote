@@ -253,7 +253,7 @@ export function validateWebsiteLeadPayload(input: Record<string, unknown>):
   if (out.mowing_frequency && !['weekly', 'biweekly', 'once'].includes(String(out.mowing_frequency))) {
     return { ok: false, error: 'invalid mowing frequency' }
   }
-  if (out.measurement_confirmation && !['looks_right', 'corrected', 'rejected'].includes(String(out.measurement_confirmation))) {
+  if (out.measurement_confirmation && !['automatic_applied', 'looks_right', 'corrected', 'rejected'].includes(String(out.measurement_confirmation))) {
     return { ok: false, error: 'invalid measurement confirmation' }
   }
   if (out.marketing_consent && !['yes', 'no'].includes(String(out.marketing_consent))) {

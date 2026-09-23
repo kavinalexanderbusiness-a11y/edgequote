@@ -88,6 +88,7 @@ const verify = (changes: Record<string, unknown> = {}) => verifyPublicMeasuremen
 })
 ok('valid unchanged City result verifies', verify().ok)
 ok('corrected outline cannot auto-price', !verify({ confirmation: 'corrected' }).ok)
+ok('unchanged server outline can auto-apply without a second approval click', verify({ confirmation: 'automatic_applied' }).ok)
 ok('changed sqft cannot auto-price', !verify({ submittedSqft: '3077' }).ok)
 ok('changed polygon cannot auto-price', !verify({ submittedPolygon: [] }).ok)
 ok('changed address cannot auto-price', !verify({ submittedAddress: '999 Other St' }).ok)

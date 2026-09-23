@@ -149,7 +149,8 @@ export async function attemptAutomaticMowingQuote(input: {
       polygon: input.claimedPolygon,
       confidence: verified.measurement.confidence, source: verified.measurement.source,
       measured_at: verified.measurement.measuredAt, lat: verified.measurement.lat, lng: verified.measurement.lng,
-      verified_by: 'hmac_city_measurement_attestation', customer_confirmation: 'looks_right',
+      verified_by: 'hmac_city_measurement_attestation',
+      customer_confirmation: input.measurementConfirmation,
     },
     p_route: {
       neighborhood: null, base_distance_km: baseDistanceKm, nearby_jobs: density.within2km,

@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   decideAutomaticServicePrice,
+  decideAutomaticServiceBundle,
   type AutomaticMeasurementEvidence,
+  type AutomaticBundlePricingVersion,
+  type AutomaticServiceBundleDecision,
   type AutomaticServiceCadence,
   type AutomaticServiceKey,
   type AutomaticServicePricingDecision,
@@ -11,6 +14,12 @@ import {
   type PricingMaterialInput,
 } from '@/lib/automaticServicePricing'
 
+export interface AutomaticServiceBundleRequest {
+  serviceKey: AutomaticServiceKey | string
+  label: string
+  cadence: AutomaticServiceCadence | null
+}
+
 type RuleRow = {
   id: string
   user_id: string
@@ -19,6 +28,15 @@ type RuleRow = {
   enabled: boolean
   engine_version: string
   route_rule_version: string
+  rules: Record<string, unknown>
+}
+
+type BundleRuleRow = {
+  id: string
+  user_id: string
+  version: number
+  enabled: boolean
+  engine_version: string
   rules: Record<string, unknown>
 }
 
@@ -116,6 +134,22 @@ function pricingVersion(row: RuleRow): AutomaticServicePricingVersion {
   }
 }
 
+function bundlePricingVersion(row: BundleRuleRow): AutomaticBundlePricingVersion {
+  const rules = record(row.rules)
+  return {
+    id: row.id,
+    userId: row.user_id,
+    version: Number(row.version),
+    enabled: row.enabled === true,
+    minimumServices: Number(rules.minimum_services),
+    discountKind: String(rules.discount_kind || '') as AutomaticBundlePricingVersion['discountKind'],
+    discountValue: Number(rules.discount_value),
+    maximumDiscount: Number(rules.maximum_discount),
+    minimumMarginPercent: Number(rules.minimum_margin_percent),
+    pricingEngineVersion: row.engine_version,
+  }
+}
+
 function review(code: string, decision: string): AutomaticServicePricingDecision {
   return { state: 'review_required', missing: [{ code, decision }] }
 }
@@ -167,6 +201,63 @@ export async function attemptAutomaticServiceEstimate(input: {
   })
 }
 
+/**
+ * Prices each measurable service through its own immutable owner-confirmed
+ * rules. Unsupported/custom services deliberately have no synthetic decision;
+ * the bundle combiner converts them to a written-quote handoff.
+ */
+export async function attemptAutomaticServiceBundleEstimate(input: {
+  admin: SupabaseClient
+  bookingToken: string
+  services: AutomaticServiceBundleRequest[]
+  measurementByService: Partial<Record<AutomaticServiceKey, AutomaticMeasurementEvidence | null>>
+  routeByService: Partial<Record<AutomaticServiceKey, CanonicalRouteEvidence | null>>
+  nowMs?: number
+}): Promise<AutomaticServiceBundleDecision> {
+  const supported = new Set<AutomaticServiceKey>([
+    'mowing', 'fertilization', 'overseeding', 'topsoil', 'weed_treatment', 'snow',
+  ])
+  const lines = []
+  for (const service of input.services.slice(0, 12)) {
+    const serviceKey = String(service.serviceKey).trim().toLowerCase()
+    const automatic = supported.has(serviceKey as AutomaticServiceKey) && service.cadence != null
+    const decision = automatic
+      ? await attemptAutomaticServiceEstimate({
+          admin: input.admin,
+          bookingToken: input.bookingToken,
+          serviceKey: serviceKey as AutomaticServiceKey,
+          cadence: service.cadence!,
+          // Lawn services may deliberately share one server-attested lawn
+          // measurement. Snow must receive its own driveway/service-area
+          // evidence; this API never substitutes lawn area for it.
+          measurement: input.measurementByService[serviceKey as AutomaticServiceKey] ?? null,
+          route: input.routeByService[serviceKey as AutomaticServiceKey] ?? null,
+          nowMs: input.nowMs,
+        })
+      : null
+    lines.push({
+      serviceKey,
+      label: service.label,
+      cadence: service.cadence,
+      decision,
+    })
+  }
+  const needsBundleRules = lines.length > 1
+    && lines.every(line => line.decision?.state === 'priced')
+  let bundleRules: AutomaticBundlePricingVersion | null = null
+  if (needsBundleRules) {
+    const { data: settings, error: settingsError } = await input.admin.from('business_settings')
+      .select('user_id').eq('booking_token', input.bookingToken).eq('booking_enabled', true).maybeSingle()
+    if (!settingsError && settings?.user_id) {
+      const { data: row, error } = await input.admin.from('automatic_bundle_pricing_versions')
+        .select('id,user_id,version,enabled,engine_version,rules')
+        .eq('user_id', settings.user_id).eq('is_active', true).maybeSingle()
+      if (!error && row) bundleRules = bundlePricingVersion(row as BundleRuleRow)
+    }
+  }
+  return decideAutomaticServiceBundle(lines, bundleRules)
+}
+
 /** Public response contains the supported price, never the internal cost model. */
 export function publicAutomaticServiceEstimate(decision: AutomaticServicePricingDecision): Record<string, unknown> {
   if (decision.state === 'priced') {
@@ -187,4 +278,37 @@ export function publicAutomaticServiceEstimate(decision: AutomaticServicePricing
     return { state: 'out_of_route', message: 'This property needs a manual route review before we can confirm a price.' }
   }
   return { state: 'review_required', message: 'We need to review this property before confirming a price.' }
+}
+
+/** Public multi-service response: no internal costs, margins, rule IDs or gaps. */
+export function publicAutomaticServiceBundleEstimate(
+  decision: AutomaticServiceBundleDecision,
+): Record<string, unknown> {
+  const lines = decision.lines.map(line => ({
+    service: line.serviceKey,
+    label: line.label,
+    cadence: line.cadence,
+    state: line.state,
+    price: line.price,
+    price_label: line.priceLabel,
+  }))
+  if (decision.state === 'priced') {
+    return {
+      state: 'priced',
+      estimate_status: decision.estimateStatus,
+      lines,
+      subtotal: decision.subtotal,
+      bundle_discount: decision.discount,
+      bundle_price: decision.bundlePrice,
+      bundle_price_label: 'combined service total',
+      booking_status: 'not_booked',
+    }
+  }
+  return {
+    state: 'written_quote_handoff',
+    lines,
+    bundle_price: null,
+    message: 'We need to review the complete service bundle before confirming one written price.',
+    booking_status: 'not_booked',
+  }
 }

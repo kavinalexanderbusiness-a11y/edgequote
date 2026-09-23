@@ -10,6 +10,56 @@ export type AutomaticServiceKey =
 
 export type AutomaticServiceCadence = 'one_time' | 'weekly' | 'biweekly' | 'monthly' | 'seasonal'
 
+export interface AutomaticServiceBundleLineInput {
+  serviceKey: string
+  label: string
+  cadence: AutomaticServiceCadence | null
+  decision: AutomaticServicePricingDecision | null
+}
+
+export interface AutomaticBundlePricingVersion {
+  id: string
+  userId: string
+  version: number
+  enabled: boolean
+  minimumServices: number
+  discountKind: 'none' | 'percentage' | 'fixed'
+  discountValue: number
+  maximumDiscount: number
+  minimumMarginPercent: number
+  pricingEngineVersion: string
+}
+
+export interface AutomaticServiceBundleLine {
+  serviceKey: string
+  label: string
+  cadence: AutomaticServiceCadence | null
+  state: 'priced' | 'written_quote_handoff' | 'review_required' | 'out_of_route'
+  price: number | null
+  priceLabel: string | null
+  decision: AutomaticServicePricingDecision | null
+}
+
+export type AutomaticServiceBundleDecision =
+  | {
+      state: 'priced'
+      estimateStatus: 'written_estimate'
+      lines: AutomaticServiceBundleLine[]
+      subtotal: number
+      discount: number
+      bundlePrice: number
+      bundlePricingVersionId: string | null
+      bundlePricingVersion: number | null
+      pricingMode: 'single_owner_authorized_line' | 'owner_authorized_bundle'
+    }
+  | {
+      state: 'written_quote_handoff'
+      lines: AutomaticServiceBundleLine[]
+      pricedSubtotal: number
+      bundlePrice: null
+      reason: 'non_measurable_service' | 'owner_review_required' | 'bundle_pricing_not_configured'
+    }
+
 /**
  * Owner direction captured on 2026-09-23. These are proposed base rows for the
  * next immutable version, not silent runtime defaults. The engine prices only
@@ -129,6 +179,7 @@ export type AutomaticServicePricingDecision =
       requiredPrice: number
       routePremium: number
     }
+
   | {
       state: 'priced'
       estimateStatus: 'written_estimate'
@@ -176,6 +227,111 @@ export type AutomaticServicePricingDecision =
       }
       idempotencyKey: string
     }
+
+/**
+ * Combines separately authorized service decisions without inventing a bundle
+ * discount or shared-cost rule. A customer receives a final bundle total only
+ * when every selected line has a complete owner-approved price. Any custom,
+ * unavailable, out-of-route or incomplete line routes the whole request to a
+ * written quote while preserving supported line estimates for owner review.
+ */
+export function decideAutomaticServiceBundle(
+  input: AutomaticServiceBundleLineInput[],
+  bundleRules: AutomaticBundlePricingVersion | null = null,
+): AutomaticServiceBundleDecision {
+  if (!input.length) {
+    return {
+      state: 'written_quote_handoff', lines: [], pricedSubtotal: 0,
+      bundlePrice: null, reason: 'owner_review_required',
+    }
+  }
+  const seen = new Set<string>()
+  const lines = input.map(item => {
+    const key = item.serviceKey.trim().toLowerCase()
+    const duplicateKey = `${key}|${item.cadence || ''}`
+    if (!key || seen.has(duplicateKey) || !item.decision) {
+      return {
+        serviceKey: key || 'custom', label: item.label.trim() || 'Custom service', cadence: item.cadence,
+        state: 'written_quote_handoff' as const, price: null, priceLabel: null, decision: item.decision,
+      }
+    }
+    seen.add(duplicateKey)
+    if (item.decision.state === 'priced') {
+      return {
+        serviceKey: key, label: item.label.trim(), cadence: item.cadence,
+        state: 'priced' as const, price: item.decision.price,
+        priceLabel: item.decision.cadence === 'one_time' ? 'one-time service' : `${item.decision.cadence} per visit`,
+        decision: item.decision,
+      }
+    }
+    return {
+      serviceKey: key, label: item.label.trim(), cadence: item.cadence,
+      state: item.decision.state as 'review_required' | 'out_of_route',
+      price: null, priceLabel: null, decision: item.decision,
+    }
+  })
+  const pricedSubtotal = money(lines.reduce((sum, line) => sum + (line.price ?? 0), 0))
+  const handoff = lines.some(line => line.state !== 'priced')
+  if (handoff) {
+    return {
+      state: 'written_quote_handoff', lines, pricedSubtotal, bundlePrice: null,
+      reason: lines.some(line => line.state === 'written_quote_handoff')
+        ? 'non_measurable_service' : 'owner_review_required',
+    }
+  }
+  if (lines.length > 1) {
+    const validRules = bundleRules
+      && bundleRules.enabled
+      && bundleRules.minimumServices >= 2
+      && Number.isInteger(bundleRules.minimumServices)
+      && lines.length >= bundleRules.minimumServices
+      && Boolean(bundleRules.pricingEngineVersion.trim())
+      && Number.isFinite(bundleRules.discountValue) && bundleRules.discountValue >= 0
+      && Number.isFinite(bundleRules.maximumDiscount) && bundleRules.maximumDiscount >= 0
+      && Number.isFinite(bundleRules.minimumMarginPercent)
+      && bundleRules.minimumMarginPercent >= 0 && bundleRules.minimumMarginPercent < 100
+      && (bundleRules.discountKind !== 'none' || bundleRules.discountValue === 0)
+      && (bundleRules.discountKind !== 'percentage' || bundleRules.discountValue < 100)
+    if (!validRules) {
+      return {
+        state: 'written_quote_handoff', lines, pricedSubtotal,
+        bundlePrice: null, reason: 'bundle_pricing_not_configured',
+      }
+    }
+    const rawDiscount = bundleRules.discountKind === 'percentage'
+      ? pricedSubtotal * bundleRules.discountValue / 100
+      : bundleRules.discountKind === 'fixed' ? bundleRules.discountValue : 0
+    const discount = money(Math.min(rawDiscount, bundleRules.maximumDiscount, pricedSubtotal - 0.01))
+    if (!Number.isFinite(discount) || discount < 0 || pricedSubtotal - discount <= 0) {
+      return {
+        state: 'written_quote_handoff', lines, pricedSubtotal,
+        bundlePrice: null, reason: 'bundle_pricing_not_configured',
+      }
+    }
+    const bundlePrice = money(pricedSubtotal - discount)
+    const totalCost = money(lines.reduce((sum, line) => sum
+      + (line.decision?.state === 'priced' ? line.decision.economics.totalCost : 0), 0))
+    const marginPercent = bundlePrice > 0 ? dime((bundlePrice - totalCost) / bundlePrice * 100) : -Infinity
+    if (marginPercent + 1e-9 < bundleRules.minimumMarginPercent) {
+      return {
+        state: 'written_quote_handoff', lines, pricedSubtotal,
+        bundlePrice: null, reason: 'bundle_pricing_not_configured',
+      }
+    }
+    return {
+      state: 'priced', estimateStatus: 'written_estimate', lines,
+      subtotal: pricedSubtotal, discount, bundlePrice,
+      bundlePricingVersionId: bundleRules.id, bundlePricingVersion: bundleRules.version,
+      pricingMode: 'owner_authorized_bundle',
+    }
+  }
+  return {
+    state: 'priced', estimateStatus: 'written_estimate', lines,
+    subtotal: pricedSubtotal, discount: 0, bundlePrice: pricedSubtotal,
+    bundlePricingVersionId: null, bundlePricingVersion: null,
+    pricingMode: 'single_owner_authorized_line',
+  }
+}
 
 const MATERIAL_SERVICES = new Set<AutomaticServiceKey>([
   'fertilization', 'overseeding', 'topsoil', 'weed_treatment',

@@ -224,6 +224,93 @@ $function$;
 comment on table public.automatic_service_pricing_versions is
   'Append-only owner authorization for automatic service estimates. No active row means manual review.';
 
+-- Bundle pricing is a separate immutable owner decision. No row means two or
+-- more otherwise-priced services must return to written review; the server may
+-- not invent a discount or silently assume that no discount was intended.
+create table if not exists public.automatic_bundle_pricing_versions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  version integer not null check (version > 0),
+  created_at timestamptz not null default now(),
+  created_by uuid not null references auth.users(id),
+  confirmed_at timestamptz not null,
+  is_active boolean not null default true,
+  enabled boolean not null default false,
+  engine_version text not null check (length(btrim(engine_version)) between 1 and 80),
+  rules jsonb not null check (jsonb_typeof(rules) = 'object'),
+  rules_hash text not null check (rules_hash ~ '^[0-9a-f]{64}$'),
+  unique (user_id, version)
+);
+
+create unique index if not exists automatic_bundle_pricing_one_active
+  on public.automatic_bundle_pricing_versions(user_id) where is_active;
+
+alter table public.automatic_bundle_pricing_versions enable row level security;
+drop policy if exists "automatic bundle pricing: select own" on public.automatic_bundle_pricing_versions;
+create policy "automatic bundle pricing: select own" on public.automatic_bundle_pricing_versions
+  for select to authenticated using (auth.uid() = user_id);
+
+drop trigger if exists automatic_bundle_pricing_versions_immutable
+  on public.automatic_bundle_pricing_versions;
+create trigger automatic_bundle_pricing_versions_immutable before update or delete
+  on public.automatic_bundle_pricing_versions for each row
+  execute function public.automatic_service_pricing_versions_guard();
+
+create or replace function public.save_automatic_bundle_pricing_version(p_rules jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = 'public', 'pg_temp'
+as $function$
+declare
+  v_user uuid := auth.uid();
+  v_version integer;
+  v_id uuid;
+  v_engine text;
+  v_kind text;
+  v_value numeric;
+  v_max numeric;
+  v_margin numeric;
+  v_hash text;
+begin
+  if v_user is null then raise exception 'authentication required'; end if;
+  if jsonb_typeof(p_rules) <> 'object' or not p_rules ?& array[
+    'enabled','engine_version','minimum_services','discount_kind','discount_value',
+    'maximum_discount','minimum_margin_percent'
+  ] then raise exception 'complete every bundle pricing input'; end if;
+  v_engine := btrim(coalesce(p_rules->>'engine_version',''));
+  v_kind := lower(btrim(coalesce(p_rules->>'discount_kind','')));
+  v_value := (p_rules->>'discount_value')::numeric;
+  v_max := (p_rules->>'maximum_discount')::numeric;
+  v_margin := (p_rules->>'minimum_margin_percent')::numeric;
+  if length(v_engine) not between 1 and 80
+     or (p_rules->>'minimum_services')::integer not between 2 and 12
+     or v_kind not in ('none','percentage','fixed')
+     or v_value < 0 or v_max < 0 or v_margin not between 0 and 99.99
+     or (v_kind = 'none' and v_value <> 0)
+     or (v_kind = 'percentage' and v_value >= 100)
+     or (v_kind = 'fixed' and v_value > v_max) then
+    raise exception 'invalid bundle pricing rule';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(v_user::text || '|automatic-bundle-pricing', 0));
+  select coalesce(max(version),0) + 1 into v_version
+    from public.automatic_bundle_pricing_versions where user_id = v_user;
+  update public.automatic_bundle_pricing_versions set is_active = false
+    where user_id = v_user and is_active;
+  v_hash := encode(extensions.digest(convert_to(p_rules::text, 'UTF8'), 'sha256'), 'hex');
+  insert into public.automatic_bundle_pricing_versions (
+    user_id, version, created_by, confirmed_at, enabled, engine_version, rules, rules_hash
+  ) values (
+    v_user, v_version, v_user, now(), coalesce((p_rules->>'enabled')::boolean, false),
+    v_engine, p_rules, v_hash
+  ) returning id into v_id;
+  return jsonb_build_object('state','saved','id',v_id,'version',v_version,'rules_hash',v_hash);
+end;
+$function$;
+
+comment on table public.automatic_bundle_pricing_versions is
+  'Append-only owner authorization for multi-service totals and discounts. No active row means written review.';
+
 create table if not exists public.automatic_quote_day_holds (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -497,6 +584,9 @@ $function$;
 revoke all on table public.automatic_service_pricing_versions from public, anon, authenticated, service_role;
 grant select on table public.automatic_service_pricing_versions to authenticated;
 grant all on table public.automatic_service_pricing_versions to service_role;
+revoke all on table public.automatic_bundle_pricing_versions from public, anon, authenticated, service_role;
+grant select on table public.automatic_bundle_pricing_versions to authenticated;
+grant all on table public.automatic_bundle_pricing_versions to service_role;
 revoke all on table public.automatic_quote_day_holds from public, anon, authenticated, service_role;
 grant select on table public.automatic_quote_day_holds to authenticated;
 grant all on table public.automatic_quote_day_holds to service_role;
@@ -504,6 +594,9 @@ grant all on table public.automatic_quote_day_holds to service_role;
 revoke all on function public.save_automatic_service_pricing_version(text,jsonb)
   from public, anon, authenticated, service_role;
 grant execute on function public.save_automatic_service_pricing_version(text,jsonb) to authenticated;
+revoke all on function public.save_automatic_bundle_pricing_version(jsonb)
+  from public, anon, authenticated, service_role;
+grant execute on function public.save_automatic_bundle_pricing_version(jsonb) to authenticated;
 revoke all on function public.reserve_automatic_quote_day(text,uuid,date)
   from public, anon, authenticated, service_role;
 grant execute on function public.reserve_automatic_quote_day(text,uuid,date) to service_role;
