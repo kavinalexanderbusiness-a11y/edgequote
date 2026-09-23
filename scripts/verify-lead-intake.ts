@@ -175,6 +175,10 @@ H('Public website schema boundary')
       { key: 'mowing', label: 'Mowing again', cadence: 'weekly' },
     ],
   }).ok, false)
+  check('accepts a server-attested automatic measurement without an extra approval click', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1',
+    measurement_confirmation: 'automatic_applied',
+  }).ok, true)
   check('rejects unbounded selection fields', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1',
     service_selections: [{ key: 'mowing', label: 'Mowing', cadence: 'weekly', price: 1 }],
