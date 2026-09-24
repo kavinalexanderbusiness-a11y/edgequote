@@ -28,6 +28,8 @@ import { AdvancedTools } from '@/components/settings/AdvancedTools'
 import { PayrollSettings } from '@/components/settings/PayrollSettings'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
+import { PublicQuoteSchedulingSettings } from '@/components/settings/PublicQuoteSchedulingSettings'
+import { AutoMowingQuoteSettings } from '@/components/settings/AutoMowingQuoteSettings'
 import { DataExport } from '@/components/settings/DataExport'
 import { CustomFields } from '@/components/settings/CustomFields'
 import type { TabItem } from '@/components/ui/Tabs'
@@ -873,6 +875,8 @@ export default function SettingsPage() {
       <div className={cn('order-3 space-y-6', tab !== 'booking' && 'hidden')}>
         <SaveContract text="Changes on this tab save the moment you make them." />
         <WebsiteIntegration />
+        <AutoMowingQuoteSettings />
+        <PublicQuoteSchedulingSettings />
       </div>
 
       {/* Persistent Save footer — LAST element of the page (after Travel Fee

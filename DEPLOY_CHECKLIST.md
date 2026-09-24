@@ -1,5 +1,10 @@
 # EdgeQuote — Deploy Checklist
 
+> The automatic lawn estimator and public quote-scheduling release has a
+> dedicated cutover, backfill, verification, and rollback procedure in
+> [`docs/AUTO-ESTIMATOR-RELEASE.md`](docs/AUTO-ESTIMATOR-RELEASE.md). Follow it
+> together with this checklist for that release.
+
 Single source of truth for deploying the **operational platform** (CRM, quotes,
 scheduling, invoices, payments + AutoPay, comms, website import, portal) from scratch
 or to production. Verified 2026-06-25: no deployment blockers; `schema.sql` builds a
@@ -143,13 +148,14 @@ No Stripe **publishable** key is needed (card capture uses hosted Checkout in se
 
 1. **Run the migration** (above).
 2. **Auth → enable "Leaked Password Protection."**
-3. **Storage buckets — no manual step.** All four are created by the SQL path above and
+3. **Storage buckets — no manual step.** All buckets are created by the SQL path above and
    verified against production on 2026-07-15:
 
    | Bucket | Public | Holds | Created by |
    |---|---|---|---|
    | `job-photos` | yes | portal / job photos | `schema.sql` |
-   | `booking-uploads` | yes | booking-funnel photos | `RUN-db-catchup-2026-06-25.sql` |
+   | `booking-uploads` | yes | historical customer photos; image-write-locked after the private cutover | `RUN-db-catchup-2026-06-25.sql` |
+   | `customer-uploads` | no | new customer-supplied website, booking and portal photos | `20260922220000_private_customer_uploads.sql` |
    | `branding` | yes | business logo (settings upload + branded email header) | `RUN-2026-07-15-record-branding-bucket.sql` |
    | `equipment-docs` | no | equipment paperwork | `RUN-2026-07-15-equipment-docs.sql` |
 

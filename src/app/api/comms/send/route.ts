@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
+import { renderMessage, renderBody, isCommercialMessage, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { reachCheck } from '@/lib/comms/reach'
 import { governCheck } from '@/lib/comms/governor'
@@ -72,8 +72,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { data: bizRow } = await supabase.from('business_settings')
-    .select('company_name, phone, website, logo_url, review_url, message_templates').eq('user_id', user.id).maybeSingle()
-  const biz = bizRow as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
+    .select('company_name, phone, website, logo_url, review_url, base_address, message_templates').eq('user_id', user.id).maybeSingle()
+  const biz = bizRow as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; base_address: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
 
   // "On my way" also stamps the job so the customer portal can show a live status.
   if (template === 'on_my_way' && jobId) {
@@ -104,6 +104,7 @@ export async function POST(req: NextRequest) {
     directPhone: biz?.phone || undefined,
     logoUrl: biz?.logo_url || undefined,
     website: biz?.website || undefined,
+    mailingAddress: biz?.base_address || undefined,
   }
   const rendered = renderMessage(template, biz?.message_templates, msgVars)
   // The text we actually send: the owner's edit (or a caller-supplied body such
@@ -113,7 +114,7 @@ export async function POST(req: NextRequest) {
   // SAME interpolation engine the templates use. Without this, every
   // single-recipient quote/invoice send went out with a blank where the portal
   // link belonged, and receipts shipped literal {{portal_link}} text.
-  const out = bodyOverride ? renderBody(bodyOverride, msgVars, rendered.subject) : rendered
+  const out = bodyOverride ? renderBody(bodyOverride, msgVars, rendered.subject, template) : rendered
   const outText = out.sms
   const outHtml = out.html
 
@@ -137,7 +138,8 @@ export async function POST(req: NextRequest) {
   // deliberately doesn't — mint the portal token, honour a bodyOverride, and
   // answer previewOnly without any I/O.
   const gate = reachCheck(c, channels, template)
-  const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
+  type SendBlockReason = NonNullable<(typeof gate)[number]['blocked']> | 'commercial-email-compliance'
+  const blocked = new Map<string, SendBlockReason | null>(gate.map(g => [g.channel, g.blocked]))
   // 'no-optin' vs 'no-phone'/'no-email' is this route's public JSON contract
   // (summarizeSendOutcome + every caller reads it); map the canonical reason onto
   // it rather than changing the shape.
@@ -146,6 +148,16 @@ export async function POST(req: NextRequest) {
     if (!g.blocked) continue
     results[g.channel] = { sent: false, reason: reasonFor(g.blocked) }
     attempts.push({ channel: g.channel, status: 'skipped', detail: g.blocked, sent: false })
+  }
+
+  // Commercial email fails closed unless the legal sender address and a working
+  // preference/unsubscribe link are both available. SMS remains independently
+  // governed by the customer's channel consent and STOP handling.
+  if (channels.includes('email') && !blocked.get('email') && isCommercialMessage(template)
+    && (!msgVars.mailingAddress || !msgVars.portalLink)) {
+    blocked.set('email', 'commercial-email-compliance')
+    results.email = { sent: false, reason: 'not-configured', detail: 'commercial email requires a mailing address and unsubscribe link' }
+    attempts.push({ channel: 'email', status: 'skipped', detail: 'commercial-email-compliance', sent: false })
   }
 
   // Tenant capability — WHICH CHANNELS this business may use, after consent and

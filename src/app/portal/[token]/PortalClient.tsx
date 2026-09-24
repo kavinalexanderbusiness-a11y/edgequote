@@ -16,7 +16,7 @@ import { requiredDeposit } from '@/lib/payments/depositGate'
 import { paymentTiming, approvalTimingLine } from '@/lib/payments/paymentTiming'
 import type { QuoteStatus } from '@/types'
 import { renderPortalInvoiceBlob, renderPortalQuoteBlob } from '@/lib/portalPdf'
-import { REQUEST_PHOTO_BUCKET, requestPhotoExt, requestPhotoPath } from '@/lib/portalRequests'
+import { requestPhotoExt } from '@/lib/portalRequests'
 import {
   buildPortalView, contactGap, normalizePortal, parsePortalDeepLink, primaryPortalAction,
   recentPaymentLanded, tabNavTarget,
@@ -24,6 +24,7 @@ import {
 } from './model'
 import type { PortalActions } from './components/shared'
 import { HomeTab, ReviewCard, ConsentCard, ContactMethodCard } from './components/HomeTab'
+import { QuoteSchedulingCard } from './components/QuoteSchedulingCard'
 import { PropertyTab } from './components/PropertyTab'
 import { VisitsTab } from './components/VisitsTab'
 import { BillingTab } from './components/BillingTab'
@@ -36,9 +37,10 @@ import type { TipRequest } from '@/lib/payments/tips'
 // Public, no-login, scoped to the token's customer via get_portal_data — still
 // THE only data source. One story across five surfaces
 // (Home · Visits · Billing · Property · Contact) with all derivation in
-// ./model.ts and all presentation in ./components/*. Every customer action
-// remains a REQUEST that threads into the owner's ONE Messages hub — the portal
-// never mutates the schedule or a plan on its own.
+// ./model.ts and all presentation in ./components/*. Ordinary customer changes
+// remain REQUESTS that thread into the owner's ONE Messages hub. The one narrow
+// exception is an accepted, deposit-cleared quote whose owner-approved route,
+// duration and crew may create its first visit through the guarded scheduling RPC.
 
 // THE tab alias, in one place because two call sites set the tab: goTab (pills,
 // in-app navigation) and the deep-link effect, which calls setTab DIRECTLY.
@@ -605,29 +607,22 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return true
   }
 
-  // Photos attached to a request. They go to the SAME public bucket the booking
-  // door and website intake already use — one anon-upload path for
-  // customer-supplied photos, not a second one — and what we keep is the storage
-  // PATH, never a URL: the bucket is named in code wherever these are rendered,
-  // so a stored value can't address another bucket or an outside host. The
-  // customer's own FILE NAME is discarded (the path is two UUIDs and an
-  // extension), and the portal token is deliberately absent from it, because a
-  // token in a public-bucket URL is a token anyone holding that URL now has.
+  // Photos attached to a request cross a rate-limited server route into private
+  // storage. The database keeps a durable ref; it never receives a public URL.
   //
   // Returns the paths that actually landed plus how many failed, so the caller
   // can say so. A photo that didn't upload must never be presented as attached.
   async function uploadRequestPhotos(files: File[]): Promise<{ paths: string[]; failed: number }> {
-    const batch = crypto.randomUUID()
     const paths: string[] = []
     let failed = 0
     for (const f of files) {
-      const ext = requestPhotoExt(f.name, f.type)
-      const path = ext ? requestPhotoPath(batch, crypto.randomUUID(), ext) : null
-      if (!path) { failed++; continue }
+      if (!requestPhotoExt(f.name, f.type)) { failed++; continue }
       try {
-        const { error } = await supabase.storage.from(REQUEST_PHOTO_BUCKET).upload(path, f, { upsert: false, contentType: f.type || undefined })
-        if (error) failed++
-        else paths.push(path)
+        const body = new FormData(); body.set('token', token); body.set('photo', f)
+        const response = await fetch('/api/public/portal/photos', { method: 'POST', body })
+        const result = await response.json().catch(() => null) as { ref?: string } | null
+        if (!response.ok || !result?.ref) failed++
+        else paths.push(result.ref)
       } catch { failed++ } // a thrown upload (offline, blocked) is one failed photo, never an aborted loop
     }
     return { paths, failed }
@@ -941,6 +936,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               banners above stay outside it (they aren't tab content). */}
           <div id="portal-panel" role="tabpanel" aria-labelledby={`porttab-${activeTab}`} tabIndex={-1} className="focus-visible:outline-none">
             {activeTab === 'home' && <HomeTab view={view} actions={actions} suppressApproved={justAccepted} />}
+            {activeTab === 'home' && data.quotes.filter(q => q.status === 'accepted'
+              || (q.status === 'scheduled' && data.jobs.some(j => j.quote_id === q.id && ['scheduled', 'in_progress'].includes(j.status)))).map(q => (
+              <QuoteSchedulingCard key={q.id} token={token} quoteId={q.id} quoteNumber={q.quote_number} onScheduled={load} />
+            ))}
             {/* Reachability outranks the review ask: a missing phone or email is
                 why a visit can't be confirmed or an invoice sent. Renders nothing
                 at all when the file is complete — and nothing when the payload is

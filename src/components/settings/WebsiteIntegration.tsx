@@ -260,7 +260,7 @@ export function WebsiteIntegration() {
               <Toggle checked={enabled} disabled={busy} onChange={toggleBooking} ariaLabel="Enable online booking" />
             </div>
             <ul className="mt-3 pt-3 border-t border-border space-y-1.5 text-xs text-ink-muted">
-              <li className="flex gap-2"><LinkIcon className="w-3.5 h-3.5 text-accent-text shrink-0 mt-0.5" /><span><b className="text-ink">Booking link</b> — visitors get an instant quote from your pricing and book themselves; a <b>“sent” quote</b> is created automatically.</span></li>
+              <li className="flex gap-2"><LinkIcon className="w-3.5 h-3.5 text-accent-text shrink-0 mt-0.5" /><span><b className="text-ink">Quote requests</b> — website submissions create a review-required draft. After you verify the route, scope, price, duration, crew and deposit and send the written quote, the customer can approve it, pay through secure checkout and choose from live EdgeHQ dates. Automatic exact pricing stays off until you explicitly configure a canonical server-side rule.</span></li>
               <li className="flex gap-2"><Inbox className="w-3.5 h-3.5 text-accent-text shrink-0 mt-0.5" /><span><b className="text-ink">Website forms</b> — submissions become a customer + property + lead in <b>Messages → Website Leads</b> for you to quote.</span></li>
               <li className="flex gap-2"><AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" /><span>Turned off, every public submission is rejected — your link and forms stop accepting anything.</span></li>
             </ul>

@@ -65,6 +65,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
   const [hearAbout, setHearAbout] = useState('')
   const [referralCode, setReferralCode] = useState('')
   const [photoUrls, setPhotoUrls] = useState<string[]>([])
+  const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({})
   const [uploadingPhotos, setUploadingPhotos] = useState(false)
   const [photoError, setPhotoError] = useState<string | null>(null)
   const [utm, setUtm] = useState<Record<string, string>>({})
@@ -143,8 +144,13 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
           body.set('token', token)
           body.set('photo', f)
           const response = await fetch('/api/public/booking/photos', { method: 'POST', body })
-          const result = await response.json().catch(() => null) as { url?: string } | null
-          if (response.ok && result?.url) added.push(result.url)
+          const result = await response.json().catch(() => null) as { url?: string; ref?: string; previewUrl?: string } | null
+          const ref = result?.ref || result?.url
+          const preview = result?.previewUrl || result?.url
+          if (response.ok && ref && preview) {
+            added.push(ref)
+            setPhotoPreviews(prev => ({ ...prev, [ref]: preview }))
+          }
           else failed++
         } catch { failed++ }
       }
@@ -155,7 +161,11 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
       setUploadingPhotos(false)
     }
   }
-  function removePhoto(url: string) { setPhotoUrls(prev => prev.filter(u => u !== url)); setPhotoError(null) }
+  function removePhoto(ref: string) {
+    setPhotoUrls(prev => prev.filter(u => u !== ref))
+    setPhotoPreviews(prev => { const next = { ...prev }; delete next[ref]; return next })
+    setPhotoError(null)
+  }
 
   // ── Pricing (owner's real engine, with fee recovery baked in for display) ──
   const plans: Plan[] = useMemo(() => {
@@ -534,7 +544,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                     {photoUrls.map(u => (
                       <div key={u} className="relative w-14 h-14 rounded-lg overflow-hidden border border-border-strong">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={u} alt="Property photo" className="w-full h-full object-cover" />
+                        <img src={photoPreviews[u]} alt="Property photo" className="w-full h-full object-cover" />
                         <button type="button" onClick={() => removePhoto(u)} aria-label="Remove photo"
                           className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><X className="w-3 h-3" /></button>
                       </div>

@@ -45,6 +45,7 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
   const submitted = lead.submitted_at || lead.created_at
   const fullAddress = [lead.address, lead.city].filter(Boolean).join(', ')
   const rawSub = lead.raw_submission
+  const readyToBook = rawSub?.booking_intent === 'ready_to_book'
   const source = displaySource(rawSub && typeof rawSub.source === 'string' ? rawSub.source : '')
   const recurring = !!freq && !!FREQ_LABEL[freq] && freq !== 'one_time'
   // NEW is a claim about STATE, not just recency: a lead already quoted (or
@@ -73,6 +74,9 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
           )}
           {lead.status === 'dismissed' && (
             <span className="text-[9px] font-bold text-ink-faint border border-border rounded-full px-1.5 py-px leading-none tracking-wider">DISMISSED</span>
+          )}
+          {readyToBook && (
+            <span className="text-[9px] font-bold text-emerald-300 border border-emerald-500/40 bg-emerald-500/10 rounded-full px-1.5 py-px leading-none tracking-wider">READY TO BOOK</span>
           )}
         </p>
         {submitted && <span className="text-[10px] text-ink-faint">{timeAgo(submitted)}</span>}

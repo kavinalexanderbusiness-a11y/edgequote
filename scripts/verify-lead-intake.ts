@@ -25,6 +25,9 @@ import {
 // so "the CRM can see it" is proven rather than assumed.
 import { extractBookingPhotos } from '../src/lib/bookingPhotos'
 import { validateWebsiteLeadPayload } from '../src/lib/publicIntakeSecurity'
+import { websiteLeadSite } from '../src/lib/publicIntakeSecurity'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 let pass = 0
 let fail = 0
@@ -94,6 +97,7 @@ const B64 = Buffer.from('fake-image-bytes').toString('base64')
 const inline = (n: string) => ({ base64: B64, contentType: 'image/jpeg', filename: n })
 const URL1 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok/a.jpg'
 const URL2 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok/b.jpg'
+const PRIVATE_REF = 'customer-upload:11111111-1111-4111-8111-111111111111/website/22222222-2222-4222-8222-222222222222.jpg'
 
 // (1) ONE photo survives as a reference the rest of the app can read.
 {
@@ -107,15 +111,78 @@ const URL2 = 'https://x.supabase.co/storage/v1/object/public/booking-uploads/tok
   check('1 photo → other fields untouched', stored.name, 'Pat')
 }
 
+// Future uploads persist a private object reference, not a permanent public URL.
+{
+  const payload = { name: 'Pat', photos: [inline('front.jpg')] }
+  const stored = applyPhotoResults(payload, { urls: [PRIVATE_REF], failed: [], rejected: 0 })
+  check('private upload → payload keeps the durable reference', stored.photos, [PRIVATE_REF])
+  check('CRM reads the private reference', extractBookingPhotos(stored), [PRIVATE_REF])
+}
+
 // The public website route must accept the exact production form shape while
 // rejecting fields and lengths that could become stored injection or DB abuse.
 H('Public website schema boundary')
 {
   const valid = validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
-    services_needed: ['Lawn Mowing & Edging'], marketing_consent: 'no',
+    services_needed: 'Lawn Mowing & Edging, Lawn Fertilization', marketing_consent: 'no',
+    lawn_polygon: '', estimated_quote: '', mowing_frequency: '', booking_intent: '',
   })
   ok('accepts the production form contract', valid.ok)
+  check('keeps requested services as clean lead text',
+    valid.ok && valid.payload.services_needed, 'Lawn Mowing & Edging, Lawn Fertilization')
+  const measured = validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
+    services_needed: ['Lawn Mowing & Edging'], lawn_area_sqft: '2450',
+    address_source: 'google_places', address_place_id: 'ChIJ-test',
+    address_city: 'Calgary', address_province: 'AB', address_country: 'CA',
+    address_quadrant: 'SE', address_latitude: '50.9', address_longitude: '-114.0',
+    address_checked_at: '2026-09-23T20:08:03.743Z', route_review_status: 'required',
+    service_selections: [
+      { key: 'mowing', label: 'Lawn Mowing & Edging', cadence: 'weekly' },
+      { key: 'tree_pruning', label: 'Tree Pruning', cadence: null },
+    ],
+    lawn_polygon: JSON.stringify([{ section: 'other', ring: [
+      { lat: 51, lng: -114 }, { lat: 51.0001, lng: -114 }, { lat: 51.0001, lng: -114.0001 },
+    ] }]),
+    estimated_quote: '65', mowing_frequency: 'weekly', booking_intent: 'ready_to_book',
+  })
+  ok('accepts a measured ready-to-book estimate', measured.ok)
+  check('parses the lawn outline into canonical JSON',
+    measured.ok && typeof measured.payload.lawn_polygon === 'object', true)
+  check('keeps bounded multi-service selections',
+    measured.ok && Array.isArray(measured.payload.service_selections)
+      ? measured.payload.service_selections.length : 0, 2)
+  check('rejects an unknown booking-intent value', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', booking_intent: 'auto_schedule',
+  }).ok, false)
+  check('rejects a non-numeric website estimate before the database cast', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', estimated_quote: 'not-a-number',
+  }).ok, false)
+  check('rejects a negative measured lawn area', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', lawn_area_sqft: '-10',
+  }).ok, false)
+  check('rejects an invalid coordinate', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', address_latitude: '910',
+  }).ok, false)
+  check('rejects an unknown address provider', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1', address_source: 'customer_html',
+  }).ok, false)
+  check('rejects duplicate multi-service selections', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1',
+    service_selections: [
+      { key: 'mowing', label: 'Mowing', cadence: 'weekly' },
+      { key: 'mowing', label: 'Mowing again', cadence: 'weekly' },
+    ],
+  }).ok, false)
+  check('accepts a server-attested automatic measurement without an extra approval click', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1',
+    measurement_confirmation: 'automatic_applied',
+  }).ok, true)
+  check('rejects unbounded selection fields', validateWebsiteLeadPayload({
+    first_name: 'Pat', address: '123 Main St', phone: '1',
+    service_selections: [{ key: 'mowing', label: 'Mowing', cadence: 'weekly', price: 1 }],
+  }).ok, false)
   check('rejects unknown fields', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', phone: '1', admin: 'true',
   }).ok, false)
@@ -128,6 +195,34 @@ H('Public website schema boundary')
   check('rejects malformed email', validateWebsiteLeadPayload({
     first_name: 'Pat', address: '123 Main St', email: 'not-an-email',
   }).ok, false)
+}
+
+// The marketing site intentionally sends a non-secret site id. EdgeHQ must map
+// that id to the submit-only booking token on the server and the route must use
+// the resolved token. This pins both halves of the integration contract without
+// ever placing a production token in a browser fixture.
+H('Public site-id to private intake-token contract')
+{
+  const prior = process.env.EDGE_WEBSITE_LEAD_TOKEN
+  process.env.EDGE_WEBSITE_LEAD_TOKEN = 'server-only-booking-token'
+  const resolved = websiteLeadSite('edge-property-services-yyc')
+  check('known EPS site id resolves to the server-only token', resolved?.token, 'server-only-booking-token')
+  ok('known EPS site id permits the two production origins',
+    resolved?.origins.includes('https://edgepropertyservicesyyc.ca') === true
+      && resolved?.origins.includes('https://www.edgepropertyservicesyyc.ca') === true)
+  check('an unknown site id fails closed', websiteLeadSite('unknown-site'), null)
+  if (prior === undefined) delete process.env.EDGE_WEBSITE_LEAD_TOKEN
+  else process.env.EDGE_WEBSITE_LEAD_TOKEN = prior
+
+  const route = readFileSync(resolve(process.cwd(), 'src/app/api/website-lead/route.ts'), 'utf8')
+  ok('website lead route resolves the site query before accepting the request',
+    /resolveWebsiteLeadSite\(siteId\)/.test(route)
+      && /searchParams\.get\('site'\)/.test(route))
+  ok('website lead route submits with the resolved private token',
+    /submitLead\(\{ token: site\.token/.test(route))
+  ok('website lead route binds automatic pricing and marketing consent to the same tenant token',
+    /bookingToken: site\.token/.test(route)
+      && /p_token: site\.token/.test(route))
 }
 
 // (2) MULTIPLE photos all preserved, in order.

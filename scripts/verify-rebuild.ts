@@ -36,6 +36,7 @@ import { splitStatements, loadPGlite, substitutePlatformStatements } from './lib
 const CONTRACT = join('supabase', 'contract')
 const MIGRATIONS = join('supabase', 'migrations')
 const PRELUDE = join('scripts', 'schema', 'platform-prelude.sql')
+const releasePreflight = process.argv.includes('--release-preflight')
 
 let pass = 0, fail = 0
 const check = (name: string, ok: boolean, detail?: string) => {
@@ -122,6 +123,129 @@ for (const f of migrationFiles) {
 if (applied !== migrationFiles.length) {
   console.error(`\n${applied}/${migrationFiles.length} migrations applied. Cannot compare a partial build.\n`)
   process.exit(1)
+}
+
+// A pending release must be able to prove that the repository rebuilds cleanly
+// before production has the new objects. Comparing that rebuild byte-for-byte
+// with the current production contract is expected to be red until the release
+// is applied and the contract is recaptured. This explicit mode therefore checks
+// the release's required schema and privilege invariants without weakening the
+// normal disaster-recovery comparison below.
+if (releasePreflight) {
+  console.log('\n── pending-release invariants ──')
+  const requiredReleaseMigrations = [
+    '20260914021500_public_intake_hardening.sql',
+    '20260914021600_booking_upload_policy_hardening.sql',
+    '20260921235500_portal_request_mute_exception.sql',
+    '20260922200202_secure_public_quote_scheduling.sql',
+    '20260922210000_auto_mowing_quote_rules.sql',
+    '20260922220000_private_customer_uploads.sql',
+    '20260923083454_automatic_service_pricing_and_day_holds.sql',
+  ]
+  check('all estimator release migrations are present',
+    requiredReleaseMigrations.every(name => migrationFiles.includes(name)))
+
+  const scalar = async (sql: string) => Boolean((await db.query(sql)).rows[0]?.ok)
+  check('server-only intake limiter table exists with RLS', await scalar(`
+    select exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = 'public_intake_rate_limits'
+         and c.relkind = 'r' and c.relrowsecurity
+    ) as ok`))
+  check('immutable owner mowing-rule table exists with RLS', await scalar(`
+    select exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = 'auto_mowing_quote_rule_versions'
+         and c.relkind = 'r' and c.relrowsecurity
+    ) as ok`))
+  check('immutable automatic service pricing table exists with RLS', await scalar(`
+    select exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = 'automatic_service_pricing_versions'
+         and c.relkind = 'r' and c.relrowsecurity
+    ) as ok`))
+  check('immutable automatic bundle pricing table exists with RLS', await scalar(`
+    select exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relname = 'automatic_bundle_pricing_versions'
+         and c.relkind = 'r' and c.relrowsecurity
+    ) as ok`))
+
+  const requiredFunctions = [
+    'public.consume_public_intake_rate_limit(text,text,text,integer,integer)',
+    'public.record_public_email_marketing_consent(text,uuid,boolean,text,timestamp with time zone,text)',
+    'public.public_quote_schedule_availability(text,uuid,integer)',
+    'public.portal_schedule_accepted_quote(text,uuid,date)',
+    'public.configure_public_quote_scheduling(boolean,integer,integer,integer,integer)',
+    'public.set_public_quote_scheduling_approval(uuid,boolean)',
+    'public.save_auto_mowing_quote_rules(jsonb)',
+    'public.issue_auto_mowing_quote(text,uuid,uuid,uuid,jsonb,jsonb,jsonb)',
+    'public.record_auto_mowing_review_reasons(text,uuid,uuid,jsonb)',
+    'public.save_automatic_service_pricing_version(text,jsonb)',
+    'public.save_automatic_bundle_pricing_version(jsonb)',
+    'public.issue_automatic_service_bundle_quote(text,uuid,uuid,jsonb,jsonb,jsonb)',
+  ]
+  for (const signature of requiredFunctions) {
+    const literal = signature.replace(/'/g, "''")
+    check(`${signature} exists`, await scalar(`select to_regprocedure('${literal}') is not null as ok`))
+  }
+
+  const serverOnlyFunctions = [
+    'public.consume_public_intake_rate_limit(text,text,text,integer,integer)',
+    'public.record_public_email_marketing_consent(text,uuid,boolean,text,timestamp with time zone,text)',
+    'public.public_quote_schedule_availability(text,uuid,integer)',
+    'public.portal_schedule_accepted_quote(text,uuid,date)',
+    'public.issue_auto_mowing_quote(text,uuid,uuid,uuid,jsonb,jsonb,jsonb)',
+    'public.record_auto_mowing_review_reasons(text,uuid,uuid,jsonb)',
+    'public.issue_automatic_service_bundle_quote(text,uuid,uuid,jsonb,jsonb,jsonb)',
+  ]
+  for (const signature of serverOnlyFunctions) {
+    const literal = signature.replace(/'/g, "''")
+    check(`${signature} is service-role only`, await scalar(`
+      select has_function_privilege('service_role', '${literal}', 'execute')
+         and not has_function_privilege('anon', '${literal}', 'execute')
+         and not has_function_privilege('authenticated', '${literal}', 'execute') as ok`))
+  }
+  check('owner rule save is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.save_auto_mowing_quote_rules(jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.save_auto_mowing_quote_rules(jsonb)', 'execute') as ok`))
+  check('owner automatic-service price save is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.save_automatic_service_pricing_version(text,jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.save_automatic_service_pricing_version(text,jsonb)', 'execute') as ok`))
+  check('owner automatic-bundle price save is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.save_automatic_bundle_pricing_version(jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.save_automatic_bundle_pricing_version(jsonb)', 'execute') as ok`))
+  check('owner schedule configuration is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.configure_public_quote_scheduling(boolean,integer,integer,integer,integer)', 'execute')
+       and not has_function_privilege('anon', 'public.configure_public_quote_scheduling(boolean,integer,integer,integer,integer)', 'execute') as ok`))
+  check('owner route approval is authenticated-only', await scalar(`
+    select has_function_privilege('authenticated', 'public.set_public_quote_scheduling_approval(uuid,boolean)', 'execute')
+       and not has_function_privilege('anon', 'public.set_public_quote_scheduling_approval(uuid,boolean)', 'execute') as ok`))
+
+  check('customer upload bucket is private', await scalar(`
+    select exists (select 1 from storage.buckets where id = 'customer-uploads' and public is false) as ok`))
+  check('historical booking bucket rejects new images', await scalar(`
+    select exists (
+      select 1 from storage.buckets
+       where id = 'booking-uploads'
+         and allowed_mime_types = array['application/x-edgehq-read-only-legacy']::text[]
+    ) as ok`))
+  check('public booking-upload insert policies are absent', await scalar(`
+    select not exists (
+      select 1 from pg_policies where schemaname = 'storage'
+       and policyname in ('booking_uploads_public_insert', 'booking_uploads_authenticated_insert')
+    ) as ok`))
+
+  await db.close()
+  console.log(`\n${'─'.repeat(72)}`)
+  if (fail === 0) {
+    console.log(`PENDING RELEASE REBUILD PROVEN — ${pass} checks passed.`)
+    console.log('Every migration applies from zero and the estimator release invariants exist.')
+    console.log('Run the normal verify:rebuild after production is migrated and its contract is recaptured.\n')
+  } else {
+    console.error(`PENDING RELEASE REBUILD FAILED — ${fail} failed, ${pass} passed.\n`)
+  }
+  process.exit(fail === 0 ? 0 : 1)
 }
 
 // ── read the rebuilt contract back ───────────────────────────────────────────

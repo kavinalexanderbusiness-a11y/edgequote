@@ -7,7 +7,7 @@ create or replace function public.notify_inbound_message()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = 'public', 'pg_temp'
 as $$
 declare
   v_name text;

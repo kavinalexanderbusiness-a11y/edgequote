@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { consumeTokenIntakeLimit } from '@/lib/publicIntakeSecurity'
+import {
+  CUSTOMER_UPLOAD_BUCKET,
+  LEGACY_CUSTOMER_UPLOAD_BUCKET,
+  customerUploadRef,
+  inspectCustomerUploadBuckets,
+  selectCustomerUploadTarget,
+} from '@/lib/customerUploadPhotos'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -56,10 +63,45 @@ export async function POST(req: NextRequest) {
   const bytes = new Uint8Array(await file.arrayBuffer())
   if (!magicMatches(bytes, file.type)) return NextResponse.json({ error: 'invalid image' }, { status: 400 })
   const ext = TYPES.get(file.type)!
+  const buckets = await inspectCustomerUploadBuckets(admin)
+  const target = buckets && selectCustomerUploadTarget(buckets, file.type)
+  if (!target) return NextResponse.json({ error: 'upload unavailable' }, { status: 503 })
+
   const path = `${userId}/booking/${crypto.randomUUID()}.${ext}`
-  const { error } = await admin.storage.from('booking-uploads')
+  const { error } = await admin.storage.from(target.bucket)
     .upload(path, bytes, { contentType: file.type, upsert: false })
   if (error) return NextResponse.json({ error: 'upload failed' }, { status: 502 })
-  const url = admin.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl
-  return NextResponse.json({ ok: true, url }, { headers: { 'Cache-Control': 'no-store' } })
+
+  // Compatibility release: before the private bucket exists, preserve the old
+  // durable public-URL contract. Both old clients (`url`) and the new client
+  // (`ref` + `previewUrl`) can consume this response. Once customer-uploads
+  // exists, selectCustomerUploadTarget never falls back to this branch.
+  if (target.mode === 'legacy') {
+    const url = admin.storage.from(LEGACY_CUSTOMER_UPLOAD_BUCKET).getPublicUrl(path).data.publicUrl
+    return NextResponse.json(
+      { ok: true, url, ref: url, previewUrl: url },
+      { headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } },
+    )
+  }
+
+  const ref = customerUploadRef(path)
+  if (!ref) {
+    await admin.storage.from(CUSTOMER_UPLOAD_BUCKET).remove([path])
+    return NextResponse.json({ error: 'upload failed' }, { status: 502 })
+  }
+  // A short-lived preview lets the customer verify the selected image without
+  // turning its permanent database reference into a bearer URL.
+  const { data: preview, error: signError } = await admin.storage.from(CUSTOMER_UPLOAD_BUCKET)
+    .createSignedUrl(path, 15 * 60)
+  if (signError || !preview?.signedUrl) {
+    await admin.storage.from(CUSTOMER_UPLOAD_BUCKET).remove([path])
+    return NextResponse.json({ error: 'upload failed' }, { status: 502 })
+  }
+  return NextResponse.json(
+    // `url` carries the durable ref during the rolling client cutover. A cached
+    // old client may show no thumbnail, but it still persists the correct private
+    // reference instead of an expiring signed URL or a public object URL.
+    { ok: true, url: ref, ref, previewUrl: preview.signedUrl },
+    { headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } },
+  )
 }

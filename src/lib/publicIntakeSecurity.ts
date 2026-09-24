@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto'
 import type { NextRequest } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { EMAIL_MARKETING_CONSENT_VERSION } from '@/lib/publicBookingContract'
 
 const SITE_RE = /^[a-z0-9][a-z0-9-]{2,63}$/
 const DEFAULT_ORIGINS = [
@@ -150,9 +151,26 @@ const TEXT_LIMITS: Record<string, number> = {
   lawn_area_sqft: 30, driveway_area_sqft: 30, lawn_polygon: 30_000,
   map_link: 1_000, travel_distance_km: 30, travel_fee: 30,
   marketing_consent: 8, estimate_shown: 1_000, photos_meta: 300,
+  address_source: 30, address_place_id: 200, address_city: 100,
+  address_province: 80, address_country: 80, address_quadrant: 8,
+  address_latitude: 30, address_longitude: 30, address_checked_at: 40,
+  route_review_status: 30,
+  estimated_quote: 30, mowing_frequency: 30, booking_intent: 30,
+  measurement_attestation: 8_000, measurement_confirmation: 30,
   consent_version: 60, consent_utc: 40,
 }
-const ALLOWED = new Set([...Object.keys(TEXT_LIMITS), 'services_needed', 'photos'])
+const ALLOWED = new Set([...Object.keys(TEXT_LIMITS), 'services_needed', 'service_selections', 'photos'])
+const NUMERIC_TEXT_RANGES: Record<string, readonly [number, number]> = {
+  lawn_area_sqft: [0, 10_000_000],
+  driveway_area_sqft: [0, 10_000_000],
+  travel_distance_km: [0, 5_000],
+  travel_fee: [0, 1_000_000],
+  estimated_quote: [0, 1_000_000],
+}
+const COORDINATE_RANGES: Record<string, readonly [number, number]> = {
+  address_latitude: [-90, 90],
+  address_longitude: [-180, 180],
+}
 
 export function validateWebsiteLeadPayload(input: Record<string, unknown>):
   { ok: true; payload: Record<string, unknown> } | { ok: false; error: string } {
@@ -169,7 +187,89 @@ export function validateWebsiteLeadPayload(input: Record<string, unknown>):
       if (values.length > 12 || values.some(v => typeof v !== 'string' || v.length > 100)) {
         return { ok: false, error: 'invalid services' }
       }
-      out[key] = values
+      // submit_website_lead reads this with ->>, so persist plain service text
+      // rather than a JSON-formatted array string in the lead and quote builder.
+      out[key] = values.map(v => String(v).trim()).filter(Boolean).join(', ')
+      continue
+    }
+    if (key === 'service_selections') {
+      if (!Array.isArray(value) || value.length < 1 || value.length > 12) {
+        return { ok: false, error: 'invalid service selections' }
+      }
+      const seen = new Set<string>()
+      const selections: Array<{ key: string; label: string; cadence: string | null }> = []
+      for (const raw of value) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          return { ok: false, error: 'invalid service selections' }
+        }
+        const item = raw as Record<string, unknown>
+        if (Object.keys(item).some(field => !['key', 'label', 'cadence'].includes(field))) {
+          return { ok: false, error: 'invalid service selections' }
+        }
+        const serviceKey = typeof item.key === 'string' ? item.key.trim().toLowerCase() : ''
+        const label = typeof item.label === 'string' ? item.label.trim() : ''
+        const cadence = item.cadence == null ? null : String(item.cadence).trim().toLowerCase()
+        if (!/^[a-z][a-z0-9_]{0,39}$/.test(serviceKey) || !label || label.length > 100
+          || (cadence != null && !['one_time', 'weekly', 'biweekly', 'monthly', 'seasonal'].includes(cadence))) {
+          return { ok: false, error: 'invalid service selections' }
+        }
+        const identity = `${serviceKey}|${cadence || ''}`
+        if (seen.has(identity)) return { ok: false, error: 'duplicate service selection' }
+        seen.add(identity)
+        selections.push({ key: serviceKey, label, cadence })
+      }
+      out[key] = selections
+      continue
+    }
+    if (key === 'lawn_polygon') {
+      if (typeof value !== 'string' || value.length > TEXT_LIMITS.lawn_polygon) {
+        return { ok: false, error: 'invalid field' }
+      }
+      // The public form always renders this hidden field. Skipping measurement
+      // submits an empty string, which means "no polygon", not an invalid shape.
+      if (!value.trim()) continue
+      try {
+        const polygon = JSON.parse(value) as unknown
+        const valid = Array.isArray(polygon) && polygon.length <= 12 && polygon.every(section => {
+          if (!section || typeof section !== 'object' || Array.isArray(section)) return false
+          const item = section as { section?: unknown; ring?: unknown }
+          return typeof item.section === 'string' && item.section.length <= 40
+            && Array.isArray(item.ring) && item.ring.length >= 3 && item.ring.length <= 100
+            && item.ring.every(point => {
+              if (!point || typeof point !== 'object' || Array.isArray(point)) return false
+              const p = point as { lat?: unknown; lng?: unknown }
+              return typeof p.lat === 'number' && Number.isFinite(p.lat) && p.lat >= -90 && p.lat <= 90
+                && typeof p.lng === 'number' && Number.isFinite(p.lng) && p.lng >= -180 && p.lng <= 180
+            })
+        })
+        if (!valid) {
+          return { ok: false, error: 'invalid field' }
+        }
+        // Store a JSON object rather than a JSON-encoded string so downstream
+        // measurement and quote-builder code receives the canonical shape.
+        out[key] = polygon
+      } catch {
+        return { ok: false, error: 'invalid field' }
+      }
+      continue
+    }
+    if (key in NUMERIC_TEXT_RANGES || key in COORDINATE_RANGES) {
+      if (typeof value !== 'string' || value.length > (TEXT_LIMITS[key] || 0)) {
+        return { ok: false, error: 'invalid field' }
+      }
+      const clean = value.trim()
+      if (!clean) continue
+      const signed = key in COORDINATE_RANGES
+      const pattern = signed ? /^-?(?:\d+(?:\.\d*)?|\.\d+)$/ : /^(?:\d+(?:\.\d*)?|\.\d+)$/
+      if (!pattern.test(clean)) {
+        return { ok: false, error: 'invalid field' }
+      }
+      const numeric = Number(clean)
+      const [min, max] = COORDINATE_RANGES[key] || NUMERIC_TEXT_RANGES[key]
+      if (!Number.isFinite(numeric) || numeric < min || numeric > max) {
+        return { ok: false, error: 'invalid field' }
+      }
+      out[key] = clean
       continue
     }
     if (typeof value !== 'string' || value.length > (TEXT_LIMITS[key] || 0)) {
@@ -185,6 +285,43 @@ export function validateWebsiteLeadPayload(input: Record<string, unknown>):
   }
   if (out.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(out.email))) {
     return { ok: false, error: 'invalid email' }
+  }
+  if (out.booking_intent && out.booking_intent !== 'ready_to_book') {
+    return { ok: false, error: 'invalid booking intent' }
+  }
+  if (out.address_source && !['manual', 'google_places', 'city_of_calgary'].includes(String(out.address_source))) {
+    return { ok: false, error: 'invalid address source' }
+  }
+  if (out.address_quadrant && !['NW', 'NE', 'SW', 'SE'].includes(String(out.address_quadrant))) {
+    return { ok: false, error: 'invalid address quadrant' }
+  }
+  if (out.route_review_status && !['required', 'review_required', 'eligible', 'outside_route'].includes(String(out.route_review_status))) {
+    return { ok: false, error: 'invalid route review status' }
+  }
+  if (out.address_checked_at && !Number.isFinite(Date.parse(String(out.address_checked_at)))) {
+    return { ok: false, error: 'invalid address checked time' }
+  }
+  if (out.mowing_frequency && !['weekly', 'biweekly', 'once'].includes(String(out.mowing_frequency))) {
+    return { ok: false, error: 'invalid mowing frequency' }
+  }
+  if (out.measurement_confirmation && !['automatic_applied', 'looks_right', 'corrected', 'rejected'].includes(String(out.measurement_confirmation))) {
+    return { ok: false, error: 'invalid measurement confirmation' }
+  }
+  if (out.marketing_consent && !['yes', 'no'].includes(String(out.marketing_consent))) {
+    return { ok: false, error: 'invalid marketing consent' }
+  }
+  if (out.marketing_consent === 'yes') {
+    if (!String(out.email || '').trim()) return { ok: false, error: 'email is required for email marketing consent' }
+    const version = String(out.consent_version || '').trim()
+    const consentedAt = String(out.consent_utc || '').trim()
+    const stamp = Date.parse(consentedAt)
+    if (version !== EMAIL_MARKETING_CONSENT_VERSION || !Number.isFinite(stamp)) {
+      return { ok: false, error: 'invalid marketing consent evidence' }
+    }
+    const now = Date.now()
+    if (stamp < now - 24 * 60 * 60 * 1000 || stamp > now + 10 * 60 * 1000) {
+      return { ok: false, error: 'expired marketing consent evidence' }
+    }
   }
   return { ok: true, payload: out }
 }
