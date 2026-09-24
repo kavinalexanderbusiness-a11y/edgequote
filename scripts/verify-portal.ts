@@ -197,6 +197,63 @@ console.log('\nmoneySummary:')
   check('owingCount counts invoices with balance', m.owingCount === 2)
 }
 
+// The actual Billing tab must name its capped invoice settlement, not all cash
+// received. Synthetic ledger rows exercise the unchanged history alongside it.
+console.log('\nBilling payment-summary wording (actual offline render):')
+{
+  const React = require('react') as typeof import('react')
+  ;(globalThis as unknown as { React: typeof React }).React = React
+  const { renderToStaticMarkup } = require('react-dom/server') as typeof import('react-dom/server')
+  const { BillingTab } = require('../src/app/portal/[token]/components/BillingTab') as typeof import('../src/app/portal/[token]/components/BillingTab')
+  const noAction = (): never => { throw new Error('A static billing render attempted an action') }
+  const actions: import('../src/app/portal/[token]/components/shared').PortalActions = {
+    token: 'synthetic-portal-token', accept: noAction, accepting: null, pay: noAction, payingId: null,
+    payQuoteDeposit: noAction, payingQuoteId: null, savePreference: noAction, paymentsEnabled: false,
+    paymentPending: false, request: noAction, submitRequest: noAction, uploadRequestPhotos: noAction,
+    photoUrl: noAction, markInvoiceViewed: noAction, refresh: noAction, navigate: noAction,
+    askAbout: noAction, respondToChange: noAction, decidingChangeId: null,
+  }
+  const inv = (amount: number, paid: number | null, id = 'bill-1', status = 'sent'): PortalData['invoices'][number] =>
+    ({ ...FULL.invoices[0], id, invoice_number: `SYN-${id}`, job_id: null, amount, amount_paid: paid, status })
+  let receiptId = 0
+  const pmt = (amount: number, over: Partial<PortalData['payments'][number]> = {}): PortalData['payments'][number] =>
+    ({ id: `synthetic-receipt-${++receiptId}`, amount, status: 'paid', kind: 'payment', provider: 'etransfer',
+      invoice_id: 'bill-1', created_at: '2026-07-18T10:00:00Z', paid_at: '2026-07-18T10:00:00Z', ...over })
+  const cases = [
+    { name: '750 invoiced / 1000 received', invoices: [inv(300, 300), inv(100, 300, 'bill-2', 'overpaid'), inv(100, 100, 'bill-3'), inv(250, 300, 'bill-4', 'overpaid')],
+      payments: [300, 300, 100, 300].map((n, i) => pmt(n, { invoice_id: `bill-${i + 1}` })), billed: '$750.00', applied: '$750.00', due: '$0.00', history: ['Payment history', 'Overpaid'], receipts: ['$300.00', '$300.00', '$100.00', '$300.00'] },
+    { name: 'partial', invoices: [inv(100, 40)], payments: [pmt(40)], billed: '$100.00', applied: '$40.00', due: '$60.00' },
+    { name: 'excess on one invoice cannot settle another', invoices: [inv(100, 150, 'bill-1', 'overpaid'), inv(100, 40, 'bill-2', 'partial')], payments: [pmt(150), pmt(40, { invoice_id: 'bill-2' })], billed: '$200.00', applied: '$140.00', due: '$60.00' },
+    { name: 'empty account', invoices: [], payments: [], billed: '$0.00', applied: '$0.00', due: '$0.00' },
+    { name: 'no recorded invoice payment', invoices: [inv(100, null)], payments: [], billed: '$100.00', applied: '$0.00', due: '$100.00' },
+    { name: 'partial refund', invoices: [inv(100, 60)], payments: [pmt(100), pmt(-40, { provider: 'refund' })], billed: '$100.00', applied: '$60.00', due: '$40.00', history: ['Refunded', '$40.00'], receipts: ['$100.00', '−$40.00'] },
+    { name: 'full refund', invoices: [inv(100, 0)], payments: [pmt(100), pmt(-100, { provider: 'refund' })], billed: '$100.00', applied: '$0.00', due: '$100.00', history: ['Refunded', '$100.00'], receipts: ['$100.00', '−$100.00'] },
+    { name: 'excess moved to credit', invoices: [inv(100, 100)], payments: [pmt(150), pmt(-50, { provider: 'credit' }), pmt(50, { provider: 'credit', kind: 'credit', invoice_id: null })], billed: '$100.00', applied: '$100.00', due: '$0.00', history: ['Available credit', '$50.00', 'To credit'], receipts: ['$150.00', '−$50.00'] },
+    { name: 'credit applied to invoice', invoices: [inv(100, 60)], payments: [pmt(60, { provider: 'credit' })], billed: '$100.00', applied: '$60.00', due: '$40.00' },
+    { name: 'unattached deposit and credit', invoices: [], payments: [pmt(500, { invoice_id: null, quote_id: 'synthetic-quote' }), pmt(25, { provider: 'credit', kind: 'credit', invoice_id: null })], billed: '$0.00', applied: '$0.00', due: '$0.00', history: ['Available credit', '$25.00', '$500.00'] },
+    { name: 'draft and cancelled excluded', invoices: [inv(100, 100, 'draft', 'draft'), inv(200, 200, 'cancelled', 'cancelled')], payments: [], billed: '$0.00', applied: '$0.00', due: '$0.00' },
+    { name: 'GST and cents preserved', invoices: [inv(100, 40.25)], payments: [pmt(40.25)], gst: 5, billed: '$105.00', applied: '$40.25', due: '$64.75' },
+  ]
+  for (const c of cases) {
+    const data: PortalData = { ...FULL, business: { ...FULL.business!, gst_percent: c.gst ?? 0 },
+      quotes: [], invoices: c.invoices, payments: c.payments, jobs: [], recurrences: [], photos: [],
+      change_orders: [], payment_method: null }
+    const original = JSON.stringify(data)
+    const view = buildPortalView(data, TODAY, renderers)
+    const html = renderToStaticMarkup(React.createElement(BillingTab, { view, actions }))
+    const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+    const summary = text.split('Quotes &amp; invoices')[0]
+    check(`${c.name}: accurately labelled invoice totals`, summary.includes(`Billed to date ${c.billed} Applied to invoices ${c.applied} Balance due ${c.due}`), summary)
+    check(`${c.name}: no gross-received claim`, !/You(?:'|&#x27;)ve paid/.test(html))
+    check(`${c.name}: input ledger is unchanged`, JSON.stringify(data) === original)
+    for (const marker of c.history ?? []) check(`${c.name}: billing retains ${marker}`, text.includes(marker))
+    if (c.receipts) {
+      const receiptAmounts = (text.split('Payment history')[1] ?? '').match(/−?\$[\d,]+\.\d{2}/g) ?? []
+      check(`${c.name}: exact signed receipt amounts remain in payment history`, JSON.stringify(receiptAmounts) === JSON.stringify(c.receipts), JSON.stringify(receiptAmounts))
+    }
+  }
+}
+
 // ── refundedTotal: a refund is cash OUT, never an overpayment moved to credit ──
 console.log('\nrefundedTotal (the money shows once):')
 {

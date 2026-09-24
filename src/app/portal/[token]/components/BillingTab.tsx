@@ -41,7 +41,7 @@ export function BillingTab({ view, actions, initialCat, focusDocId }: TabProps &
           the rows show) — never a second GST/balance computation here. */}
       <div className="grid grid-cols-3 gap-2 sm:gap-3 animate-rise stagger-1">
         <StatCard label="Billed to date" value={fmtMoney(money.invoiced)} icon={Receipt} />
-        <StatCard label="You've paid" value={fmtMoney(money.paid)} icon={CheckCircle2} />
+        <StatCard label="Applied to invoices" value={fmtMoney(money.paid)} icon={CheckCircle2} />
         {/* Balance due gets the amber accent only when there IS one — a $0
             balance is calm news and should look like it. */}
         {money.due > 0 ? (
