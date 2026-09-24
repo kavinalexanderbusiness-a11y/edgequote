@@ -93,22 +93,31 @@ function publicQuoteState(value: unknown): Record<string, unknown> | null {
     const lines = sourceLines.map(item => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return null
       const line = item as Record<string, unknown>
+      const service = String(line.service || '')
       const state = String(line.state || '')
       const price = line.price == null ? null : Number(line.price)
+      const availabilityCode = service === 'mowing' && state === 'out_of_route'
+        && line.availability_code === 'northwest_recurring_mowing_unavailable'
+        ? 'northwest_recurring_mowing_unavailable' : null
       if (!['priced', 'written_quote_handoff', 'review_required', 'out_of_route'].includes(state)
-        || !String(line.service || '').trim() || String(line.service).length > 40
+        || !service.trim() || service.length > 40
         || !String(line.label || '').trim() || String(line.label).length > 100
         || (price != null && (!Number.isFinite(price) || price < 0))) return null
       return {
-        service: String(line.service), label: String(line.label),
+        service, label: String(line.label),
         cadence: line.cadence == null ? null : String(line.cadence),
         state, price, price_label: line.price_label == null ? null : String(line.price_label),
+        availability_code: availabilityCode,
       }
     })
     if (lines.some(line => line == null)) return null
+    const hasNorthwestMowingUnavailable = lines.some(line => line?.service === 'mowing'
+      && line.availability_code === 'northwest_recurring_mowing_unavailable')
     return {
       state: 'written_quote_handoff', lines, bundle_price: null,
-      message: 'We need to review the complete service request before confirming one written price.',
+      message: hasNorthwestMowingUnavailable
+        ? 'Recurring lawn mowing is not available in Northwest Calgary. Your other selected services are still included for written review.'
+        : 'We need to review the complete service request before confirming one written price.',
       booking_status: 'not_booked',
     }
   }

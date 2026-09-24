@@ -394,6 +394,10 @@ export function publicAutomaticServiceBundleEstimate(
     state: line.state,
     price: line.price,
     price_label: line.priceLabel,
+    availability_code: line.decision?.state === 'out_of_route'
+      && line.decision.code === 'northwest_recurring_mowing_unavailable'
+      ? 'northwest_recurring_mowing_unavailable'
+      : null,
   }))
   if (decision.state === 'priced') {
     return {

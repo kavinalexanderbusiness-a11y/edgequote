@@ -71,7 +71,7 @@ function fixture(overrides: Partial<AutomaticServicePricingInput> = {}): Automat
       provider: 'google_places',
       placeId: 'ChIJ-test',
       checkedAt: '2026-09-23T17:55:00.000Z',
-      city: 'Calgary', province: 'AB', country: 'CA', quadrant: 'NW',
+      city: 'Calgary', province: 'AB', country: 'CA', quadrant: 'SE',
       lat: 51.05, lng: -114.08,
       baseDistanceKm: 8,
       routeTravelKm: 4,
@@ -106,8 +106,18 @@ assert.ok(oneTime.state === 'priced')
 assert.equal(oneTime.basePrice, 65)
 assert.equal(oneTime.price, 85)
 
-// Calgary NW is never rejected by quadrant. It prices when route economics pass.
-assert.equal(weekly.state, 'priced')
+// Recurring mowing has no Northwest route. The same verified quadrant remains
+// available to one-time work and every other service for owner review.
+const northwestRecurring = decideAutomaticServicePrice(fixture({
+  route: { ...fixture().route!, quadrant: 'NW' },
+}))
+assert.equal(northwestRecurring.state, 'out_of_route')
+assert.ok(northwestRecurring.state === 'out_of_route'
+  && northwestRecurring.code === 'northwest_recurring_mowing_unavailable')
+const northwestOneTime = decideAutomaticServicePrice(fixture({
+  cadence: 'one_time', route: { ...fixture().route!, quadrant: 'NW' },
+}))
+assert.equal(northwestOneTime.state, 'priced')
 const far = decideAutomaticServicePrice(fixture({
   route: { ...fixture().route!, baseDistanceKm: 30 },
 }))

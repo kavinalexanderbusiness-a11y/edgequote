@@ -174,10 +174,10 @@ export type AutomaticServicePricingDecision =
   | { state: 'review_required'; missing: AutomaticPricingGap[] }
   | {
       state: 'out_of_route'
-      code: 'route_economics_outside_owner_limits'
+      code: 'route_economics_outside_owner_limits' | 'northwest_recurring_mowing_unavailable'
       decision: string
-      requiredPrice: number
-      routePremium: number
+      requiredPrice: number | null
+      routePremium: number | null
     }
 
   | {
@@ -401,6 +401,23 @@ function readDurationBand(rules: AutomaticServicePricingVersion, sqft: number): 
 export function decideAutomaticServicePrice(
   input: AutomaticServicePricingInput,
 ): AutomaticServicePricingDecision {
+  const verifiedRoute = input.route
+  if (input.serviceKey === 'mowing'
+    && (input.cadence === 'weekly' || input.cadence === 'biweekly')
+    && verifiedRoute?.verifiedByServer === true
+    && verifiedRoute.city?.trim().toLowerCase() === 'calgary'
+    && verifiedRoute.province?.trim().toUpperCase() === 'AB'
+    && verifiedRoute.country?.trim().toUpperCase() === 'CA'
+    && verifiedRoute.quadrant === 'NW') {
+    return {
+      state: 'out_of_route',
+      code: 'northwest_recurring_mowing_unavailable',
+      decision: 'Recurring lawn mowing is not available in Northwest Calgary because there is no active mowing route there. Other services can still be reviewed separately.',
+      requiredPrice: null,
+      routePremium: null,
+    }
+  }
+
   const missing: AutomaticPricingGap[] = []
   const add = (code: string, decision: string) => {
     if (!missing.some(item => item.code === code)) missing.push({ code, decision })

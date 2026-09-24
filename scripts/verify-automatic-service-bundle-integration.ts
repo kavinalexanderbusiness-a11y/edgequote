@@ -3,9 +3,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { publicWebsiteLeadResponse } from '../src/lib/publicBookingContract'
 import {
+  decideAutomaticServicePrice,
+  type CanonicalRouteEvidence,
+} from '../src/lib/automaticServicePricing'
+import { publicAutomaticServiceBundleEstimate } from '../src/lib/automaticServicePricingServer'
+import {
+  canonicalQuadrantFromAddress,
   collectAutomaticServiceRouteEvidence,
   type RouteEvidenceProvider,
 } from '../src/lib/automaticServiceRouteEvidenceServer'
+
+const OWNER = '20000000-0000-4000-8000-000000000002'
 
 const endpoint = fs.readFileSync(path.join(process.cwd(), 'src/app/api/website-lead/route.ts'), 'utf8')
 const routeCollector = fs.readFileSync(path.join(process.cwd(), 'src/lib/automaticServiceRouteEvidenceServer.ts'), 'utf8')
@@ -21,6 +29,8 @@ assert.match(routeCollector, /haversineKm\(canonical, input\.measurementCentre\)
 assert.match(routeCollector, /\.from\('jobs'\)/)
 assert.match(routeCollector, /\.from\('day_statuses'\)/)
 assert.match(routeCollector, /provider\.distances/)
+assert.equal(canonicalQuadrantFromAddress('123 Main Street Northwest, Calgary, AB'), 'NW')
+assert.equal(canonicalQuadrantFromAddress('123 Main St NW, Calgary, AB'), 'NW')
 
 assert.match(writer, /create or replace function public\.issue_automatic_service_bundle_quote/)
 assert.match(writer, /insert into public\.quote_services/)
@@ -70,6 +80,83 @@ assert.equal(
   ((handoff.quote as Record<string, unknown>).lines as Array<Record<string, unknown>>)[1].price,
   null,
 )
+
+const northwestRoute: CanonicalRouteEvidence = {
+  verifiedByServer: true,
+  provider: 'google_places',
+  placeId: 'ChIJ-northwest-calgary',
+  checkedAt: new Date().toISOString(),
+  city: 'Calgary',
+  province: 'AB',
+  country: 'CA',
+  quadrant: 'NW',
+  lat: 51.1,
+  lng: -114.2,
+  baseDistanceKm: 20,
+  routeTravelKm: 20,
+  nearbyJobs: 0,
+  eligibleRouteDays: 3,
+  routeRuleVersion: 'route-v1',
+}
+const northwestRecurringMowing = decideAutomaticServicePrice({
+  tenantId: OWNER,
+  serviceKey: 'mowing',
+  cadence: 'weekly',
+  rules: null,
+  measurement: null,
+  route: northwestRoute,
+  nowMs: Date.now(),
+})
+assert.equal(northwestRecurringMowing.state, 'out_of_route')
+assert.ok(northwestRecurringMowing.state === 'out_of_route')
+assert.equal(northwestRecurringMowing.code, 'northwest_recurring_mowing_unavailable')
+
+const northwestOneTimeMowing = decideAutomaticServicePrice({
+  tenantId: OWNER,
+  serviceKey: 'mowing',
+  cadence: 'one_time',
+  rules: null,
+  measurement: null,
+  route: northwestRoute,
+  nowMs: Date.now(),
+})
+assert.equal(northwestOneTimeMowing.state, 'review_required', 'one-time mowing remains eligible for owner route review')
+
+const northwestFertilization = decideAutomaticServicePrice({
+  tenantId: OWNER,
+  serviceKey: 'fertilization',
+  cadence: 'one_time',
+  rules: null,
+  measurement: null,
+  route: northwestRoute,
+  nowMs: Date.now(),
+})
+assert.equal(northwestFertilization.state, 'review_required', 'the NW policy is service-specific, not a quadrant-wide ban')
+
+const northwestMixedPublic = publicAutomaticServiceBundleEstimate({
+  state: 'written_quote_handoff',
+  lines: [
+    {
+      serviceKey: 'mowing', label: 'Lawn mowing', cadence: 'weekly', state: 'out_of_route',
+      price: null, priceLabel: null, decision: northwestRecurringMowing,
+    },
+    {
+      serviceKey: 'landscaping', label: 'Landscaping', cadence: null, state: 'written_quote_handoff',
+      price: null, priceLabel: null, decision: null,
+    },
+  ],
+  pricedSubtotal: 0,
+  bundlePrice: null,
+  reason: 'non_measurable_service',
+})
+const northwestMixed = publicWebsiteLeadResponse({ ok: true, body: {} }, northwestMixedPublic)
+const northwestMixedQuote = northwestMixed.quote as Record<string, unknown>
+const northwestMixedLines = northwestMixedQuote.lines as Array<Record<string, unknown>>
+assert.equal(northwestMixedQuote.state, 'written_quote_handoff')
+assert.match(String(northwestMixedQuote.message), /mowing is not available in Northwest Calgary/i)
+assert.equal(northwestMixedLines[0].availability_code, 'northwest_recurring_mowing_unavailable')
+assert.equal(northwestMixedLines[0].state, 'out_of_route')
+assert.equal(northwestMixedLines[1].state, 'written_quote_handoff')
 
 const tampered = publicWebsiteLeadResponse({ ok: true, body: {} }, {
   state: 'priced', estimate_status: 'written_estimate', quote_number: 'EPS-X',

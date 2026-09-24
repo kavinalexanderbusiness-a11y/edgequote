@@ -42,9 +42,14 @@ function component(
   return null
 }
 
-function quadrantFromAddress(address: string): CanonicalRouteEvidence['quadrant'] {
-  const match = address.toUpperCase().match(/(?:^|\s)(NW|NE|SW|SE)(?:\s|,|$)/)
-  return match ? match[1] as CanonicalRouteEvidence['quadrant'] : null
+export function canonicalQuadrantFromAddress(address: string): CanonicalRouteEvidence['quadrant'] {
+  const normalized = address.toUpperCase()
+  const abbreviated = normalized.match(/(?:^|\s)(NW|NE|SW|SE)(?:\s|,|$)/)
+  if (abbreviated) return abbreviated[1] as CanonicalRouteEvidence['quadrant']
+  const long = normalized.match(/\b(NORTHWEST|NORTHEAST|SOUTHWEST|SOUTHEAST)\b/)
+  return long ? ({
+    NORTHWEST: 'NW', NORTHEAST: 'NE', SOUTHWEST: 'SW', SOUTHEAST: 'SE',
+  } as const)[long[1] as 'NORTHWEST' | 'NORTHEAST' | 'SOUTHWEST' | 'SOUTHEAST'] : null
 }
 
 export function googleRouteEvidenceProvider(fetcher: typeof fetch = fetch): RouteEvidenceProvider {
@@ -78,7 +83,7 @@ export function googleRouteEvidenceProvider(fetcher: typeof fetch = fetch): Rout
         city: component(components, ['locality', 'postal_town']),
         province: component(components, ['administrative_area_level_1'], true),
         country: component(components, ['country'], true),
-        quadrant: quadrantFromAddress(formattedAddress),
+        quadrant: canonicalQuadrantFromAddress(formattedAddress),
         lat,
         lng,
       }
