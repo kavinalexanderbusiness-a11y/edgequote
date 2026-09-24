@@ -137,7 +137,7 @@ export interface AutomaticMeasurementEvidence {
 
 export interface CanonicalRouteEvidence {
   verifiedByServer: boolean
-  provider: 'google_places' | 'owner_verified'
+  provider: 'google_places' | 'city_of_calgary' | 'owner_verified'
   placeId: string | null
   checkedAt: string
   city: string | null

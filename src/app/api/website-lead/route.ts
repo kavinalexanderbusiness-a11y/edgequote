@@ -17,7 +17,10 @@ import {
   publicAutomaticServiceBundleEstimate,
   type AutomaticServiceBundleRequest,
 } from '@/lib/automaticServicePricingServer'
-import { collectAutomaticServiceRouteEvidence } from '@/lib/automaticServiceRouteEvidenceServer'
+import {
+  cityMeasurementRouteEvidence,
+  collectAutomaticServiceRouteEvidence,
+} from '@/lib/automaticServiceRouteEvidenceServer'
 import { verifyPublicMeasurementAttestation } from '@/lib/publicMeasurementAttestation'
 import type {
   AutomaticMeasurementEvidence,
@@ -219,10 +222,19 @@ export async function POST(req: NextRequest) {
           source: verified.measurement.source,
           measuredAt: verified.measurement.measuredAt,
         } : null
+        const attestedMowingRoute = verified.ok
+          ? cityMeasurementRouteEvidence(verified.measurement)
+          : null
         for (const selected of selections) {
           const key = String(selected.serviceKey) as AutomaticServiceKey
           if (!AUTOMATIC_SERVICE_KEYS.has(key)) continue
           measurementByService[key] = lawnServices.has(key) ? commonMeasurement : null
+          // Enforce the signed City-address Northwest mowing rule even when no
+          // pricing/capacity version exists yet. This evidence is intentionally
+          // incomplete and cannot support an automatic price or booking.
+          if (key === 'mowing' && attestedMowingRoute) {
+            routeByService[key] = attestedMowingRoute
+          }
           if (!verified.ok || !commonMeasurement) continue
           const requirement = await loadAutomaticServiceCapacityRequirement({
             admin, bookingToken: site.token, serviceKey: key, measuredSqft: commonMeasurement.sqft,
@@ -237,6 +249,8 @@ export async function POST(req: NextRequest) {
             routeRuleVersion: requirement.routeRuleVersion,
             requiredDurationMinutes: requirement.durationMinutes,
           })
+          // Full Google/EdgeHQ route and capacity evidence is strictly richer
+          // and replaces the City-only categorical evidence whenever available.
           if (route.ok) routeByService[key] = route.evidence
         }
         const decision = await attemptAutomaticServiceBundleEstimate({

@@ -4,6 +4,7 @@ import { densityFor, locatedStops } from '@/lib/routeDensity'
 import { serverMapsKey } from '@/lib/mapsKey'
 import { localTodayISO } from '@/lib/utils'
 import type { AutomaticServiceKey, CanonicalRouteEvidence } from '@/lib/automaticServicePricing'
+import type { VerifiedPublicMeasurement } from '@/lib/publicMeasurementAttestation'
 
 type Coord = { lat: number; lng: number }
 
@@ -50,6 +51,40 @@ export function canonicalQuadrantFromAddress(address: string): CanonicalRouteEvi
   return long ? ({
     NORTHWEST: 'NW', NORTHEAST: 'NE', SOUTHWEST: 'SW', SOUTHEAST: 'SE',
   } as const)[long[1] as 'NORTHWEST' | 'NORTHEAST' | 'SOUTHWEST' | 'SOUTHEAST'] : null
+}
+
+/**
+ * The signed City lawn-measurement envelope is already server-verified and
+ * binds the matched address to its coordinates. It is sufficient to enforce
+ * the categorical Northwest recurring-mowing exclusion before any pricing or
+ * capacity configuration exists. All economic route fields deliberately stay
+ * null, so this evidence can never support a price or booking on its own.
+ */
+export function cityMeasurementRouteEvidence(
+  measurement: VerifiedPublicMeasurement,
+): CanonicalRouteEvidence | null {
+  const quadrant = canonicalQuadrantFromAddress(measurement.matchedAddress)
+  const checkedAt = Date.parse(measurement.measuredAt)
+  if (measurement.source !== 'calgary_open_data_land_cover' || !quadrant
+    || !Number.isFinite(measurement.lat) || !Number.isFinite(measurement.lng)
+    || !Number.isFinite(checkedAt)) return null
+  return {
+    verifiedByServer: true,
+    provider: 'city_of_calgary',
+    placeId: null,
+    checkedAt: new Date(checkedAt).toISOString(),
+    city: 'Calgary',
+    province: 'AB',
+    country: 'CA',
+    quadrant,
+    lat: measurement.lat,
+    lng: measurement.lng,
+    baseDistanceKm: null,
+    routeTravelKm: null,
+    nearbyJobs: null,
+    eligibleRouteDays: null,
+    routeRuleVersion: null,
+  }
 }
 
 export function googleRouteEvidenceProvider(fetcher: typeof fetch = fetch): RouteEvidenceProvider {

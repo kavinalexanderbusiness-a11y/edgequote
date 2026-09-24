@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { publicWebsiteLeadResponse } from '../src/lib/publicBookingContract'
@@ -6,12 +7,21 @@ import {
   decideAutomaticServicePrice,
   type CanonicalRouteEvidence,
 } from '../src/lib/automaticServicePricing'
-import { publicAutomaticServiceBundleEstimate } from '../src/lib/automaticServicePricingServer'
+import {
+  attemptAutomaticServiceBundleEstimate,
+  loadAutomaticServiceCapacityRequirement,
+  publicAutomaticServiceBundleEstimate,
+} from '../src/lib/automaticServicePricingServer'
 import {
   canonicalQuadrantFromAddress,
+  cityMeasurementRouteEvidence,
   collectAutomaticServiceRouteEvidence,
   type RouteEvidenceProvider,
 } from '../src/lib/automaticServiceRouteEvidenceServer'
+import {
+  publicMeasurementPolygonHash,
+  verifyPublicMeasurementAttestation,
+} from '../src/lib/publicMeasurementAttestation'
 
 const OWNER = '20000000-0000-4000-8000-000000000002'
 
@@ -20,6 +30,9 @@ const routeCollector = fs.readFileSync(path.join(process.cwd(), 'src/lib/automat
 const writer = fs.readFileSync(path.join(process.cwd(), 'supabase/migrations/20260923174500_issue_automatic_service_bundle_quote.sql'), 'utf8')
 
 assert.match(endpoint, /collectAutomaticServiceRouteEvidence/)
+assert.ok(endpoint.indexOf('cityMeasurementRouteEvidence(verified.measurement)')
+  < endpoint.indexOf('loadAutomaticServiceCapacityRequirement({'),
+  'signed City route evidence must exist before optional pricing/capacity collection')
 assert.match(endpoint, /attemptAutomaticServiceBundleEstimate/)
 assert.match(endpoint, /issueAutomaticServiceBundleQuote/)
 assert.doesNotMatch(endpoint, /route_review_status[^\n]*(eligible|approved)/)
@@ -31,6 +44,52 @@ assert.match(routeCollector, /\.from\('day_statuses'\)/)
 assert.match(routeCollector, /provider\.distances/)
 assert.equal(canonicalQuadrantFromAddress('123 Main Street Northwest, Calgary, AB'), 'NW')
 assert.equal(canonicalQuadrantFromAddress('123 Main St NW, Calgary, AB'), 'NW')
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const object = value as Record<string, unknown>
+  return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`
+}
+
+const measurementSecret = 'northwest-route-verification-secret-2026'
+const measurementNow = Date.parse('2026-09-23T18:00:00.000Z')
+const northwestPolygon = [{ section: 'lawn', ring: [
+  { lat: 51.1000, lng: -114.2000 },
+  { lat: 51.1001, lng: -114.2000 },
+  { lat: 51.1001, lng: -114.2001 },
+] }]
+const signedMeasurementPayload = {
+  v: 1,
+  address: '123 example dr nw',
+  matchedAddress: '123 Example Drive NW, Calgary, AB, Canada',
+  sqft: 2400,
+  polygonHash: publicMeasurementPolygonHash(northwestPolygon),
+  centre: { lat: 51.10005, lng: -114.20005 },
+  source: 'calgary_open_data_land_cover',
+  confidence: 'high',
+  measuredAt: '2026-09-23T17:55:00.000Z',
+  expiresAt: '2026-09-23T18:25:00.000Z',
+}
+const encodedMeasurement = Buffer.from(stableJson(signedMeasurementPayload)).toString('base64url')
+const signedMeasurement = `${encodedMeasurement}.${createHmac('sha256', measurementSecret).update(encodedMeasurement).digest('base64url')}`
+const verifiedMeasurement = verifyPublicMeasurementAttestation({
+  token: signedMeasurement,
+  confirmation: 'automatic_applied',
+  submittedAddress: '123 Example Dr NW, Calgary, AB',
+  submittedSqft: '2400',
+  submittedPolygon: northwestPolygon,
+  nowMs: measurementNow,
+  secret: measurementSecret,
+})
+if (!verifiedMeasurement.ok) throw new Error(`signed City measurement fixture failed: ${verifiedMeasurement.code}`)
+const verifiedNorthwestMeasurement = verifiedMeasurement.measurement
+const cityNorthwestRoute = cityMeasurementRouteEvidence(verifiedNorthwestMeasurement)
+if (!cityNorthwestRoute) throw new Error('signed City measurement did not produce categorical route evidence')
+assert.equal(cityNorthwestRoute.provider, 'city_of_calgary')
+assert.equal(cityNorthwestRoute.quadrant, 'NW')
+assert.equal(cityNorthwestRoute.baseDistanceKm, null)
+assert.equal(cityNorthwestRoute.eligibleRouteDays, null)
 
 assert.match(writer, /create or replace function public\.issue_automatic_service_bundle_quote/)
 assert.match(writer, /insert into public\.quote_services/)
@@ -158,6 +217,81 @@ assert.equal(northwestMixedLines[0].availability_code, 'northwest_recurring_mowi
 assert.equal(northwestMixedLines[0].state, 'out_of_route')
 assert.equal(northwestMixedLines[1].state, 'written_quote_handoff')
 
+function missingPricingAdmin() {
+  const responses: Record<string, unknown> = {
+    business_settings: { data: { user_id: OWNER }, error: null },
+    service_templates: { data: [{ id: 'published-mowing' }], error: null },
+    automatic_service_pricing_versions: { data: null, error: null },
+  }
+  return {
+    from(table: string) {
+      const result = responses[table]
+      const chain: Record<string, unknown> = {}
+      for (const method of ['select', 'eq', 'not', 'in']) chain[method] = () => chain
+      chain.limit = async () => result
+      chain.maybeSingle = async () => result
+      return chain
+    },
+  }
+}
+
+async function verifySignedNorthwestWithoutPricing() {
+  const admin = missingPricingAdmin() as never
+  const capacity = await loadAutomaticServiceCapacityRequirement({
+    admin,
+    bookingToken: 'token-with-no-pricing-version',
+    serviceKey: 'mowing',
+    measuredSqft: verifiedNorthwestMeasurement.sqft,
+  })
+  assert.equal(capacity.ok, false)
+  assert.ok(!capacity.ok)
+  assert.equal(capacity.code, 'pricing_version_missing',
+    'the regression fixture must exercise the missing pricing/capacity path')
+  const decision = await attemptAutomaticServiceBundleEstimate({
+    admin,
+    bookingToken: 'token-with-no-pricing-version',
+    services: [
+      { serviceKey: 'mowing', label: 'Lawn mowing', cadence: 'weekly' },
+      { serviceKey: 'landscaping', label: 'Landscaping', cadence: null },
+    ],
+    measurementByService: {
+      mowing: {
+        verifiedByServer: true,
+        sqft: verifiedNorthwestMeasurement.sqft,
+        areaCount: 1,
+        confidence: verifiedNorthwestMeasurement.confidence,
+        source: verifiedNorthwestMeasurement.source,
+        measuredAt: verifiedNorthwestMeasurement.measuredAt,
+      },
+    },
+    routeByService: { mowing: cityNorthwestRoute },
+    nowMs: measurementNow,
+  })
+  assert.equal(decision.state, 'written_quote_handoff')
+  assert.equal(decision.lines[0].decision?.state, 'out_of_route',
+    'signed Northwest City evidence enforces the route exclusion without pricing configuration')
+  assert.ok(decision.lines[0].decision?.state === 'out_of_route')
+  assert.equal(decision.lines[0].decision.code, 'northwest_recurring_mowing_unavailable')
+  assert.equal(decision.lines[1].state, 'written_quote_handoff',
+    'landscaping remains available for an owner-reviewed written quote')
+  assert.equal(decision.bundlePrice, null, 'missing pricing configuration cannot produce an automatic bundle price')
+
+  const response = publicWebsiteLeadResponse(
+    { ok: true, body: {} },
+    publicAutomaticServiceBundleEstimate(decision),
+  )
+  const quote = response.quote as Record<string, unknown>
+  const lines = quote.lines as Array<Record<string, unknown>>
+  assert.equal(quote.state, 'written_quote_handoff')
+  assert.equal(quote.bundle_price, null)
+  assert.equal(quote.booking_status, 'not_booked')
+  assert.equal(lines[0].availability_code, 'northwest_recurring_mowing_unavailable')
+  assert.equal(lines[0].state, 'out_of_route')
+  assert.equal(lines[0].price, null)
+  assert.equal(lines[1].state, 'written_quote_handoff')
+  assert.equal(lines[1].price, null)
+}
+
 const tampered = publicWebsiteLeadResponse({ ok: true, body: {} }, {
   state: 'priced', estimate_status: 'written_estimate', quote_number: 'EPS-X',
   lines: [{ service: 'mowing', label: 'Mowing', cadence: 'weekly', state: 'priced', price: 1, price_label: 'weekly' }],
@@ -229,6 +363,6 @@ async function verifyRouteCollector() {
   assert.ok(!mismatch.ok && mismatch.code === 'address_measurement_mismatch')
 }
 
-verifyRouteCollector()
+Promise.all([verifyRouteCollector(), verifySignedNorthwestWithoutPricing()])
   .then(() => console.log('automatic service bundle integration verification passed'))
   .catch(error => { console.error(error); process.exit(1) })
