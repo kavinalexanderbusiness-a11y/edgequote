@@ -32,7 +32,7 @@ export function EquipmentDialog({ open, userId, equipment, onClose, onSaved }: {
     serial_number: equipment?.serial_number ?? '',
     purchase_date: equipment?.purchase_date ?? '',
     purchase_price: equipment?.purchase_price != null ? String(equipment.purchase_price) : '',
-    hours: equipment?.hours != null ? String(equipment.hours) : '0',
+    hours: equipment?.hours != null ? String(equipment.hours) : '',
     service_interval_hours: equipment?.service_interval_hours != null ? String(equipment.service_interval_hours) : '',
     service_interval_days: equipment?.service_interval_days != null ? String(equipment.service_interval_days) : '',
     warranty_expires: equipment?.warranty_expires ?? '',
@@ -56,7 +56,7 @@ export function EquipmentDialog({ open, userId, equipment, onClose, onSaved }: {
       serial_number: v.serial_number.trim() || null,
       purchase_date: v.purchase_date || null,
       purchase_price: numOrNull(v.purchase_price),
-      hours: numOrNull(v.hours) ?? 0,
+      hours: numOrNull(v.hours),
       service_interval_hours: numOrNull(v.service_interval_hours),
       service_interval_days: numOrNull(v.service_interval_days),
       warranty_expires: v.warranty_expires || null,
@@ -104,7 +104,7 @@ export function EquipmentDialog({ open, userId, equipment, onClose, onSaved }: {
             value={v.purchase_price} onChange={e => set('purchase_price', e.target.value)} placeholder="0.00" />
           <Input label="Engine hours" type="number" min="0" step="0.1" inputMode="decimal"
             value={v.hours} onChange={e => set('hours', e.target.value)}
-            hint="Update as you run it — drives cost/hour." />
+            hint="Leave blank if unknown or not applicable. Enter 0 only for a real zero reading." />
         </div>
 
         <div className="rounded-xl border border-border bg-surface/40 p-4 space-y-3">

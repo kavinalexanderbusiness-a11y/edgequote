@@ -303,7 +303,7 @@ function EquipmentRow({ eq, uid, services, docs, onDocsChanged, today, open, onT
                 )}
               </div>
               <p className="text-xs text-ink-muted mt-0.5 truncate">
-                {[meta.label, [eq.make, eq.model].filter(Boolean).join(' '), eq.hours > 0 ? `${eq.hours} h` : null].filter(Boolean).join(' · ')}
+                {[meta.label, [eq.make, eq.model].filter(Boolean).join(' '), eq.hours != null ? `${eq.hours} h` : 'Hours —'].filter(Boolean).join(' · ')}
               </p>
             </div>
           </button>
@@ -333,7 +333,7 @@ function EquipmentRow({ eq, uid, services, docs, onDocsChanged, today, open, onT
               <Detail label="Maintenance" value={formatCurrency(cost.maintenance)} sub={`${services.length} service${services.length !== 1 ? 's' : ''}`} />
               <Detail label="Total cost" value={formatCurrency(cost.total)} sub="Purchase + service" />
               <Detail label="Cost / hour" value={cost.perHour != null ? formatCurrency(cost.perHour) : '—'}
-                sub={cost.perHour == null ? 'Add engine hours' : `over ${eq.hours} h`} />
+                sub={eq.hours == null ? 'Hours unknown or not applicable' : eq.hours === 0 ? 'No running hours yet' : `over ${eq.hours} h`} />
             </div>
 
             {/* Warranty in words — including when it has lapsed, so a repair
