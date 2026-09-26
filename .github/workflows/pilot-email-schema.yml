@@ -1,0 +1,77 @@
+name: Dormant pilot email PostgreSQL proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pilot-email-schema.yml'
+      - 'scripts/pilot-email/**'
+      - 'scripts/lib/pg-sql.ts'
+      - 'scripts/schema/platform-prelude.sql'
+      - 'supabase/migrations/**'
+      - 'supabase/proposals/pilot-email-core.sql'
+      - 'supabase/proposals/pilot-quote-identity.sql'
+      - 'src/lib/comms/**'
+      - 'src/lib/quotes/pilotQuoteIdentity.ts'
+      - 'src/lib/customers.ts'
+      - 'src/lib/attribution.ts'
+      - 'src/app/dashboard/quotes/**'
+      - 'src/lib/followup.ts'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pilot-email-schema-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-postgres:
+    name: PostgreSQL17 constraints, native persistence and races
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: pilot_test
+          # Public disposable fixture credential. Never a client/production key.
+          POSTGRES_PASSWORD: pilot_disposable_password_not_a_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PILOT_EMAIL_DISPOSABLE: EDGEHQ_LOCAL_PG17_PILOT_TEST_ONLY
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install exactly the existing lockfile
+        run: npm ci
+      - name: Mark the fixed synthetic database
+        env:
+          PGPASSWORD: pilot_disposable_password_not_a_secret
+        run: |
+          command -v psql
+          psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
+      - name: Actual PostgreSQL17 source and integration proof
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/schema-proof.ts
+      - name: Preserve the exact proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-email-native-pg17-${{ github.sha }}
+          path: outputs/pilot-quote-reassignment-20260909/native-pg17-proof.json
+          if-no-files-found: error
+          retention-days: 14
