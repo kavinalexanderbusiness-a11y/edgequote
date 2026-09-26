@@ -32,7 +32,7 @@ import { Layers, ChevronRight } from 'lucide-react'
 interface Props {
   /** The catalogue, for resolving each line's price. Passed in because the
    *  builder already holds it — a second fetch would be a second answer. */
-  templates: ServiceTemplate[]
+  templates: Pick<ServiceTemplate, 'id' | 'default_rate'>[]
   /** Blocked, with the reason said out loud. Used for an options quote, where
    *  the database refuses line items outright. */
   blockedReason?: string | null

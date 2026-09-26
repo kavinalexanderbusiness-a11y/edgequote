@@ -219,7 +219,7 @@ const CAT: ServiceTemplate[] = [
   svc('t9', 'Gravel Installation', 'Landscaping'), svc('t10', 'Hedge Trimming', 'Tree & Shrub Care'),
 ]
 const names = (m: ReturnType<typeof buildServiceMenu>) =>
-  m.rows.filter(r => r.type === 'template').map(r => (r as { t: ServiceTemplate }).t.name)
+  m.rows.flatMap(r => r.type === 'template' ? [r.t.name] : [])
 const headers = (m: ReturnType<typeof buildServiceMenu>) =>
   m.rows.filter(r => r.type === 'header').map(r => (r as { label: string }).label)
 
@@ -557,6 +557,8 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
         // These pre-existing controls deliberately exercise the unchanged default
         // mode. The ownership guard below executes the real helper and cache.
         if (id === '@/hooks/useAutosaveOwner') return { useAutosaveOwner: () => null, isActiveAutosaveOwner: () => false }
+        if (id === '@/lib/clientCache') return { isCurrentLease: () => { throw new Error('Default autosave must not enter the opt-in submission lease path') } }
+        if (id === '@/lib/autosaveSubmission') return new Proxy({}, { get: () => () => { throw new Error('Default autosave must not enter the opt-in bound draft path') } })
         throw new Error(`Unexpected autosave dependency: ${id}`)
       },
       window: { localStorage: { getItem: (key: string) => storage.get(key) ?? null,
@@ -651,7 +653,7 @@ console.log('\n═══ Passive quote initialization preserves recoverable work
   for (const [name, before, after] of [
     ['removing recovery protection', 'if (pendingDraft.current && !canReplaceDraft) return', ''],
     ['using delayed state for mount-time protection', 'if (pendingDraft.current && !canReplaceDraft) return', 'if (draft !== null && !canReplaceDraft) return'],
-    ['dropping the intent dependency', '[serialized, enabled, canReplaceDraft, guarded, binding, accessible]', '[serialized, enabled, guarded, binding, accessible]'],
+    ['dropping the intent dependency', '[serialized, enabled, canReplaceDraft, guarded, binding, accessible, transactional, submissionState, stableSubmission]', '[serialized, enabled, guarded, binding, accessible, transactional, submissionState, stableSubmission]'],
     ['changing the legacy default', 'canReplaceDraft = true', 'canReplaceDraft = false'],
   ]) {
     const mutated = source.replace(before, after)

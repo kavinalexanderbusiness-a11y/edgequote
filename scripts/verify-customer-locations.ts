@@ -75,8 +75,12 @@ check('the measured price follows the picked location',
   'without this, tapping "45 Lake Rd" still prices the plan tiles off the primary’s lawn')
 
 check('…and the measurement effect re-runs on a pick',
-  /\}, \[customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setFormValue\]\)/.test(QB),
+  /\}, \[customerId, defaultPropertyId, defaultCustomerId, pickedPropertyId, isEdit, getValues, setFormValue, verifiedAuxiliaryMode\]\)/.test(QB),
   'targetPropertyId is dead code if the effect never sees the pick change')
+
+check('the verified editor refuses the optional measurement read before selecting a property',
+  /useEffect\(\(\) => \{\s*if \(verifiedAuxiliaryMode\) return\s*if \(!customerId \|\| customerId === '__manual'\) \{ setSavedRec\(null\); return \}/.test(QB),
+  'the default pick still refreshes its measurement, while verified inputs cannot trigger a side read')
 
 check('the free-typed field remains — a NEW job-site address stays quotable',
   QB.includes('label="Service Address *"'),

@@ -177,12 +177,13 @@ export interface MatchInput {
   email?: string | null
   address?: string | null
 }
-export interface CustomerMatch { customer: Customer; reason: MatchReason; confident: boolean }
+type MatchCustomer = Pick<Customer, 'name' | 'phone' | 'email' | 'address'>
+export interface CustomerMatch<T extends MatchCustomer = Customer> { customer: T; reason: MatchReason; confident: boolean }
 
 // Find the most likely existing customer. Phone / email / address matches are
 // "confident" (safe to auto-link); a name-only match is returned but flagged
 // not-confident, so the save flow never silently merges two different people.
-export function findCustomerMatch(customers: Customer[], input: MatchInput): CustomerMatch | null {
+export function findCustomerMatch<T extends MatchCustomer>(customers: T[], input: MatchInput): CustomerMatch<T> | null {
   if (normalizePhone(input.phone).length >= 7) {
     // phoneMatches is the ONE rule, shared with the SQL intake seam — see its comment.
     const c = customers.find(c => phoneMatches(c.phone, input.phone))

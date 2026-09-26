@@ -28,7 +28,10 @@ async function checkCapability(): Promise<boolean> {
   return capabilityPromise
 }
 
-export function useAiAssist() {
+export function useAiAssist(options?: { disabled?: boolean }) {
+  const disabled = options?.disabled === true
+  const disabledRef = useRef(disabled)
+  disabledRef.current = disabled
   // null = unknown (checking); render nothing until we know.
   const [enabled, setEnabled] = useState<boolean | null>(capability)
   const [running, setRunning] = useState(false)
@@ -37,15 +40,20 @@ export function useAiAssist() {
 
   useEffect(() => {
     let alive = true
+    if (disabled) {
+      abortRef.current?.abort()
+      return () => { alive = false }
+    }
     if (enabled === null) checkCapability().then(v => { if (alive) setEnabled(v) })
     return () => { alive = false; abortRef.current?.abort() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [disabled])
 
   const run = useCallback(async (
     payload: AssistPayload,
     handlers: { onDelta?: (text: string) => void; onDone?: (full: string) => void },
   ): Promise<string | null> => {
+    if (disabledRef.current) return null
     setError(null)
     setRunning(true)
     const controller = new AbortController()
@@ -57,6 +65,7 @@ export function useAiAssist() {
         body: JSON.stringify(payload),
         signal: controller.signal,
       })
+      if (disabledRef.current) return null
       if (!isNdjson(res)) {
         let msg = 'Could not generate that right now.'
         try { const j = await res.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
@@ -65,6 +74,7 @@ export function useAiAssist() {
       }
       let full: string | null = null
       await readNdjson(res, evt => {
+        if (disabledRef.current) return
         if (evt.t === 'delta' && evt.text) handlers.onDelta?.(evt.text)
         else if (evt.t === 'done') {
           // An empty completion is a FAILURE, not a result. Every surface blanks
@@ -78,7 +88,7 @@ export function useAiAssist() {
         }
         else if (evt.t === 'error') setError(evt.error || 'Generation failed.')
       })
-      return full
+      return disabledRef.current ? null : full
     } catch (e) {
       if (!(e instanceof DOMException && e.name === 'AbortError')) {
         setError('Could not reach the AI service. Try again.')
@@ -92,5 +102,6 @@ export function useAiAssist() {
 
   const cancel = useCallback(() => abortRef.current?.abort(), [])
 
-  return { enabled, running, error, run, cancel, clearError: () => setError(null) }
+  return { enabled: disabled ? false : enabled, running: disabled ? false : running,
+    error: disabled ? null : error, run, cancel, clearError: () => setError(null) }
 }

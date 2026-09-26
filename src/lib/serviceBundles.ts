@@ -78,8 +78,10 @@ export interface BundleScope {
 
 const round2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100
 
+export type CatalogueServiceRate = Pick<ServiceTemplate, 'id' | 'default_rate'>
+
 /** Index a catalogue for the lookups below. */
-export function templateIndex(templates: ServiceTemplate[] | null | undefined): Map<string, ServiceTemplate> {
+export function templateIndex<T extends CatalogueServiceRate>(templates: T[] | null | undefined): Map<string, T> {
   return new Map((templates || []).map(t => [t.id, t]))
 }
 
@@ -97,7 +99,7 @@ export function templateIndex(templates: ServiceTemplate[] | null | undefined): 
 // is what makes the catalogue link worth having.
 export function resolveUnitPrice(
   item: Pick<ServiceBundleItem, 'unit_price' | 'service_template_id'>,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): number {
   if (item.unit_price != null) return round2(item.unit_price)
   const t = item.service_template_id ? templates.get(item.service_template_id) : null
@@ -108,7 +110,7 @@ export function resolveUnitPrice(
  *  'catalogue' is the honest word for a figure this bundle does not own. */
 export function priceBasis(
   item: Pick<ServiceBundleItem, 'unit_price' | 'service_template_id'>,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): 'bundle' | 'catalogue' | 'unpriced' {
   if (item.unit_price != null) return 'bundle'
   const t = item.service_template_id ? templates.get(item.service_template_id) : null
@@ -119,7 +121,7 @@ export function priceBasis(
  *  and as the source for `bundleScope`. */
 export function bundleLines(
   items: ServiceBundleItem[] | null | undefined,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): QuoteServiceInput[] {
   return [...(items || [])]
     .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at))
@@ -143,7 +145,7 @@ export function bundleLines(
  *  previews. Returns 0 for an empty bundle. */
 export function bundleTotal(
   items: ServiceBundleItem[] | null | undefined,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): number {
   return sumServiceLines(bundleLines(items, templates)).net
 }
@@ -153,7 +155,7 @@ export function bundleTotal(
  *  quote built from a bundle is indistinguishable from one typed by hand. */
 export function bundleScope(
   items: ServiceBundleItem[] | null | undefined,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): BundleScope {
   const lines = bundleLines(items, templates)
   if (!lines.length) return { primary: null, extras: [] }
@@ -197,7 +199,7 @@ export function bundleSummary(items: ServiceBundleItem[] | null | undefined): st
 // how long, and (see below) sometimes what it cost.
 export function captureBundleItems(
   lines: BundleSourceLine[] | null | undefined,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): NewBundleItem[] {
   return (lines || [])
     .filter(l => (l.service_type || '').trim())
@@ -226,7 +228,7 @@ export function captureBundleItems(
 // owner chose, so it is kept as this bundle's starting point.
 function captureUnitPrice(
   line: BundleSourceLine,
-  templates: Map<string, ServiceTemplate>,
+  templates: Map<string, CatalogueServiceRate>,
 ): number | null {
   const price = round2(line.unit_price)
   const t = line.service_template_id ? templates.get(line.service_template_id) : null

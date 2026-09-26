@@ -105,7 +105,7 @@ export function getInitials(name: string): string {
  */
 export function suggestTravelFee(
   km: number,
-  tiers: TravelFeeTier[]
+  tiers: Pick<TravelFeeTier, 'min_km' | 'max_km' | 'fee' | 'is_custom' | 'sort_order'>[]
 ): { fee: number | null; isCustom: boolean; tierLabel: string } {
   const sorted = [...tiers].sort((a, b) => a.sort_order - b.sort_order)
   for (const tier of sorted) {

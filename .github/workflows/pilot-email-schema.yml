@@ -1,0 +1,142 @@
+name: Dormant pilot email PostgreSQL proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pilot-email-schema.yml'
+      - 'scripts/pilot-email/**'
+      - 'scripts/lib/pg-sql.ts'
+      - 'scripts/lib/autosaveOwnership.ts'
+      - 'scripts/schema/platform-prelude.sql'
+      - 'supabase/migrations/**'
+      - 'supabase/proposals/pilot-email-core.sql'
+      - 'supabase/proposals/pilot-quote-identity.sql'
+      - 'supabase/proposals/pilot-quote-save-contract*.md'
+      - 'supabase/proposals/pilot-quote-save.sql'
+      - 'supabase/proposals/pilot-quote-versioned-acceptance.sql'
+      - 'supabase/proposals/pilot-quote-acceptance-callers-contract.md'
+      - 'src/lib/comms/**'
+      - 'src/lib/quotes/pilotQuoteIdentity.ts'
+      - 'src/lib/quotes/pilotQuoteSave*.ts'
+      - 'src/lib/quotes/pilotQuoteAcceptance*.ts'
+      - 'src/types/**'
+      - 'src/lib/utils.ts'
+      - 'src/lib/quoteServices.ts'
+      - 'src/lib/quoteOptions.ts'
+      - 'src/lib/payments/depositGate.ts'
+      - 'src/lib/pricingConfig.ts'
+      - 'src/lib/servicePricing.ts'
+      - 'src/lib/measure/**'
+      - 'src/lib/measurePricing.ts'
+      - 'src/lib/customers.ts'
+      - 'src/lib/attribution.ts'
+      - 'src/app/dashboard/quotes/**'
+      - 'src/app/portal/**'
+      - 'src/components/quotes/RecordAcceptanceDialog.tsx'
+      - 'src/components/quotes/QuoteBuilder.tsx'
+      - 'src/components/quotes/PilotQuoteSaveEditorShell.tsx'
+      - 'src/components/quotes/PilotQuoteAcceptanceModal.tsx'
+      - 'src/components/layout/CacheOwner.tsx'
+      - 'src/hooks/useAutosave.ts'
+      - 'src/hooks/useAutosaveOwner.ts'
+      - 'src/hooks/usePilotQuoteAcceptance.ts'
+      - 'src/lib/clientCache.ts'
+      - 'src/lib/autosaveSubmission.ts'
+      - 'src/lib/payments/termsTimingConflict.ts'
+      - 'src/lib/followup.ts'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pilot-email-schema-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-postgres:
+    name: PostgreSQL17 constraints, native persistence and races
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: pilot_test
+          # Public disposable fixture credential. Never a client/production key.
+          POSTGRES_PASSWORD: pilot_disposable_password_not_a_secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pilot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PILOT_EMAIL_DISPOSABLE: EDGEHQ_LOCAL_PG17_PILOT_TEST_ONLY
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Shared-parser parity reads its pinned pre-extraction Git source.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install exactly the existing lockfile
+        run: npm ci
+      - name: Mark the fixed synthetic database
+        env:
+          PGPASSWORD: pilot_disposable_password_not_a_secret
+        run: |
+          command -v psql
+          psql --no-psqlrc --no-password --host=127.0.0.1 --port=5432 --username=postgres --dbname=pilot_test --set=ON_ERROR_STOP=on --command="COMMENT ON DATABASE pilot_test IS 'edgehq disposable pilot schema proof; never production'"
+      - name: Actual PostgreSQL17 source and integration proof
+        id: native_proof
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/schema-proof.ts
+      - name: Dormant quote Save HTTP boundary and native adapter proof
+        id: server_proof
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-server-proof.ts
+      - name: Isolated quote Save browser and default autosave proof
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/quote-save-browser-proof.ts /usr/bin/google-chrome
+      - name: Isolated actual acceptance callers with native response captures
+        # Its inputs are the native/server receipts. An independent Save-browser
+        # failure still fails this job, while this evidence can be collected.
+        if: ${{ !cancelled() && steps.native_proof.outcome == 'success' && steps.server_proof.outcome == 'success' }}
+        run: node node_modules/tsx/dist/cli.mjs scripts/pilot-email/acceptance-caller-browser-proof.ts /usr/bin/google-chrome
+      - name: Preserve the exact proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-email-native-pg17-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/native-pg17-proof.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve the separate browser proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quote-save-browser-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/browser-save-proof.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve the separate server proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quote-save-server-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/server-save-proof.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve the separate acceptance browser proof receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quote-acceptance-browser-${{ github.sha }}
+          path: outputs/pilot-full-quote-save-20260910/browser-acceptance-proof.json
+          if-no-files-found: error
+          retention-days: 14

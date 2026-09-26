@@ -8,12 +8,11 @@ import { formatServicePrice } from '@/lib/servicePricing'
 // WHAT the menu offers and in what order lives in lib/servicePicker — a pure
 // function, so the search, the ranking, the Recent block and the grouping rule
 // can be asserted on directly instead of inferred from this file's JSX.
-import { buildServiceMenu } from '@/lib/servicePicker'
+import { buildServiceMenu, type ServicePickerTemplate } from '@/lib/servicePicker'
 // WHERE the menu is allowed to be. A 288px list opening downward from a field
 // in the lower half of a phone form covered the fixed Save bar and swallowed
 // the tap — see lib/dropdownPlacement for the measurement.
 import { useDropdownPlacement, dropdownStyle } from '@/hooks/useDropdownPlacement'
-import type { ServiceTemplate } from '@/types'
 import { Wrench, ChevronDown, Check, Star, Search } from 'lucide-react'
 
 // ── Type-to-search service picker ────────────────────────────────────────────
@@ -42,11 +41,11 @@ interface ServicePickerProps extends Omit<InputHTMLAttributes<HTMLInputElement>,
   hint?: ReactNode
   /** The services on offer. The caller decides what belongs here (active only,
       plus whichever retired one a saved row still points at). */
-  templates: ServiceTemplate[]
+  templates: ServicePickerTemplate[]
   /** The adopted catalogue service, or '' when the name is the owner's own text. */
   templateId?: string
   /** A row was chosen — the caller owns what that fills in. */
-  onPick: (t: ServiceTemplate) => void
+  onPick: (t: ServicePickerTemplate) => void
   /** Drop the catalogue link and keep the typed name as one-off work. The old
       <select> had this as its "Select a service…" placeholder option; without it
       an adopted service could only ever be swapped for another one. Editing the

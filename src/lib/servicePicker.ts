@@ -1,5 +1,9 @@
 import type { ServiceTemplate } from '@/types'
 
+export type ServicePickerTemplate = Pick<ServiceTemplate,
+  'id' | 'name' | 'category' | 'default_rate' | 'pricing_display_type' | 'default_description'
+  | 'is_active' | 'is_favorite' | 'sort_order' | 'unit_cost' | 'material_cost' | 'recurrence' | 'measured_by'>
+
 // ── What the service picker offers, and in what order ────────────────────────
 // The one place that decides: which services a search matches, how they rank,
 // which ones count as "recent", and whether the list is worth grouping. It lives
@@ -19,7 +23,7 @@ export interface ServiceMenu {
 }
 export type ServiceMenuRow =
   | { type: 'header'; key: string; label: string }
-  | { type: 'template'; key: string; t: ServiceTemplate; recent: boolean }
+  | { type: 'template'; key: string; t: ServicePickerTemplate; recent: boolean }
 
 /** Enough of a catalogue that walking it beats reading it. Below this a flat
     list is shorter than the headers that would organise it. */
@@ -32,14 +36,14 @@ export const RECENT_MAX = 4
     types — plus their own category words ("winter", "landscaping"), because a
     category IS a word they chose and a service they can't remember the name of
     is exactly when they'd reach for one. */
-export function serviceMatches(t: ServiceTemplate, q: string): boolean {
+export function serviceMatches(t: ServicePickerTemplate, q: string): boolean {
   const n = q.trim().toLowerCase()
   if (!n) return true
   return !!t.name?.toLowerCase().includes(n) || !!t.category?.toLowerCase().includes(n)
 }
 
 export function buildServiceMenu(
-  templates: ServiceTemplate[],
+  templates: ServicePickerTemplate[],
   opts: { query?: string; filtering?: boolean; recentIds?: string[] } = {},
 ): ServiceMenu {
   const filtering = !!opts.filtering && !!opts.query?.trim()
@@ -59,7 +63,7 @@ export function buildServiceMenu(
   // Ids that no longer resolve (a deleted or retired service) simply drop out —
   // this reads history, and history can name things that aren't on offer today.
   const recent = filtering ? [] : (opts.recentIds || [])
-    .map(id => byId.get(id)).filter((t): t is ServiceTemplate => !!t).slice(0, RECENT_MAX)
+    .map(id => byId.get(id)).filter((t): t is ServicePickerTemplate => !!t).slice(0, RECENT_MAX)
   const recentIdSet = new Set(recent.map(t => t.id))
 
   const rows: ServiceMenuRow[] = []
@@ -75,7 +79,7 @@ export function buildServiceMenu(
   const grouped = !filtering && templates.length >= GROUP_FROM && templates.every(t => !!t.category?.trim())
 
   if (grouped) {
-    const cats = new Map<string, ServiceTemplate[]>()
+    const cats = new Map<string, ServicePickerTemplate[]>()
     for (const t of rest) {
       const c = t.category.trim()
       if (!cats.has(c)) cats.set(c, [])

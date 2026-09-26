@@ -102,7 +102,7 @@ interface Props {
   /** The owner's OWN catalogue row for the selected service. This is what makes
    *  the tool universal: how the service is measured and the ways it is sold come
    *  from here, never from its name. null = free-text service with no template. */
-  template?: ServiceTemplate | null
+  template?: Pick<ServiceTemplate, 'id' | 'name' | 'measured_by' | 'pricing_display_type'> | null
   /** That service's `service_pricing_plans` rows. Empty is a real answer —
    *  "pricing not configured" — and is rendered as such, never as $0. */
   plans?: ServicePricingPlanRow[]
