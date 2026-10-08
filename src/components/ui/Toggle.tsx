@@ -7,16 +7,18 @@ interface ToggleProps {
   onChange: (checked: boolean) => void
   label?: string
   ariaLabel?: string   // accessible name when there's no visible `label`
+  ariaDescribedBy?: string
   disabled?: boolean
 }
 
-export function Toggle({ checked, onChange, label, ariaLabel, disabled }: ToggleProps) {
+export function Toggle({ checked, onChange, label, ariaLabel, ariaDescribedBy, disabled }: ToggleProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={!label ? ariaLabel : undefined}
+      aria-describedby={ariaDescribedBy}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className="inline-flex items-center gap-2.5 rounded-full disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"

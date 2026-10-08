@@ -55,7 +55,7 @@ import { saveManual } from '@/lib/measure/data'
 // and the charge route run, so this page can never disagree with them.
 import {
   depositRuleFromForm, gateBlocksScheduling, loadQuoteDepositRows, schedulingGate,
-  schedulingPreferenceLine, stampDepositOverride, type GateLedgerRow,
+  schedulingPreferenceLine, type GateLedgerRow,
 } from '@/lib/payments/depositGate'
 import { recordDeposit } from '@/lib/payments/ledger'
 import { AlertTriangle, Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Camera, Globe, CalendarClock, Layers, Lock, Wallet, CheckCircle2, ShieldAlert, Settings as SettingsIcon } from 'lucide-react'
@@ -618,6 +618,7 @@ export default function QuoteDetailPage() {
 
   async function handleScheduleJob(dateOverride?: string) {
     if (!quote) return
+    let depositOverrideConfirmed = false
     // ── The scheduling guard ───────────────────────────────────────────────
     // An accepted quote whose required deposit hasn't been collected does not
     // schedule silently. The owner CAN — emergencies are real — but only through
@@ -641,9 +642,9 @@ export default function QuoteDetailPage() {
           destructive: true,
         })
         if (!ok) return
-        // The audit stamp — records that this was a decision, not an oversight.
-        // Non-fatal on failure: the confirmed intent stands either way.
-        await stampDepositOverride(supabase, quote.id)
+        // The shared engine rechecks the rule and ledger, then records this
+        // deliberate override before creating the job.
+        depositOverrideConfirmed = true
       }
     }
     setScheduling(true)
@@ -651,7 +652,7 @@ export default function QuoteDetailPage() {
       const { data: { user } } = await supabase.auth.getUser()
       // THE quote→job engine (lib/scheduleQuote) — same job here as from the
       // dashboard's "Accepted — not yet scheduled" card.
-      const { jobId, error } = await scheduleQuoteAsJob(supabase, user!.id, quote, { date: dateOverride, services })
+      const { jobId, error } = await scheduleQuoteAsJob(supabase, user!.id, quote, { date: dateOverride, services, depositOverrideConfirmed })
       if (error) {
         toast.error('Could not create job: ' + error)
       } else {

@@ -215,7 +215,11 @@
     "verify:card-charge-engine": "tsx scripts/verify-card-charge-engine.ts",
     "verify:card-charge-safety": "tsx scripts/verify-card-charge-safety.ts",
     "verify:stripe-receipt-recovery": "tsx scripts/verify-stripe-receipt-recovery.ts",
-    "verify:tips": "tsx scripts/verify-tips.ts"
+    "verify:tips": "tsx scripts/verify-tips.ts",
+    "verify:scheduling-deposit-roundtrip": "tsx scripts/verify-scheduling-deposit-roundtrip.ts",
+    "verify:schedule-quote-deposit": "tsx scripts/verify-schedule-quote-deposit.ts",
+    "test:scheduling-deposit-control": "tsx scripts/browser-scheduling-deposit-control.ts",
+    "verify:checkout-tax-settings": "tsx scripts/verify-checkout-tax-settings.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

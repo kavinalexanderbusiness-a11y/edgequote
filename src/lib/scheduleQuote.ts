@@ -3,9 +3,10 @@ import type { Quote, QuoteService } from '@/types'
 import { splitServices, serviceLineTotals } from '@/lib/quoteServices'
 import { addLineItems } from '@/lib/jobPricing'
 import { toast } from '@/lib/toast'
-import { localTodayISO } from '@/lib/utils'
+import { formatCurrency, localTodayISO } from '@/lib/utils'
 import { acceptanceBlock, acceptanceBlockLabel, isAcceptedOrBeyond } from '@/lib/quoteAcceptance'
 import { loadAcceptanceState } from '@/lib/quoteAcceptanceData'
+import { gateBlocksScheduling, loadQuoteDepositRows, schedulingGate, stampDepositOverride } from '@/lib/payments/depositGate'
 
 // ── Quote → scheduled job (ONE engine) ───────────────────────────────────────
 // Every "schedule this quote" entry point (the quote page's Schedule button and
@@ -18,23 +19,27 @@ export async function scheduleQuoteAsJob(
   supabase: SupabaseClient,
   userId: string,
   quote: Quote,
-  opts?: { date?: string; services?: QuoteService[] },
+  opts?: {
+    date?: string
+    services?: QuoteService[]
+    /** Set only after the owner confirms "Schedule without deposit" for this attempt. */
+    depositOverrideConfirmed?: boolean
+  },
 ): Promise<{ jobId: string | null; error: string | null }> {
-  // ── ⭐⭐ THE ACCEPTANCE GATE (Session 121) ──────────────────────────────────
-  // Booking work is ACTING ON THE COMMERCIAL TERMS: it puts crew time against a
-  // price, and the invoice that follows bills it. So it asks the one question —
-  // lib/quoteAcceptance.acceptanceBlock, the same question the invoice
-  // conversion and the deposit ask now put — rather than trusting `status`,
-  // which survives the edit that invalidated the consent behind it.
-  //
-  // ⛔ THE CHECK LIVES INSIDE THE ENGINE, not in its two callers. This function
-  // exists because "schedule this quote" was implemented twice and the copies
-  // disagreed; a gate bolted onto the callers would repeat that mistake with
-  // higher stakes.
-  //
-  // Only for a quote that CLAIMS a deal. A draft or sent quote scheduled from
-  // the day board is an estimate visit, not work sold, and has no acceptance to
-  // be stale.
+  // Both guards belong at the shared write boundary: the notification shortcut
+  // does not have the quote page's deposit dialog, and page props can be stale.
+  const { data: current, error: quoteErr } = await supabase.from('quotes')
+    .select('status, total, accepted_price, deposit_type, deposit_value, deposit_override_at')
+    .eq('id', quote.id).eq('user_id', userId).maybeSingle()
+  if (quoteErr) return { jobId: null, error: 'Could not check this quote’s scheduling requirements, so nothing was scheduled. Try again.' }
+  if (!current) return { jobId: null, error: 'This quote no longer exists.' }
+  if (current.status !== quote.status) {
+    return { jobId: null, error: 'This quote’s status changed. Refresh it before scheduling.' }
+  }
+  quote = { ...quote, ...current }
+
+  // A draft/sent quote is an estimate visit. Accepted work must still have
+  // current consent; a deposit or an override never replaces that acceptance.
   if (isAcceptedOrBeyond(quote.status)) {
     const { state, error: accErr } = await loadAcceptanceState(supabase, quote.id)
     // ⚠️ A FAILED READ BLOCKS. "We couldn't check" is not "go ahead" — booking
@@ -44,6 +49,24 @@ export async function scheduleQuoteAsJob(
     }
     const block = acceptanceBlock(quote.status, state)
     if (block) return { jobId: null, error: acceptanceBlockLabel(block, 'scheduling') }
+  }
+
+  if (quote.status === 'accepted' && quote.deposit_type) {
+    const { rows, error: rowsErr } = await loadQuoteDepositRows(supabase, quote.id)
+    if (rowsErr) return { jobId: null, error: 'Could not check the deposit ledger, so nothing was scheduled. Try again.' }
+    const gate = schedulingGate(quote, rows)
+    if (gateBlocksScheduling(quote, gate)) {
+      if (!opts?.depositOverrideConfirmed) {
+        return {
+          jobId: null,
+          error: `${formatCurrency(gate.outstanding)} of the required deposit is still outstanding. Open the quote to record payment or explicitly choose “Schedule without deposit”.`,
+        }
+      }
+      // A historical stamp is evidence, not permission for a new attempt.
+      // The explicit decision must be recorded before a job can be created.
+      const { error: overrideErr } = await stampDepositOverride(supabase, quote.id)
+      if (overrideErr) return { jobId: null, error: 'Could not record your deposit override, so nothing was scheduled. Try again.' }
+    }
   }
 
   // The quote's property, else the customer's primary.

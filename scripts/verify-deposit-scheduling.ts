@@ -244,7 +244,11 @@ console.log('\n■ 6. Structural: every door is on the ONE engine')
 
   const quotePage = stripComments(read('src/app/dashboard/quotes/[id]/page.tsx'))
   check('quote page schedule button re-derives the gate at click time + confirms the override',
-    /loadQuoteDepositRows\(/.test(quotePage) && /Schedule without deposit/.test(quotePage) && /stampDepositOverride\(/.test(quotePage))
+    /loadQuoteDepositRows\(/.test(quotePage) && /Schedule without deposit/.test(quotePage) && /depositOverrideConfirmed = true/.test(quotePage))
+  const scheduleEngine = stripComments(read('src/lib/scheduleQuote.ts'))
+  check('shared scheduling engine checks the deposit and records only an explicit override',
+    /gateBlocksScheduling\(/.test(scheduleEngine) && /!opts\?\.depositOverrideConfirmed/.test(scheduleEngine)
+    && /stampDepositOverride\(/.test(scheduleEngine))
   const schedulePage = stripComments(read('src/app/dashboard/schedule/page.tsx'))
   check('schedule page ?quote= door runs the same guard',
     /gateBlocksScheduling\(/.test(schedulePage) && /stampDepositOverride\(/.test(schedulePage))

@@ -62,7 +62,12 @@ export async function POST(req: NextRequest) {
   // to pay, and the owner's link and the portal's Pay button can never ask for
   // different money. This replaced an inline `total − amount_paid` — a third copy of
   // the balance rule that a deposit cap would have had to be added to separately.
-  const { data: bs } = await supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle()
+  const { data: bs, error: settingsError } = await supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle()
+  // A failed read is not an unset tax rate: do not create a checkout for an
+  // amount we could not verify. A successful missing/null setting still means 0%.
+  if (settingsError) {
+    return NextResponse.json({ error: 'Could not load payment settings. Please try again.' }, { status: 502 })
+  }
   // Coerced, not cast: PostgREST hands `numeric` back as a string and `amount_paid`
   // is NULL until the first payment lands — the same `?? 0` autopay.ts uses.
   const charge = depositChargeAmount(

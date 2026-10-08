@@ -32,6 +32,7 @@ import { bundleScope, templateIndex } from '@/lib/serviceBundles'
 import { confirm } from '@/lib/confirm'
 import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { QuoteOptionsEditor } from '@/components/quotes/QuoteOptionsEditor'
+import { SchedulingDepositFields, useSchedulingDepositToggle } from '@/components/quotes/SchedulingDepositFields'
 import {
   EXAMPLE_OPTION_NAMES, OPTIONS_VS_LINES_MESSAGE, headlineOptionPrice, optionProblemMessage,
   optionSetProblem, optionsConflictWithLines, recommendedOption,
@@ -54,7 +55,7 @@ import type { MeasurementSnapshot, SavedRecommendation, ServicePricingPlanRow } 
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Wallet, Home, Star } from 'lucide-react'
+import { Clock, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, ChevronDown, Package, Home, Star } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -464,6 +465,7 @@ export function QuoteBuilder({
   // The scheduling-deposit rule — drives the More-options block and its summary.
   const depositType = watch('deposit_type')
   const depositValue = watch('deposit_value')
+  const toggleSchedulingDeposit = useSchedulingDepositToggle(depositType, depositValue, setValue)
   const internalNotes = watch('internal_notes')
   // AI scope writer for the Notes field — words only; pricing never comes from it.
   const aiScope = useAiAssist()
@@ -2448,59 +2450,13 @@ export function QuoteBuilder({
                 derives that from the ledger; nothing here stores readiness).
                 Percent is of the price the customer accepts — for an options
                 quote, whichever option they choose. */}
-            <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
-                <Wallet className="w-3.5 h-3.5" /> Scheduling deposit
-              </p>
-              <Toggle
-                checked={depositType !== ''}
-                onChange={(on: boolean) => {
-                  if (on) {
-                    setValue('deposit_type', 'percent')
-                    if (!(Number(depositValue) > 0)) setValue('deposit_value', 50)
-                  } else {
-                    // Off = no rule. The value is left in the form so toggling
-                    // back on restores what was typed; the save path writes null.
-                    setValue('deposit_type', '')
-                  }
-                }}
-                label={depositType !== '' ? 'Deposit required before scheduling is confirmed' : 'No deposit needed to book'}
-              />
-              {depositType !== '' && (
-                <>
-                  <div className="grid grid-cols-2 gap-3 items-end">
-                    <label className="block">
-                      <span className="block text-xs font-medium text-ink-muted mb-1">Deposit as</span>
-                      <select
-                        value={depositType}
-                        onChange={e => setValue('deposit_type', e.target.value as 'percent' | 'fixed')}
-                        className="w-full rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent/40"
-                      >
-                        <option value="percent">% of the price</option>
-                        <option value="fixed">Fixed amount ($)</option>
-                      </select>
-                    </label>
-                    <Input
-                      label={depositType === 'percent' ? 'Percent' : 'Amount ($)'}
-                      type="number"
-                      step={depositType === 'percent' ? '5' : '25'}
-                      min="0"
-                      max={depositType === 'percent' ? '100' : undefined}
-                      {...register('deposit_value', { min: 0 })}
-                    />
-                  </div>
-                  <p className="text-[11px] text-ink-faint">
-                    The customer can approve as usual — their preferred timing is only confirmed once{' '}
-                    {depositType === 'percent' && Number(depositValue) > 0
-                      ? `${Number(depositValue)}% of the accepted price`
-                      : depositType === 'fixed' && Number(depositValue) > 0
-                        ? formatCurrency(Number(depositValue))
-                        : 'the deposit'}{' '}
-                    has actually been received. E-transfer and cash you record count the same as card.
-                  </p>
-                </>
-              )}
-            </div>
+            <SchedulingDepositFields
+              depositType={depositType}
+              depositValue={depositValue}
+              register={register}
+              setValue={setValue}
+              onEnabledChange={toggleSchedulingDeposit}
+            />
 
             <div className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
