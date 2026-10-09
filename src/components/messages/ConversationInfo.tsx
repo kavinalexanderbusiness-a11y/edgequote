@@ -22,7 +22,7 @@ import {
 // schedule item (the scheduler's own table) rather than a separate reminder system.
 interface Props { customerId: string }
 
-interface Qte { id: string; quote_number: string | null; status: string; total: number | null; created_at: string; issued_date: string | null; service_type: string | null }
+interface Qte { id: string; quote_number: string | null; status: string; total: number | null; created_at: string; issued_date: string | null; sent_at: string | null; service_type: string | null }
 interface Jb { id: string; status: string; scheduled_date: string; service_type: string | null; title: string | null; completed_at: string | null }
 interface Inv { id: string; invoice_number: string | null; status: string; amount: number | null; created_at: string; issued_date: string | null; paid_at: string | null }
 // Exactly the ledger fields cashAmountOf reads, typed from the canonical Payment
@@ -70,7 +70,7 @@ export function ConversationInfo({ customerId }: Props) {
       const [cu, pr, qu, jo, iv, pa] = await Promise.all([
         supabase.from('customers').select('id, name, phone, email, sms_opt_in, email_opt_in').eq('id', customerId).maybeSingle(),
         supabase.from('properties').select('address, city').eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1),
-        supabase.from('quotes').select('id, quote_number, status, total, created_at, issued_date, service_type').eq('customer_id', customerId).order('created_at', { ascending: false }),
+        supabase.from('quotes').select('id, quote_number, status, total, created_at, issued_date, sent_at, service_type').eq('customer_id', customerId).order('created_at', { ascending: false }),
         supabase.from('jobs').select('id, status, scheduled_date, service_type, title, completed_at').eq('customer_id', customerId).neq('status', 'cancelled').order('scheduled_date', { ascending: false }),
         supabase.from('invoices').select('id, invoice_number, status, amount, created_at, issued_date, paid_at').eq('customer_id', customerId).order('created_at', { ascending: false }),
         supabase.from('payments').select('amount, paid_at, kind, provider, status').eq('customer_id', customerId).eq('status', 'paid'),
@@ -95,7 +95,8 @@ export function ConversationInfo({ customerId }: Props) {
     const today = localTodayISO()
     const ev: TLEvent[] = []
     for (const q of info.quotes) {
-      ev.push({ at: q.issued_date || q.created_at, icon: FileText, label: 'Quote sent' })
+      // Issuance and status alone do not prove a quote was sent.
+      ev.push({ at: q.sent_at || q.created_at, icon: FileText, label: q.sent_at ? 'Quote sent' : 'Quote created' })
       if (q.status === 'accepted') ev.push({ at: q.issued_date || q.created_at, icon: CheckCircle2, label: 'Quote accepted' })
     }
     for (const j of info.jobs) {

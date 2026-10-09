@@ -27,6 +27,8 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 import {
   buildTimeline, sortTimeline, groupTimelineByMonth, timelineForProperty,
   filterTimeline, timelineGroupCounts, KIND_GROUP,
@@ -373,6 +375,64 @@ console.log('\nEvents read as business history, not row changes:')
   }))
   eq('a quote counts under Sales', counts.sales > 0, true)
   eq('an unset filter hides nothing', filterTimeline([{ at: '2026-08-01T10:00:00Z', kind: 'note', title: 'n' }], new Set()).length, 1)
+}
+
+// ── 11. MESSAGES — creation and issuance are not proof of a send ─────────────
+console.log('\nThe Messages timeline requires recorded send evidence:')
+{
+  const code = src('components/messages/ConversationInfo.tsx')
+  const quoteColumns = code.match(/\.from\('quotes'\)\.select\('([^']+)'\)/)?.[1].split(',').map(s => s.trim()) || []
+  check('the conversation quote read includes sent_at', quoteColumns.includes('sent_at'))
+
+  // Execute the actual useMemo callback with synthetic records. No React mount,
+  // Supabase client or live customer data is involved, and the test will also
+  // catch a label/date regression if the display code is changed independently.
+  const tree = ts.createSourceFile('ConversationInfo.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  let callback: ts.Expression | undefined
+  function visit(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'derived'
+      && node.initializer && ts.isCallExpression(node.initializer)
+      && node.initializer.expression.getText(tree) === 'useMemo') {
+      callback = node.initializer.arguments[0]
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(tree)
+  if (!callback) throw new Error('ConversationInfo derived callback not found')
+  const executable = ts.transpileModule(`(${callback.getText(tree)})()`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const created = '2026-08-01T09:00:00Z'
+  const issued = '2026-08-03'
+  const sent = '2026-08-06T16:30:00Z'
+  const events = (status: string, sentAt: string | null | undefined) => {
+    const result = runInNewContext(executable, {
+      info: {
+        quotes: [{ id: 'fixture-quote', quote_number: 'Q-TEST', status, total: 100,
+          created_at: created, issued_date: issued, sent_at: sentAt, service_type: 'Synthetic service' }],
+        jobs: [], invoices: [], payments: [],
+      },
+      localTodayISO: () => '2026-08-10',
+      FileText: 'FileText', CheckCircle2: 'CheckCircle2', Sprout: 'Sprout',
+      Calendar: 'Calendar', Receipt: 'Receipt', Banknote: 'Banknote',
+    }) as { timeline: { at: string; label: string }[] }
+    return result.timeline
+  }
+  for (const status of ['draft', 'sent', 'accepted', 'declined', 'scheduled', 'completed', 'paid']) {
+    const withoutSend = events(status, null)
+    eq(`${status} without sent_at does not claim a send`, withoutSend.some(e => e.label === 'Quote sent'), false)
+    eq(`${status} without sent_at shows creation at created_at`,
+      withoutSend.find(e => e.label === 'Quote created')?.at, created)
+    const withSend = events(status, sent)
+    eq(`${status} with sent_at shows the actual send timestamp`,
+      withSend.find(e => e.label === 'Quote sent')?.at, sent)
+    eq(`${status} with sent_at has only one creation/send event`,
+      withSend.filter(e => e.label === 'Quote sent' || e.label === 'Quote created').length, 1)
+  }
+  eq('an omitted sent_at also uses the creation event',
+    events('draft', undefined).find(e => e.label === 'Quote created')?.at, created)
+  eq('accepted quotes retain their separate acceptance event',
+    events('accepted', null).filter(e => e.label === 'Quote accepted').length, 1)
 }
 
 console.log(failures === 0

@@ -325,6 +325,19 @@ export function leadField(p: Record<string, unknown>, keys: string[]): string {
   return ''
 }
 
+function leadServices(p: Record<string, unknown>): string {
+  const textList = (values: unknown[]) => values
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => value.trim()).filter(Boolean).join(', ')
+  // Match the website route's precedence: submitted structured selections are
+  // authoritative; older forms send services_needed text (or an array).
+  const selections = Array.isArray(p.service_selections)
+    ? textList(p.service_selections.map(item => item && typeof item === 'object' && !Array.isArray(item) ? item.label : null))
+    : ''
+  const servicesNeeded = textList(Array.isArray(p.services_needed) ? p.services_needed : [p.services_needed])
+  return selections || servicesNeeded || leadField(p, ['requestedServices', 'services', 'service', 'serviceType', 'service_type'])
+}
+
 // HTML-escape lead-supplied text before it lands in the owner-alert email. This is an
 // injection boundary: a lead's name/notes come from a PUBLIC form, so a `<script>` or
 // `"><img onerror=…>` in that data must not render live in the owner's inbox. Exported
@@ -342,7 +355,7 @@ export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  * the durable storage path is never exposed as a permanent public link.
  */
 export function buildLeadEmail(source: string, p: Record<string, unknown>): { subject: string; html: string; text: string } {
-  const service = leadField(p, ['requestedServices', 'services', 'service', 'serviceType', 'service_type'])
+  const service = leadServices(p)
   const name = leadField(p, ['fullName', 'name']) || [leadField(p, ['firstName', 'first_name']), leadField(p, ['lastName', 'last_name'])].filter(Boolean).join(' ')
   const rows: [string, string][] = [
     ['Service', service || 'Not specified'],

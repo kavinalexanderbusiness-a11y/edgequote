@@ -85,6 +85,52 @@ check('a blank/whitespace value is skipped, not returned',
   leadField({ name: '   ', fullName: 'Pat' }, ['name', 'fullName']), 'Pat')
 check('no alias present → empty string', leadField({ other: 'x' }, ['name', 'fullName']), '')
 
+H('Owner email — submitted multi-service selections')
+{
+  const submitted = {
+    first_name: 'Pat', address: '123 Main St', phone: '403-555-0100',
+    services_needed: ['Lawn Mowing & Edging', ' Tree Pruning '],
+    service_selections: [
+      { key: 'mowing', label: ' Lawn Mowing & Edging ', cadence: 'weekly' },
+      { key: 'tree_pruning', label: 'Tree Pruning', cadence: null },
+    ],
+  }
+  const validated = validateWebsiteLeadPayload(submitted)
+  ok('the production multi-service fixture passes the real website validator', validated.ok)
+  if (validated.ok) {
+    const before = JSON.stringify(validated.payload)
+    const mail = buildLeadEmail('Website', validated.payload)
+    check('normalized website services reach the subject', mail.subject,
+      '🌱 New Website lead — Lawn Mowing & Edging, Tree Pruning from Pat')
+    ok('normalized website services reach the HTML field',
+      mail.html.includes('<li><b>Service:</b> Lawn Mowing &amp; Edging, Tree Pruning</li>'))
+    ok('normalized website services reach the plain-text field',
+      mail.text.includes('Service: Lawn Mowing & Edging, Tree Pruning\n'))
+    check('rendering leaves the saved submission unchanged', JSON.stringify(validated.payload), before)
+  }
+  const selections = buildLeadEmail('Website', {
+    service_selections: submitted.service_selections,
+    services_needed: 'Old service summary', service: 'Obsolete service',
+  })
+  check('structured submitted selections win over obsolete service summaries', selections.subject,
+    '🌱 New Website lead — Lawn Mowing & Edging, Tree Pruning')
+  for (const services of [' Lawn Mowing & Edging, Tree Pruning ', [' Lawn Mowing & Edging ', '', ' Tree Pruning ']]) {
+    check('current service text/arrays win over legacy aliases',
+      buildLeadEmail('Website', { services_needed: services, requestedServices: 'Obsolete service' }).subject,
+      '🌱 New Website lead — Lawn Mowing & Edging, Tree Pruning')
+  }
+  for (const alias of ['requestedServices', 'services', 'service', 'serviceType', 'service_type']) {
+    check(`legacy ${alias} remains supported`, buildLeadEmail('Formspree', {
+      [alias]: ' Window Cleaning ', services_needed: ' ', service_selections: [],
+    }).subject, '🌱 New Formspree lead — Window Cleaning')
+  }
+  const unsafe = buildLeadEmail('Website', { service_selections: [{ label: '<img src=x onerror=alert(1)>' }] })
+  ok('submitted service labels remain escaped in HTML',
+    unsafe.html.includes('&lt;img src=x onerror=alert(1)&gt;') && !unsafe.html.includes('<img'))
+  ok('missing services retain the honest fallback',
+    buildLeadEmail('Website', { services_needed: [], service_selections: [] }).text.includes('Service: Not specified\n'))
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CUSTOMER PHOTOS — the production bug: the marketing site posts photos INLINE as
 // base64 (`photos: [{base64, contentType, filename}]`), nothing converted them to
