@@ -35,6 +35,7 @@ import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobFormsPanel } from '@/components/forms/JobFormsPanel'
 import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTimeline'
 import { VisitAddress } from '@/components/schedule/VisitAddress'
+import { JobNotes } from '@/components/schedule/JobNotes'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobChangeOrders, type ChangeOrderCreateInput } from '@/components/schedule/JobChangeOrders'
 import { authorizedValue, type ChangeOrder } from '@/lib/changeOrders'
@@ -46,7 +47,7 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Pencil, Move, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
-  ChevronUp, ChevronDown, Wand2, Sparkles, MoreHorizontal, CalendarDays, StickyNote, MessagesSquare, PauseCircle,
+  ChevronUp, ChevronDown, Wand2, Sparkles, MoreHorizontal, CalendarDays, MessagesSquare, PauseCircle,
   FileSignature, ClipboardCheck, Phone, User as UserIcon, Star,
 } from 'lucide-react'
 import StopForTodaySheet from '@/components/jobs/StopForTodaySheet'
@@ -1102,16 +1103,17 @@ export function DayOpsPanel({
                   onDragOver={e => { e.preventDefault(); if (dragOverId !== job.id) setDragOverId(job.id) }}
                   onDragLeave={() => { if (dragOverId === job.id) setDragOverId(null) }}
                   onDrop={() => { dropOn(job.id); setDraggingId(null); setDragOverId(null) }}
-                  className={cn('rounded-xl border px-3 py-2.5 transition-colors scroll-mt-4',
-                    // Done cards RECEDE (neutral + faded); the live stop is sky end-to-end
+                  className={cn('rounded-xl border px-[12px] py-2.5 transition-colors scroll-mt-4',
+                    // Done cards recede through their neutral background and status mark,
+                    // keeping instructions at full contrast; the live stop is sky end-to-end
                     // (badge, timer, live bar and card all agree); scheduled keeps the token.
-                    done ? 'border-border bg-bg-tertiary/60 text-ink-muted opacity-60'
+                    done ? 'border-border bg-bg-tertiary/60 text-ink-muted'
                       : job.status === 'in_progress' ? 'bg-sky-400/10 text-sky-300 border-sky-400/30'
                       : JOB_STATUS_COLORS[job.status],
                     sortedJobs.length > 1 && 'cursor-grab active:cursor-grabbing',
                     draggingId === job.id && 'opacity-50',
                     draggingId && draggingId !== job.id && dragOverId === job.id && 'ring-2 ring-accent')}>
-                  <div className="flex items-start gap-2.5">
+                  <div className="flex flex-wrap items-start gap-2.5">
                     <div className="flex flex-col items-center gap-0.5 shrink-0">
                       <div className={cn(
                         'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5',
@@ -1136,11 +1138,11 @@ export function DayOpsPanel({
                         </div>
                       )}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="flex items-center gap-1.5 text-sm font-semibold min-w-0">
+                    <div className="min-w-0 flex-1 basis-40">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <span className="flex flex-1 basis-40 items-start gap-1.5 text-base leading-relaxed font-semibold text-ink min-w-0">
                           {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
-                          <span className={cn('truncate', done && 'line-through opacity-80')}>{job.customers?.name || job.title}</span>
+                          <span className={cn('min-w-0 [overflow-wrap:anywhere]', done && 'line-through opacity-80')}>{job.customers?.name || job.title}</span>
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
                           {total > 0
@@ -1161,17 +1163,18 @@ export function DayOpsPanel({
 
                       {/* Property address — a customer can have several properties;
                           the name alone never says which one this visit is at. */}
-                      <VisitAddress address={job.properties?.address} className="mt-0.5" />
+                      <VisitAddress address={job.properties?.address} readable className="mt-1" />
+                    </div>
+                  </div>
 
+                  <div className="min-w-0">
                       {/* Access note (gate code, where to park, crew note) on the card
                           face — it was only reachable via overflow → Quick edit, so the
                           one thing you need before pulling into the driveway was two taps
                           and a panel away. Read-only here; still edited in Quick edit. */}
                       {job.notes?.trim() && (
-                        <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-border bg-bg-tertiary/60 px-2 py-1 text-xs text-ink-muted"
-                          title={job.notes.trim()}>
-                          <StickyNote className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400/80" />
-                          <span className="line-clamp-2 whitespace-pre-wrap break-words">{job.notes.trim()}</span>
+                        <div className="my-3">
+                          <JobNotes notes={job.notes} />
                         </div>
                       )}
 
@@ -1252,7 +1255,7 @@ export function DayOpsPanel({
                           <p className="text-[10px] text-ink-faint">Saving updates this visit's draft invoice automatically.</p>
                         </div>
                       )}
-                      <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
+                      <div className="flex items-center gap-1.5 text-sm leading-relaxed text-ink-muted mt-1 flex-wrap">
                         {job.status === 'scheduled' && etaByJob[job.id] && (
                           <span className="font-semibold text-accent-text shrink-0">ETA {etaByJob[job.id]}</span>
                         )}
@@ -1288,7 +1291,7 @@ export function DayOpsPanel({
                             ({job.actual_minutes > job.duration_minutes ? '+' : ''}{job.actual_minutes - job.duration_minutes}m vs est {job.duration_minutes}m)
                           </span>
                         )}
-                        {job.service_type && <span className="truncate">{job.service_type}</span>}
+                        {job.service_type && <span className="min-w-0 [overflow-wrap:anywhere]">{job.service_type}</span>}
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
                         {/* At-a-glance add-on indicator — names when few, else count */}
                         {ownerExtras.length > 0 && (
@@ -1610,7 +1613,6 @@ export function DayOpsPanel({
                           second implementation of fields the shared primitives
                           already own, and it couldn't hold the date/assignee/
                           service controls the fast path needs. */}
-                    </div>
                   </div>
                 </div>
               )

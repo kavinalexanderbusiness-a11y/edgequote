@@ -199,7 +199,8 @@ console.log('\n═══ The next stop, and what it takes to do it ═══')
   check('WHO: the customer can be called from the bar',
     /href=\{`tel:\$\{phone\}`\}/.test(bar) && /Call\s*\n?\s*<\/a>/.test(bar))
   check('WHAT TO KNOW: the crew note is shown',
-    /\{note && \(/.test(bar) && /\{note\}<\/span>/.test(bar),
+    /<JobNotes\s+notes=\{note\}/.test(bar)
+    && /\{notes\}\s*<\/p>/.test(stripComments(read('src/components/schedule/JobNotes.tsx'))),
     'gate code, where to park, the dog — the reason you read the visit at all')
   check('WHAT WAS SAID: the crew conversation, not the customer thread',
     /<VisitConversation/.test(bar) && !/api\/comms\/send/.test(bar),

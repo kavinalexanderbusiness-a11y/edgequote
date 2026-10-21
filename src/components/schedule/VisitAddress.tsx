@@ -6,16 +6,21 @@ import { cn } from '@/lib/utils'
 // says WHICH property today's visit is at — the address is what disambiguates it.
 // One place so every visit list (day board, dispatch card) renders it identically.
 //
-// Renders nothing when there's no address on file, and truncates to a single line
-// so it never reflows a dense day board or a phone-width card — the row keeps its
-// height and the address ellipsises on narrow screens.
-export function VisitAddress({ address, className }: { address?: string | null; className?: string }) {
+// Dense lists keep a single line. Reading surfaces opt into full wrapping so
+// a unit number or access description never depends on a hover tooltip.
+export function VisitAddress({ address, className, readable = false }: {
+  address?: string | null
+  className?: string
+  readable?: boolean
+}) {
   const a = address?.trim()
   if (!a) return null
   return (
-    <span className={cn('flex items-center gap-1 min-w-0 text-[11px] text-ink-faint', className)} title={a}>
-      <MapPin className="w-3 h-3 shrink-0 opacity-70" aria-hidden="true" />
-      <span className="truncate">{a}</span>
+    <span className={cn('flex gap-1 min-w-0', readable
+      ? 'items-start text-sm leading-relaxed text-ink-muted'
+      : 'items-center text-[11px] text-ink-faint', className)} title={a}>
+      <MapPin className={cn('shrink-0', readable ? 'w-4 h-4 mt-0.5' : 'w-3 h-3 opacity-70')} aria-hidden="true" />
+      <span className={readable ? 'min-w-0 [overflow-wrap:anywhere]' : 'truncate'}>{a}</span>
     </span>
   )
 }

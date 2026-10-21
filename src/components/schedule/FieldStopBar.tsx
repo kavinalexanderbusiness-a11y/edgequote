@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import type { Job } from '@/types'
@@ -9,10 +9,11 @@ import { directionsUrl } from '@/lib/route'
 import { Button } from '@/components/ui/Button'
 import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { VisitAddress } from '@/components/schedule/VisitAddress'
+import { JobNotes } from '@/components/schedule/JobNotes'
 import { VisitConversation } from '@/components/schedule/VisitConversation'
 import {
   CheckCircle2, ChevronUp, Navigation, PauseCircle, Phone, Play,
-  MessagesSquare, StickyNote, User as UserIcon, X,
+  MessagesSquare, User as UserIcon, X,
 } from 'lucide-react'
 
 // ── The field bar: the day's next stop, and everything it takes to do it ─────
@@ -60,6 +61,13 @@ interface Props {
 export function FieldStopBar({ job, baseCoord, unread = 0, busy, onStop, onPrimary }: Props) {
   const [open, setOpen] = useState(false)
   const [chat, setChat] = useState(false)
+  const detailsId = useId()
+  const detailsRef = useRef<HTMLDivElement>(null)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (open) detailsRef.current?.focus({ preventScroll: true })
+  }, [open])
 
   // A different stop means a different set of answers — never inherit the last
   // one's open panel.
@@ -76,19 +84,24 @@ export function FieldStopBar({ job, baseCoord, unread = 0, busy, onStop, onPrima
 
   return (
     <>
-      <StickyActionBar fixed className="lg:hidden">
+      <StickyActionBar fixed className="lg:hidden flex flex-col max-h-[100vh] supports-[max-height:1dvh]:max-h-[100dvh]">
         {/* ── The answers, when asked for ────────────────────────────────────
             Above the action row so opening it pushes the buttons DOWN the
             screen rather than covering them — the bar's whole reason to exist
             is that the primary action stays under the thumb. */}
         {open && (
-          <div className="pb-2.5 mb-2.5 border-b border-border space-y-2">
-            {note && (
-              <p className="flex items-start gap-1.5 text-xs text-ink leading-snug">
-                <StickyNote aria-hidden className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
-                <span className="min-w-0">{note}</span>
-              </p>
-            )}
+          <div ref={detailsRef} id={detailsId} role="region" aria-label="Stop details" tabIndex={0}
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setOpen(false)
+                toggleRef.current?.focus({ preventScroll: true })
+              }
+            }}
+            className="min-h-0 max-h-[50vh] supports-[max-height:1dvh]:max-h-[50dvh] overflow-y-auto overscroll-contain pb-2.5 mb-2.5 border-b border-border space-y-3 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-text">
+            <p className="text-base font-semibold leading-relaxed text-ink [overflow-wrap:anywhere]">{job.customers?.name || job.title}</p>
+            <VisitAddress address={address} readable />
+            <JobNotes notes={note} />
             <div className="flex items-center gap-1.5 flex-wrap">
               {hasWhere && (
                 <a href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address }, baseCoord)}
@@ -121,12 +134,12 @@ export function FieldStopBar({ job, baseCoord, unread = 0, busy, onStop, onPrima
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
           {/* The identity block is the disclosure. It was already the largest
               target in the bar and did nothing at all when tapped. */}
-          <button type="button" onClick={() => setOpen(o => !o)}
-            aria-expanded={open} aria-label={open ? 'Hide stop details' : 'Show stop details'}
-            className="min-w-0 flex-1 flex items-center gap-2 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          <button ref={toggleRef} type="button" onClick={() => setOpen(o => !o)}
+            aria-expanded={open} aria-controls={open ? detailsId : undefined} aria-label={open ? 'Hide stop details' : 'Show stop details'}
+            className="min-h-11 min-w-0 flex-1 basis-40 flex items-center gap-2 text-left rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-text">
             <span className="min-w-0 flex-1">
               {/* Three states, not two. A job that is underway with nobody on the
                   clock — stopped for the day — is neither "in progress right
