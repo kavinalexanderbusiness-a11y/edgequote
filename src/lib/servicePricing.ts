@@ -69,9 +69,11 @@ export function priceInputLabel(t: PricingDisplayType): string {
   }
 }
 
-// Sensible number-input step per type (per-unit rates step in cents).
+// The stored ordinary rate supports cents. A $5 step also validates the input,
+// so it would reject legitimate owner prices such as $49 before save runs.
+// Preserve the existing per-unit increment; this does not change pricing math.
 export function priceInputStep(t: PricingDisplayType): string {
-  return t === 'per_sqft' || t === 'per_linear_ft' ? '0.25' : '5'
+  return t === 'per_sqft' || t === 'per_linear_ft' ? '0.25' : '0.01'
 }
 
 // The basis a COST must be entered on — the mirror of priceInputLabel above.
