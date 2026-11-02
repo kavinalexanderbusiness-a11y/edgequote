@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import { PortalAccessForm } from './PortalAccessForm'
+import { PortalEntryBranding } from './PortalEntryBranding'
 
 export const metadata: Metadata = {
   title: 'Access your customer portal',
@@ -22,6 +24,9 @@ export default function PortalAccessPage() {
   return (
     <main className="min-h-screen bg-bg flex flex-col items-center justify-center px-5 py-12">
       <div className="w-full max-w-sm">
+        <Suspense fallback={null}>
+          <PortalEntryBranding />
+        </Suspense>
         <h1 className="text-xl font-bold tracking-tight text-ink">Access your customer portal</h1>
         <p className="mt-2 text-sm leading-relaxed text-ink-muted">
           Enter the email associated with your account and we’ll send you a secure portal link.
