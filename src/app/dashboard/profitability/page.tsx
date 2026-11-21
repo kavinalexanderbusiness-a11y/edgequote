@@ -13,6 +13,7 @@ import {
 import { ProfitMap, ProfitPoint } from '@/components/profitability/ProfitMap'
 import { GradeBadge } from '@/components/ui/GradeBadge'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { ButtonLink } from '@/components/ui/Button'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
@@ -153,14 +154,14 @@ export default function ProfitabilityPage() {
 
   if (loading) return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." action={<ButtonLink href="/dashboard/profitability/calculator" variant="secondary">Job calculator</ButtonLink>} />
       <SkeletonTiles count={4} />
     </PageContainer>
   )
 
   return (
     <PageContainer width="wide">
-      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." action={<ButtonLink href="/dashboard/profitability/calculator" variant="secondary">Job calculator</ButtonLink>} />
 
       {loadError && (
         <Banner tone="danger">
